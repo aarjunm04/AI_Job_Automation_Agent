@@ -1,0 +1,656 @@
+{
+  "name": "AI Job Agent v3 – Hybrid (C2) – Unified LLM Gateway",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "job-automation",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1.1,
+      "position": [240, 300],
+      "webhookId": "job-automation-webhook"
+    },
+    {
+      "parameters": {
+        "functionCode": "// Job Discovery Processor - Normalize input and add metadata\nconst inputData = $input.item.json;\nconst sessionId = `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;\n\n// Accept multiple input formats\nlet jobsArray = [];\nif (inputData.jobs && Array.isArray(inputData.jobs)) {\n  jobsArray = inputData.jobs;\n} else if (inputData.results && Array.isArray(inputData.results)) {\n  jobsArray = inputData.results;\n} else if (inputData.data && Array.isArray(inputData.data)) {\n  jobsArray = inputData.data;\n} else if (inputData.id || inputData.title || inputData.company) {\n  jobsArray = [inputData];\n} else {\n  throw new Error('Invalid input format. Expected jobs[], results[], data[], or single job object');\n}\n\n// Normalize and enrich each job\nconst processedJobs = jobsArray.map((job, index) => {\n  return {\n    ...job,\n    source_id: job.source_id || job.id || `job_${Date.now()}_${index}`,\n    platform: job.platform || 'unknown',\n    discovered_at: job.discovered_at || new Date().toISOString(),\n    processing_status: 'discovered',\n    session_id: sessionId,\n    processing_started: new Date().toISOString(),\n    martin_intelligence: {\n      version: 'v3',\n      workflow_type: 'hybrid_c2',\n      session_id: sessionId\n    }\n  };\n});\n\nreturn processedJobs.map(job => ({ json: job }));"
+      },
+      "id": "job-discovery-processor",
+      "name": "Job Discovery Processor",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      },
+      "id": "batch-job-processor",
+      "name": "Batch Job Processor",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Orchestrator Prompt Builder\nconst job = $input.item.json;\n\nconst systemPrompt = `You are the Orchestrator Agent for the AI Job Agent v3 system.\n\nYour role:\n- Analyze incoming job postings and determine overall automation strategy\n- Assess job quality, relevance, and automation feasibility\n- Provide priority scoring and routing recommendations\n- Flag jobs requiring manual review with detailed reasoning\n- Return STRICT JSON ONLY - no markdown, no explanations\n\nOutput JSON Schema:\n{\n  \"orchestrator_decision\": \"string (proceed|manual_review)\",\n  \"priority_score\": number (0-1),\n  \"automation_feasibility\": number (0-1),\n  \"routing_recommendation\": \"string (auto_apply|manual_review|skip)\",\n  \"confidence_score\": number (0-1),\n  \"notes\": {\n    \"quality_assessment\": \"string\",\n    \"manual_review_reason\": \"string (if applicable)\",\n    \"risk_factors\": [\"array of strings\"]\n  }\n}`;\n\nreturn [{\n  json: {\n    role: 'orchestrator',\n    agent: 'orchestrator',\n    prompt_payload: {\n      system: systemPrompt,\n      user: job\n    },\n    job_id: job.source_id,\n    session_id: job.session_id\n  }\n}];"
+      },
+      "id": "orchestrator-prompt",
+      "name": "Orchestrator Prompt",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [900, 100]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Job Analyzer Prompt Builder\nconst job = $input.item.json;\n\nconst systemPrompt = `You are the Job Analyzer Agent for the AI Job Agent v3 system.\n\nYour role:\n- Deep analysis of job requirements, qualifications, and compatibility\n- Extract key skills, technologies, and experience requirements\n- Calculate job fit score based on candidate profile\n- Identify ATS keywords and optimization opportunities\n- Return STRICT JSON ONLY - no markdown, no explanations\n\nOutput JSON Schema:\n{\n  \"job_fit_score\": number (0-1),\n  \"required_skills\": [\"array of strings\"],\n  \"preferred_skills\": [\"array of strings\"],\n  \"experience_required\": \"string\",\n  \"salary_range\": {\n    \"min\": number,\n    \"max\": number,\n    \"currency\": \"string\"\n  },\n  \"remote_type\": \"string (remote|hybrid|onsite)\",\n  \"ats_keywords\": [\"array of strings\"],\n  \"match_analysis\": {\n    \"strengths\": [\"array of strings\"],\n    \"gaps\": [\"array of strings\"],\n    \"recommendations\": [\"array of strings\"]\n  },\n  \"confidence_score\": number (0-1)\n}`;\n\nreturn [{\n  json: {\n    role: 'analyzer',\n    agent: 'job_analyzer',\n    prompt_payload: {\n      system: systemPrompt,\n      user: job\n    },\n    job_id: job.source_id,\n    session_id: job.session_id\n  }\n}];"
+      },
+      "id": "job-analyzer-prompt",
+      "name": "Job Analyzer Prompt",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Application Prompt Builder\nconst job = $input.item.json;\n\nconst systemPrompt = `You are the Application Agent for the AI Job Agent v3 system.\n\nYour role:\n- Determine final automation decision (auto_apply vs manual_review)\n- Generate application payload with optimized resume/cover letter content\n- Calculate success probability and automation confidence\n- Prepare ATS-optimized application materials\n- Return STRICT JSON ONLY - no markdown, no explanations\n\nOutput JSON Schema:\n{\n  \"automation_decision\": \"string (auto_apply|manual_review)\",\n  \"automation_confidence\": number (0-1),\n  \"success_probability\": number (0-1),\n  \"application_method\": \"string (easy_apply|standard|email)\",\n  \"application_payload\": {\n    \"resume_optimizations\": [\"array of strings\"],\n    \"cover_letter_points\": [\"array of strings\"],\n    \"screening_answers\": {},\n    \"portfolio_links\": [\"array of strings\"]\n  },\n  \"estimated_time_minutes\": number,\n  \"risk_assessment\": \"string (low|medium|high)\"\n}`;\n\nreturn [{\n  json: {\n    role: 'application',\n    agent: 'application_agent',\n    prompt_payload: {\n      system: systemPrompt,\n      user: job\n    },\n    job_id: job.source_id,\n    session_id: job.session_id\n  }\n}];"
+      },
+      "id": "application-prompt",
+      "name": "Application Prompt",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [900, 500]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Intelligence Prompt Builder\nconst job = $input.item.json;\n\nconst systemPrompt = `You are the Intelligence Agent for the AI Job Agent v3 system.\n\nYour role:\n- Generate session-level insights and patterns\n- Track application trends and success indicators\n- Provide strategic recommendations for future applications\n- Monitor system performance and optimization opportunities\n- Return STRICT JSON ONLY - no markdown, no explanations\n\nOutput JSON Schema:\n{\n  \"session_insights\": {\n    \"job_market_trends\": [\"array of strings\"],\n    \"optimal_application_times\": \"string\",\n    \"success_patterns\": [\"array of strings\"]\n  },\n  \"recommendations\": {\n    \"profile_improvements\": [\"array of strings\"],\n    \"targeting_adjustments\": [\"array of strings\"],\n    \"automation_tuning\": [\"array of strings\"]\n  },\n  \"performance_metrics\": {\n    \"average_fit_score\": number,\n    \"automation_rate\": number,\n    \"estimated_time_saved_minutes\": number\n  },\n  \"next_actions\": [\"array of strings\"]\n}`;\n\nreturn [{\n  json: {\n    role: 'intelligence',\n    agent: 'intelligence_agent',\n    prompt_payload: {\n      system: systemPrompt,\n      user: {\n        job: job,\n        session_context: job.session_id\n      }\n    },\n    job_id: job.source_id,\n    session_id: job.session_id\n  }\n}];"
+      },
+      "id": "intelligence-prompt",
+      "name": "Intelligence Prompt",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [900, 700]
+    },
+    {
+      "parameters": {
+        "model": "={{ \"google/gemini-2.0-flash-exp:free\" }}",
+        "options": {
+          "temperature": 0.08,
+          "maxTokens": 1200,
+          "systemMessage": "Centralized LLM Gateway: You receive prompt_payload JSON containing system and user messages. Process the request and return STRICT JSON ONLY. No markdown formatting, no code blocks, no explanations. Pure JSON response matching the schema provided in the system prompt."
+        },
+        "text": "={{ JSON.stringify($json.prompt_payload) }}",
+        "responseFormat": "json_object"
+      },
+      "id": "llm-gateway-primary",
+      "name": "LLM Gateway Primary (Gemini)",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.3,
+      "position": [1120, 400],
+      "credentials": {
+        "openAiApi": {
+          "id": "openai-credentials",
+          "name": "OpenRouter API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "functionCode": "// Gateway Check Response - Determine if fallback needed\nconst response = $input.item.json;\nlet useFallback = false;\nlet reason = '';\n\n// Check for empty or error responses\nif (!response || Object.keys(response).length === 0) {\n  useFallback = true;\n  reason = 'Empty response from primary gateway';\n}\n\n// Check for error indicators\nif (response.error || response.message?.includes('error') || response.message?.includes('failed')) {\n  useFallback = true;\n  reason = 'Error detected in primary response';\n}\n\n// Check confidence score if present\nif (response.confidence_score !== undefined && response.confidence_score < 0.35) {\n  useFallback = true;\n  reason = `Low confidence score: ${response.confidence_score}`;\n}\n\n// Check for malformed JSON indicators\nif (typeof response === 'string') {\n  useFallback = true;\n  reason = 'Response is string, not parsed JSON';\n}\n\nreturn [{\n  json: {\n    ...response,\n    use_fallback: useFallback,\n    fallback_reason: reason,\n    gateway_check_timestamp: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "gateway-check-response",
+      "name": "Gateway Check Response",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [1340, 400]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.use_fallback }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "gateway-need-fallback",
+      "name": "Gateway Need Fallback?",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [1560, 400]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://openrouter.ai/api/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "HTTP-Referer",
+              "value": "https://github.com/your-repo"
+            },
+            {
+              "name": "X-Title",
+              "value": "AI Job Agent v3"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "model",
+              "value": "meta-llama/llama-3.1-70b-instruct:free"
+            },
+            {
+              "name": "messages",
+              "value": "={{ JSON.stringify([{role: 'system', content: 'Fallback LLM responder. Return STRICT JSON ONLY matching the schema in the user message.'}, {role: 'user', content: JSON.stringify($json.prompt_payload)}]) }}"
+            },
+            {
+              "name": "temperature",
+              "value": "0.08"
+            },
+            {
+              "name": "max_tokens",
+              "value": "1200"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "llm-gateway-fallback",
+      "name": "LLM Gateway Fallback (Llama)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1780, 300],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "openrouter-header-auth",
+          "name": "OpenRouter Header Auth"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "functionCode": "// Gateway Normalize Fallback Output\nconst response = $input.item.json;\n\nlet parsedContent;\ntry {\n  // OpenRouter returns response in choices[0].message.content\n  const content = response.choices?.[0]?.message?.content || response.content || JSON.stringify(response);\n  \n  // Try direct parse first\n  try {\n    parsedContent = JSON.parse(content);\n  } catch (e) {\n    // Regex fallback - extract JSON from markdown code blocks or text\n    const jsonMatch = content.match(/\\{[\\s\\S]*\\}/);\n    if (jsonMatch) {\n      parsedContent = JSON.parse(jsonMatch[0]);\n    } else {\n      throw new Error('No valid JSON found in fallback response');\n    }\n  }\n} catch (error) {\n  // Ultimate fallback - return error structure\n  parsedContent = {\n    error: 'Fallback parsing failed',\n    raw_response: response,\n    confidence_score: 0.1\n  };\n}\n\nreturn [{\n  json: {\n    ...parsedContent,\n    gateway_used: 'fallback_llama',\n    fallback_timestamp: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "gateway-normalize-fallback",
+      "name": "Gateway Normalize Fallback Output",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [2000, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.use_fallback }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "gateway-choose-output",
+      "name": "Gateway Choose Output",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [2220, 400]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Orchestrator Result Extractor\nconst gatewayOutput = $input.item.json;\n\nreturn [{\n  json: {\n    orchestrator_result: gatewayOutput,\n    agent_type: 'orchestrator',\n    processed_at: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "orchestrator-result",
+      "name": "Orchestrator Result",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [2440, 100]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Job Analyzer Result Extractor\nconst gatewayOutput = $input.item.json;\n\nreturn [{\n  json: {\n    analyzer_result: gatewayOutput,\n    agent_type: 'analyzer',\n    processed_at: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "job-analyzer-result",
+      "name": "Job Analyzer Result",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [2440, 300]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Application Result Extractor\nconst gatewayOutput = $input.item.json;\n\nreturn [{\n  json: {\n    application_result: gatewayOutput,\n    agent_type: 'application',\n    processed_at: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "application-result",
+      "name": "Application Result",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [2440, 500]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Intelligence Result Extractor\nconst gatewayOutput = $input.item.json;\n\nreturn [{\n  json: {\n    intelligence_result: gatewayOutput,\n    agent_type: 'intelligence',\n    processed_at: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "intelligence-result",
+      "name": "Intelligence Result",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [2440, 700]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "number": [
+            {
+              "value1": "={{ $json.orchestrator_result.confidence_score }}",
+              "operation": "smaller",
+              "value2": 0.4
+            }
+          ]
+        }
+      },
+      "id": "confidence-router",
+      "name": "Confidence Router",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [2660, 100]
+    },
+    {
+      "parameters": {
+        "model": "={{ \"google/gemini-2.0-flash-exp:free\" }}",
+        "options": {
+          "temperature": 0.15,
+          "maxTokens": 800,
+          "systemMessage": "You are the Job Analyzer Agent. Perform deep analysis of job requirements, qualifications, and compatibility. Extract key skills, calculate job fit score, identify ATS keywords. Return STRICT JSON ONLY matching the schema provided."
+        },
+        "text": "={{ JSON.stringify($json.analyzer_result || $json) }}",
+        "responseFormat": "json_object"
+      },
+      "id": "job-analyzer-llm",
+      "name": "Job Analyzer (LLM task)",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.3,
+      "position": [2880, 300],
+      "credentials": {
+        "openAiApi": {
+          "id": "openai-credentials",
+          "name": "OpenRouter API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "model": "={{ \"google/gemini-2.0-flash-exp:free\" }}",
+        "options": {
+          "temperature": 0.12,
+          "maxTokens": 1000,
+          "systemMessage": "You are the Application Agent. Determine final automation_decision (auto_apply or manual_review) and generate application_payload with optimized materials. Calculate success_probability and automation_confidence. Return STRICT JSON ONLY."
+        },
+        "text": "={{ JSON.stringify($json.application_result) }}",
+        "responseFormat": "json_object"
+      },
+      "id": "application-agent-llm",
+      "name": "Application Agent (LLM task)",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.3,
+      "position": [3100, 300],
+      "credentials": {
+        "openAiApi": {
+          "id": "openai-credentials",
+          "name": "OpenRouter API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.automation_decision }}",
+              "value2": "auto_apply"
+            }
+          ]
+        }
+      },
+      "id": "application-router",
+      "name": "Application Router",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [3320, 300]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Easy Apply Automation Simulator\nconst applicationData = $input.item.json;\nconst applicationId = `APP_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;\n\n// Simulate auto-apply process\nconst result = {\n  application_submitted: true,\n  application_id: applicationId,\n  job_title: applicationData.job_title || 'Unknown',\n  company: applicationData.company || 'Unknown',\n  application_method: applicationData.application_method || 'easy_apply',\n  submitted_at: new Date().toISOString(),\n  automation_confidence: applicationData.automation_confidence || 0.85,\n  success_probability: applicationData.success_probability || 0.75,\n  payload_used: applicationData.application_payload || {},\n  status: 'Applied (Auto)',\n  platform: applicationData.platform || 'LinkedIn'\n};\n\nreturn [{ json: result }];"
+      },
+      "id": "easy-apply-automation",
+      "name": "Easy Apply Automation",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [3540, 200]
+    },
+    {
+      "parameters": {
+        "resource": "databasePage",
+        "databaseId": "26822d2349ef803f9c35ce1768d9427e",
+        "title": "={{ $json.job_title }}",
+        "propertiesUi": {
+          "propertyValues": [
+            {
+              "key": "Company",
+              "textValue": "={{ $json.company }}"
+            },
+            {
+              "key": "URL",
+              "urlValue": "={{ $json.job_url || 'N/A' }}"
+            },
+            {
+              "key": "Platform",
+              "selectValue": "={{ $json.platform }}"
+            },
+            {
+              "key": "Status",
+              "statusValue": "Applied (Auto)"
+            },
+            {
+              "key": "Salary",
+              "textValue": "={{ $json.salary_range || 'N/A' }}"
+            },
+            {
+              "key": "Priority",
+              "numberValue": "={{ $json.priority_score || 0.8 }}"
+            },
+            {
+              "key": "Confidence Score",
+              "numberValue": "={{ $json.automation_confidence }}"
+            },
+            {
+              "key": "Job Fit Score",
+              "numberValue": "={{ $json.job_fit_score || 0.75 }}"
+            },
+            {
+              "key": "Applied On",
+              "dateValue": "={{ $json.submitted_at }}"
+            }
+          ]
+        },
+        "options": {
+          "retryOnFail": true,
+          "maxRetries": 3
+        }
+      },
+      "id": "applications-db-logger",
+      "name": "Applications Database Logger",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 2.2,
+      "position": [3760, 200],
+      "credentials": {
+        "notionApi": {
+          "id": "notion-credentials",
+          "name": "Notion API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "databasePage",
+        "databaseId": "26822d2349ef804c98fdcc9c6207bb1e",
+        "title": "={{ $json.job_title || 'Manual Review Required' }}",
+        "propertiesUi": {
+          "propertyValues": [
+            {
+              "key": "Company",
+              "textValue": "={{ $json.company || 'Unknown' }}"
+            },
+            {
+              "key": "URL",
+              "urlValue": "={{ $json.job_url || 'N/A' }}"
+            },
+            {
+              "key": "Platform",
+              "selectValue": "={{ $json.platform || 'Unknown' }}"
+            },
+            {
+              "key": "Status",
+              "statusValue": "Manual Review Required"
+            },
+            {
+              "key": "Priority",
+              "numberValue": "={{ $json.priority_score || 0.5 }}"
+            },
+            {
+              "key": "Confidence Score",
+              "numberValue": "={{ $json.confidence_score || 0.3 }}"
+            },
+            {
+              "key": "Manual Review Reason",
+              "textValue": "={{ $json.orchestrator_result?.notes?.manual_review_reason || 'Low confidence score' }}"
+            }
+          ]
+        },
+        "options": {
+          "retryOnFail": true,
+          "maxRetries": 3
+        }
+      },
+      "id": "manual-review-queue",
+      "name": "Manual Review Queue",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 2.2,
+      "position": [3540, 400],
+      "credentials": {
+        "notionApi": {
+          "id": "notion-credentials",
+          "name": "Notion API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "model": "={{ \"google/gemini-2.0-flash-exp:free\" }}",
+        "options": {
+          "temperature": 0.25,
+          "maxTokens": 1000,
+          "systemMessage": "You are the Intelligence Agent. Generate session-level insights, track trends, provide strategic recommendations, monitor performance. Return STRICT JSON ONLY with session_insights, recommendations, performance_metrics, and next_actions."
+        },
+        "text": "={{ JSON.stringify($json.intelligence_result) }}",
+        "responseFormat": "json_object"
+      },
+      "id": "intelligence-agent-llm",
+      "name": "Intelligence Agent (LLM task)",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.3,
+      "position": [3980, 300],
+      "credentials": {
+        "openAiApi": {
+          "id": "openai-credentials",
+          "name": "OpenRouter API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "functionCode": "// Security Agent - Rate limiting and session stats\nconst sessionData = $input.item.json;\nconst processedJobs = $workflow.staticData.processedJobs || 0;\n$workflow.staticData.processedJobs = processedJobs + 1;\n\n// Calculate recommended delay based on volume\nlet recommendedDelay = 5; // default 5 seconds\nif (processedJobs > 50) {\n  recommendedDelay = 30;\n} else if (processedJobs > 20) {\n  recommendedDelay = 20;\n} else if (processedJobs > 10) {\n  recommendedDelay = 15;\n}\n\n// Estimate API usage (4 LLM calls per job + potential fallbacks)\nconst estimatedTokensPerJob = 3000;\nconst totalEstimatedTokens = processedJobs * estimatedTokensPerJob;\n\nconst securityAnalysis = {\n  processed_jobs_count: processedJobs,\n  recommended_delay_seconds: recommendedDelay,\n  estimated_total_tokens: totalEstimatedTokens,\n  estimated_cost_usd: (totalEstimatedTokens / 1000000) * 0.50, // rough estimate\n  rate_limit_status: processedJobs > 50 ? 'high_volume' : processedJobs > 20 ? 'medium_volume' : 'normal',\n  timestamp: new Date().toISOString(),\n  session_stats: {\n    total_processed: processedJobs,\n    avg_processing_time_estimate_seconds: 15,\n    security_check_passed: true\n  }\n};\n\nreturn [{\n  json: {\n    ...sessionData,\n    security_analysis: securityAnalysis,\n    recommended_delay_seconds: recommendedDelay\n  }\n}];"
+      },
+      "id": "security-agent",
+      "name": "Security Agent",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [4200, 300]
+    },
+    {
+      "parameters": {
+        "amount": "={{ $json.recommended_delay_seconds }}",
+        "unit": "seconds"
+      },
+      "id": "smart-delay",
+      "name": "Smart Delay",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [4420, 300]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Session Summary Generator - Final output compilation\nconst data = $input.item.json;\n\n// Compile comprehensive session summary\nconst sessionSummary = {\n  session_complete: true,\n  session_id: data.session_id || 'unknown',\n  workflow_version: 'v3_hybrid_c2',\n  execution_id: $workflow.id,\n  processing_summary: {\n    job_processed: {\n      source_id: data.source_id || 'unknown',\n      job_title: data.job_title || 'Unknown',\n      company: data.company || 'Unknown',\n      platform: data.platform || 'Unknown'\n    },\n    orchestrator_decision: data.orchestrator_result?.orchestrator_decision || 'unknown',\n    analyzer_insights: {\n      job_fit_score: data.analyzer_result?.job_fit_score || 0,\n      required_skills: data.analyzer_result?.required_skills || [],\n      confidence_score: data.analyzer_result?.confidence_score || 0\n    },\n    application_decision: {\n      automation_decision: data.automation_decision || 'manual_review',\n      automation_confidence: data.automation_confidence || 0,\n      success_probability: data.success_probability || 0,\n      application_submitted: data.application_submitted || false\n    },\n    intelligence_insights: data.intelligence_result || {},\n    security_analysis: data.security_analysis || {}\n  },\n  timestamps: {\n    processing_started: data.processing_started,\n    processing_completed: new Date().toISOString(),\n    total_duration_seconds: data.processing_started ? \n      (Date.now() - new Date(data.processing_started).getTime()) / 1000 : 0\n  },\n  status: data.application_submitted ? 'applied_auto' : 'manual_review',\n  next_steps: data.intelligence_result?.next_actions || ['Monitor application status']\n};\n\nreturn [{ json: sessionSummary }];"
+      },
+      "id": "session-summary-generator",
+      "name": "Session Summary Generator",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [4640, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "allIncomingItems",
+        "options": {}
+      },
+      "id": "response-node",
+      "name": "Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [5100, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $('Batch Job Processor').context.noItemsLeft }}",
+              "value2": false
+            }
+          ]
+        }
+      },
+      "id": "batch-controller",
+      "name": "Batch Controller",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [4860, 300]
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [[{ "node": "Job Discovery Processor", "type": "main", "index": 0 }]]
+    },
+    "Job Discovery Processor": {
+      "main": [[{ "node": "Batch Job Processor", "type": "main", "index": 0 }]]
+    },
+    "Batch Job Processor": {
+      "main": [
+        [
+          { "node": "Orchestrator Prompt", "type": "main", "index": 0 },
+          { "node": "Job Analyzer Prompt", "type": "main", "index": 0 },
+          { "node": "Application Prompt", "type": "main", "index": 0 },
+          { "node": "Intelligence Prompt", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Orchestrator Prompt": {
+      "main": [[{ "node": "LLM Gateway Primary (Gemini)", "type": "main", "index": 0 }]]
+    },
+    "Job Analyzer Prompt": {
+      "main": [[{ "node": "LLM Gateway Primary (Gemini)", "type": "main", "index": 0 }]]
+    },
+    "Application Prompt": {
+      "main": [[{ "node": "LLM Gateway Primary (Gemini)", "type": "main", "index": 0 }]]
+    },
+    "Intelligence Prompt": {
+      "main": [[{ "node": "LLM Gateway Primary (Gemini)", "type": "main", "index": 0 }]]
+    },
+    "LLM Gateway Primary (Gemini)": {
+      "main": [[{ "node": "Gateway Check Response", "type": "main", "index": 0 }]]
+    },
+    "Gateway Check Response": {
+      "main": [[{ "node": "Gateway Need Fallback?", "type": "main", "index": 0 }]]
+    },
+    "Gateway Need Fallback?": {
+      "main": [
+        [{ "node": "LLM Gateway Fallback (Llama)", "type": "main", "index": 0 }],
+        [{ "node": "Gateway Choose Output", "type": "main", "index": 0 }]
+      ]
+    },
+    "LLM Gateway Fallback (Llama)": {
+      "main": [[{ "node": "Gateway Normalize Fallback Output", "type": "main", "index": 0 }]]
+    },
+    "Gateway Normalize Fallback Output": {
+      "main": [[{ "node": "Gateway Choose Output", "type": "main", "index": 0 }]]
+    },
+    "Gateway Choose Output": {
+      "main": [
+        [
+          { "node": "Orchestrator Result", "type": "main", "index": 0 },
+          { "node": "Job Analyzer Result", "type": "main", "index": 0 },
+          { "node": "Application Result", "type": "main", "index": 0 },
+          { "node": "Intelligence Result", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Orchestrator Result": {
+      "main": [[{ "node": "Confidence Router", "type": "main", "index": 0 }]]
+    },
+    "Confidence Router": {
+      "main": [
+        [{ "node": "Manual Review Queue", "type": "main", "index": 0 }],
+        [{ "node": "Job Analyzer (LLM task)", "type": "main", "index": 0 }]
+      ]
+    },
+    "Job Analyzer (LLM task)": {
+      "main": [[{ "node": "Application Agent (LLM task)", "type": "main", "index": 0 }]]
+    },
+    "Application Agent (LLM task)": {
+      "main": [[{ "node": "Application Router", "type": "main", "index": 0 }]]
+    },
+    "Application Router": {
+      "main": [
+        [{ "node": "Easy Apply Automation", "type": "main", "index": 0 }],
+        [{ "node": "Manual Review Queue", "type": "main", "index": 0 }]
+      ]
+    },
+    "Easy Apply Automation": {
+      "main": [[{ "node": "Applications Database Logger", "type": "main", "index": 0 }]]
+    },
+    "Applications Database Logger": {
+      "main": [[{ "node": "Intelligence Agent (LLM task)", "type": "main", "index": 0 }]]
+    },
+    "Manual Review Queue": {
+      "main": [[{ "node": "Intelligence Agent (LLM task)", "type": "main", "index": 0 }]]
+    },
+    "Intelligence Agent (LLM task)": {
+      "main": [[{ "node": "Security Agent", "type": "main", "index": 0 }]]
+    },
+    "Security Agent": {
+      "main": [[{ "node": "Smart Delay", "type": "main", "index": 0 }]]
+    },
+    "Smart Delay": {
+      "main": [[{ "node": "Session Summary Generator", "type": "main", "index": 0 }]]
+    },
+    "Session Summary Generator": {
+      "main": [[{ "node": "Batch Controller", "type": "main", "index": 0 }]]
+    },
+    "Batch Controller": {
+      "main": [
+        [{ "node": "Batch Job Processor", "type": "main", "index": 0 }],
+        [{ "node": "Response", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 0,
+  "updatedAt": "2025-11-16T08:00:00.000Z",
+  "versionId": "1"
+}

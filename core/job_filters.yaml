@@ -1,0 +1,593 @@
+# =============================================================================
+# AI JOB AUTOMATION AGENT - AI/ML/DATA SCIENCE JOB SEARCH CRITERIA
+# =============================================================================
+# Specialized job search parameters for AI, Machine Learning, and Data Science roles
+# Focused on Indian market with global remote opportunities
+#
+# Author: AI Job Automation Team  
+# Version: 1.0.0 - AI/ML Specialized
+# Last Updated: October 2025
+# =============================================================================
+
+# =============================================================================
+# AI/ML/DATA SCIENCE SEARCH CRITERIA
+# =============================================================================
+search_criteria:
+  # AI/ML/Data Science job titles
+  job_titles:
+    - "AI Engineer"
+    - "Machine Learning Engineer" 
+    - "Data Scientist"
+    - "ML Engineer"
+    - "Artificial Intelligence Engineer"
+    - "Deep Learning Engineer"
+    - "Data Science Engineer"
+    - "MLOps Engineer"
+    - "AI Research Engineer"
+    - "Computer Vision Engineer"
+    - "NLP Engineer"
+    - "Data Analyst"
+    - "Business Intelligence Analyst"
+    - "Quantitative Analyst"
+    - "Research Scientist"
+    - "AI Specialist"
+    - "Machine Learning Specialist"
+    - "Data Mining Engineer"
+    - "Statistical Analyst"
+    - "AI Developer"
+    - "ML Developer"
+    - "Data Engineer"
+    - "Big Data Engineer"
+    - "Analytics Engineer"
+    - "AI Consultant"
+    - "ML Consultant"
+    - "Data Science Consultant"
+    - "Prompt Engineer"
+    - "LLM Engineer"
+    - "Generative AI Engineer"
+    - "AI Agent Developer"
+  
+  # Required AI/ML/Data Science keywords
+  required_keywords:
+    - "Python"
+    - "Machine Learning"
+    - "Data Science"
+    - "AI"
+    - "Artificial Intelligence"
+    - "Statistical Analysis"
+    - "Data Analysis"
+    - "Algorithms"
+    - "Mathematics"
+    - "Statistics"
+  
+  # Preferred AI/ML keywords (bonus points)
+  preferred_keywords:
+    - "Deep Learning"
+    - "Neural Networks"
+    - "TensorFlow"
+    - "PyTorch"
+    - "Scikit-learn"
+    - "Pandas"
+    - "NumPy"
+    - "R"
+    - "SQL"
+    - "NoSQL"
+    - "Big Data"
+    - "Hadoop"
+    - "Spark"
+    - "Kafka"
+    - "Docker"
+    - "Kubernetes"
+    - "AWS"
+    - "Azure"
+    - "GCP"
+    - "MLOps"
+    - "Model Deployment"
+    - "Computer Vision"
+    - "NLP"
+    - "Natural Language Processing"
+    - "OpenCV"
+    - "NLTK"
+    - "Spacy"
+    - "Transformers"
+    - "BERT"
+    - "GPT"
+    - "LLM"
+    - "Large Language Models"
+    - "Generative AI"
+    - "ChatGPT"
+    - "OpenAI"
+    - "Hugging Face"
+    - "LangChain"
+    - "Vector Databases"
+    - "Embeddings"
+    - "Fine-tuning"
+    - "Prompt Engineering"
+    - "AI Agents"
+    - "Multi-Agent Systems"
+    - "Reinforcement Learning"
+    - "Time Series"
+    - "Forecasting"
+    - "A/B Testing"
+    - "Experimental Design"
+    - "Feature Engineering"
+    - "Data Visualization"
+    - "Tableau"
+    - "Power BI"
+    - "Matplotlib"
+    - "Seaborn"
+    - "Plotly"
+    - "Jupyter"
+    - "Git"
+    - "Linux"
+    - "API"
+    - "REST"
+    - "FastAPI"
+    - "Flask"
+    - "Django"
+    - "MongoDB"
+    - "PostgreSQL"
+    - "MySQL"
+    - "Redis"
+    - "Elasticsearch"
+
+# =============================================================================
+# SCRAPER CONFIG 
+# =============================================================================
+scraper_config:
+  global:
+    max_concurrency: 8
+    hours_old: 168  # 7 days, passed to all scrapers
+    is_remote: true  # Default for all scrapers
+
+  jobspy:
+    enabled: true
+    sites: ["linkedin", "indeed", "ziprecruiter", "glassdoor"]
+    hours_old: 168  # Override global if needed
+
+  jooble:
+    enabled: true
+    location: ""  # Empty = worldwide
+
+  remotive:
+    enabled: true
+
+  google_jobs_playwright:
+    enabled: true
+    # No SerpAPI - direct browser search using search_criteria
+    search_delay_ms: 3000  # Time between pages
+
+  # Playwright sites (no SerpAPI needed)
+  playwright_sites:
+    - wellfound
+    - weworkremotely  
+    - remoteok
+    - simplyhired
+    - stackoverflow
+    - yc_startups
+    - hiring_cafe
+    
+# =============================================================================
+# LOCATION PREFERENCES (India + Global Remote Focus)
+# =============================================================================
+locations:
+  # Preferred locations (in order of preference)
+  preferred:
+    - "Remote"
+    - "Work from Home"
+    - "WFH"
+    - "Hybrid"
+    - "Nagpur, Maharashtra"
+    - "Pune, Maharashtra"
+    - "Mumbai, Maharashtra"
+    - "Bangalore, Karnataka"
+    - "Hyderabad, Telangana"
+    - "Chennai, Tamil Nadu"
+    - "Delhi"
+    - "Gurgaon, Haryana"
+    - "Noida, Uttar Pradesh"
+    - "Kolkata, West Bengal"
+    - "Ahmedabad, Gujarat"
+    - "San Francisco, CA"
+    - "New York, NY"
+    - "Seattle, WA"
+    - "London, UK"
+    - "Toronto, ON"
+    - "Berlin, Germany"
+    - "Amsterdam, Netherlands"
+    - "Singapore"
+    - "Sydney, Australia"
+  
+  # Location types
+  remote_only: false
+  hybrid_acceptable: true
+  on_site_acceptable: false
+  
+  # Countries to include
+  allowed_countries:
+    - "India"
+    - "United States"
+    - "Canada" 
+    - "United Kingdom"
+    - "Germany"
+    - "Netherlands"
+    - "Australia"
+    - "Singapore"
+    - "UAE"
+    - "Switzerland"
+  
+  # Countries to exclude
+  excluded_countries:
+    - "China"
+    - "Russia"
+    - "North Korea"
+
+# =============================================================================
+# SALARY & COMPENSATION (Indian Market Focus)
+# =============================================================================
+compensation:
+  # Salary ranges (in INR annually)
+  minimum_salary: 600000  # 6 LPA
+  preferred_minimum: 800000  # 8 LPA
+  target_salary: 1500000  # 15 LPA
+  maximum_considered: null  # Open-ended
+  
+  # Currency preferences (in order of preference)
+  preferred_currencies:
+    - "GBP"  # Pounds
+    - "USD"  # Dollars
+    - "EUR"  # Euros
+    - "AED"  # Dirhams
+    - "INR"  # Rupees
+    - "CAD"
+    - "AUD"
+    - "SGD"
+    - "CHF"
+  
+  # Compensation types
+  salary_required: true
+  equity_preferred: true
+  bonus_preferred: true
+  benefits_important: true
+  
+  # Equity considerations (open-ended)
+  equity_percentage_minimum: null
+  equity_percentage_preferred: null
+
+# =============================================================================
+# EXPERIENCE LEVEL (0-5 Years Only)
+# =============================================================================
+experience:
+  # Years of experience (strict range)
+  minimum_years: 0
+  maximum_years: 5
+  target_years: 2
+  
+  # Seniority levels to target (NO seniority levels)
+  levels: 
+  
+  # Levels to avoid
+  excluded_levels:
+    - "Senior"
+    - "Staff"
+    - "Entry Level"  # Excluded as requested
+    - "Director"
+
+# =============================================================================
+# COMPANY PREFERENCES (Expanded Types)
+# =============================================================================
+companies:
+  # Preferred company types (expanded list)
+  company_types:
+    - "AI Startup"
+    - "ML Company"
+    - "Data Science Company"
+    - "Tech Startup"
+    - "Fintech"
+    - "EdTech"
+    - "HealthTech"
+    - "AgriTech"
+    - "Retail Tech"
+    - "E-commerce"
+    - "SaaS"
+    - "Enterprise Software"
+    - "Cloud Services"
+    - "Consulting"
+    - "Research Institute"
+    - "R&D Lab"
+    - "Analytics Company"
+    - "Business Intelligence"
+    - "Cybersecurity"
+    - "Automotive Tech"
+    - "Gaming"
+    - "Entertainment Tech"
+    - "Travel Tech"
+    - "PropTech"
+    - "LegalTech"
+    - "InsurTech"
+    - "Biotech"
+    - "Pharmaceutical"
+    - "Manufacturing"
+    - "Logistics Tech"
+    - "Supply Chain"
+    - "Energy Tech"
+    - "Climate Tech"
+    - "Social Impact"
+    - "Non-profit"
+    - "Government"
+    - "Defense Tech"
+    - "Space Tech"
+    - "Robotics"
+    - "IoT"
+    - "Blockchain"
+    - "Web3"
+    - "Metaverse"
+    - "AR/VR"
+    - "Quantum Computing"
+  
+  # Company sizes (irrelevant as requested)
+  size_preferences:
+    minimum_size: null
+    maximum_size: null
+    preferred_range: null
+  
+  # Funding stages (irrelevant as requested)
+  funding_stages: null
+  
+  # Companies to prioritize (lax as requested)
+  priority_companies: []
+  
+  # Companies to avoid
+  excluded_companies: []
+
+# =============================================================================
+# INDUSTRY PREFERENCES (AI/ML/Data Focused)
+# =============================================================================
+industries:
+  # Preferred industries
+  preferred:
+    - "Artificial Intelligence"
+    - "Machine Learning"
+    - "Data Science"
+    - "Technology"
+    - "Software"
+    - "Analytics"
+    - "Research & Development"
+    - "Consulting"
+    - "Financial Services"
+    - "Healthcare"
+    - "Education"
+    - "E-commerce"
+    - "Gaming"
+    - "Automotive"
+    - "Manufacturing"
+    - "Energy"
+    - "Telecommunications"
+    - "Media & Entertainment"
+    - "Real Estate"
+    - "Transportation"
+    - "Agriculture"
+    - "Government"
+    - "Non-profit"
+  
+  # Industries to avoid
+  excluded:
+    - "Adult Entertainment"
+    - "Gambling"
+    - "Tobacco"
+    - "Weapons"
+    - "Payday Loans"
+
+# =============================================================================
+# TOP 20 JOB PLATFORMS (Selected from your list)
+# =============================================================================
+platforms:
+  linkedin:
+    enabled: true
+    max_results_per_search: 100
+    search_filters:
+      date_posted: "week"
+      experience_level: ["internship", "entry_level", "associate", "mid_senior"]
+      job_type: ["full_time", "contract", "internship"]
+    priority: 1
+    
+  indeed:
+    enabled: true
+    max_results_per_search: 80
+    priority: 1
+    
+  naukri:
+    enabled: true
+    max_results_per_search: 70
+    priority: 1  # High priority for Indian market
+    
+  flexjobs:
+    enabled: true
+    max_results_per_search: 40
+    priority: 2
+    
+  weworkremotely:
+    enabled: true
+    max_results_per_search: 30
+    priority: 2
+    
+  remotive:
+    enabled: true
+    max_results_per_search: 25
+    priority: 2
+    
+  wellfound:
+    enabled: true
+    max_results_per_search: 50
+    priority: 2
+    
+  justremote:
+    enabled: true
+    max_results_per_search: 30
+    priority: 3
+    
+  working_nomads:
+    enabled: true
+    max_results_per_search: 20
+    priority: 3
+    
+  jobespresso:
+    enabled: true
+    max_results_per_search: 25
+    priority: 3
+    
+  remote_ok:
+    enabled: true
+    max_results_per_search: 35
+    priority: 2
+    
+  pangian:
+    enabled: true
+    max_results_per_search: 20
+    priority: 3
+    
+  virtual_vacations:
+    enabled: true
+    max_results_per_search: 15
+    priority: 4
+    
+  europe_remotely:
+    enabled: true
+    max_results_per_search: 20
+    priority: 3
+    
+  remote_leads:
+    enabled: true
+    max_results_per_search: 15
+    priority: 4
+    
+  remote_labs:
+    enabled: true
+    max_results_per_search: 15
+    priority: 4
+    
+  remote_com:
+    enabled: true
+    max_results_per_search: 25
+    priority: 3
+    
+  jooble:
+    enabled: true
+    max_results_per_search: 40
+    priority: 2
+    
+  glassdoor:
+    enabled: true
+    max_results_per_search: 50
+    priority: 2
+    
+  daily_remote:
+    enabled: true
+    max_results_per_search: 20
+    priority: 3
+
+# =============================================================================
+# AI SCORING CRITERIA (AI/ML Optimized)
+# =============================================================================
+ai_scoring:
+  # Weights for AI/ML job criteria
+  weights:
+    job_title_match: 0.30      # Higher weight for AI/ML titles
+    skills_match: 0.25         # Critical for technical roles
+    salary_match: 0.15         # Important but flexible
+    location_match: 0.10       # Remote preference
+    company_match: 0.05        # Lax company preference
+    experience_match: 0.10     # 0-5 years range
+    industry_match: 0.05       # AI/ML industry bonus
+  
+  # Scoring thresholds
+  minimum_application_score: 60  # Lower threshold for more opportunities
+  auto_apply_threshold: 80       # High confidence applications
+  manual_review_threshold: 70    # Review borderline cases
+
+# =============================================================================
+# APPLICATION PREFERENCES (AI/ML Optimized)
+# =============================================================================
+application_settings:
+  # Daily limits
+  max_applications_per_day: 50
+  max_applications_per_platform: 8
+  
+  # Application timing (IST)
+  preferred_application_times:
+    - "09:00-11:00"  # Morning
+    - "14:00-16:00"  # Afternoon
+    - "19:00-21:00"  # Evening (global remote)
+  
+  # Cover letter preferences
+  cover_letter:
+    always_include: true
+    personalize_for_company: true
+    personalize_for_role: true
+    max_length: 250
+    highlight_ai_ml_skills: true
+  
+  # Resume preferences
+  resume:
+    generate_custom: true
+    highlight_relevant_skills: true
+    adjust_for_ats: true
+    emphasize_projects: true
+    include_github: true
+    include_kaggle: true
+
+# =============================================================================
+# PRIORITY SYSTEM (AI/ML Focus)
+# =============================================================================
+priority_rules:
+  # High priority conditions
+  high_priority:
+    - "remote work available"
+    - "AI or ML or Data Science in title"
+    - "salary > 800000 INR or equivalent"
+    - "posted within 3 days"
+    - "internship or junior level"
+    - "Python mentioned"
+    - "Machine Learning mentioned"
+  
+  # Medium priority conditions  
+  medium_priority:
+    - "hybrid work available"
+    - "data analysis mentioned"
+    - "statistics mentioned"
+    - "posted within 7 days"
+    - "Indian location"
+  
+  # Low priority conditions
+  low_priority:
+    - "on-site only"
+    - "minimal AI/ML content"
+    - "posted within 14 days"
+
+# =============================================================================
+# EXCLUSION RULES (AI/ML Specific)
+# =============================================================================
+exclusions:
+  # Automatic exclusions
+  exclude_if:
+    - "salary < 600000 INR and currency is INR"
+    - "requires > 5 years experience"
+    - "entry level mentioned"  # Excluded as requested
+    - "senior level required"
+    - "management role"
+    - "no technical skills mentioned"
+    - "non-technical role"
+    - "sales role"
+    - "marketing role"
+    - "posted > 21 days ago"
+    - "visa sponsorship not available and location is international"
+  
+  # Temporary exclusions
+  temporary_exclusion_days: 30
+  
+  # AI/ML specific exclusions
+  technical_exclusions:
+    - "no programming required"
+    - "no quantitative skills"
+    - "purely business role"
+    - "manual data entry"

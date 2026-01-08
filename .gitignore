@@ -1,0 +1,330 @@
+# =============================================================================
+# AI JOB AUTOMATION AGENT - GIT IGNORE CONFIGURATION
+# =============================================================================
+
+# Environment variables and secrets
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+sa-key.json
+*-key.pem
+*.key
+*.pem
+config/secrets/
+
+# API Keys and credentials
+openai_api_key
+perplexity_api_key
+notion_api_key
+*_credentials.json
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+.venv/
+
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnp
+.pnp.js
+package-lock.json
+
+# Docker
+docker-compose.override.yml
+.dockerignore
+
+# Database and persistence
+postgres_data/
+n8n_data/
+redis_data/
+mcp_sessions/
+backend_cache/
+backend_temp/
+playwright_browsers/
+playwright_downloads/
+playwright_profiles/
+celery_data/
+celery_beat_data/
+prometheus_data/
+grafana_data/
+jaeger_data/
+minio_data/
+nginx_logs/
+elasticsearch_data/
+
+# Logs
+logs/
+*.log
+automation.log
+cron_errors.log
+daily_report_*.json
+
+# Screenshots and artifacts
+screenshots/
+downloads/
+artifacts/
+temp/
+tmp/
+cache/
+
+# Chrome Extension builds
+chrome_extension/*.crx
+chrome_extension/*.zip
+chrome_extension/build/
+chrome_extension/dist/
+extension-key.pem
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.sublime-project
+.sublime-workspace
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# Jupyter Notebooks
+.ipynb_checkpoints
+
+# PyTorch and ML models
+*.pt
+*.pth
+*.h5
+*.pkl
+models/
+
+# Testing
+.coverage
+.pytest_cache/
+.tox/
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+
+# Backup files
+*.backup
+*.bak
+*~
+
+# Temporary files from automation
+resume_*.pdf
+cover_letter_*.pdf
+application_*.png
+
+# N8N workflows exports (keep in git but ignore temp exports)
+n8n_workflows/temp/
+n8n_workflows/*.backup
+
+# Monitoring and metrics data
+metrics/
+traces/
+
+# Local configuration overrides
+local.env
+override.env
+.env.override
+
+# Certificates and SSL
+*.crt
+*.ca-bundle
+
+# MacOS
+.AppleDouble
+.LSOverride
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Linux
+*~
+
+# Vim
+*.swp
+*.swo
+
+# Emacs
+*~
+\#*\#
+/.emacs.desktop
+/.emacs.desktop.lock
+*.elc
+auto-save-list
+tramp
+.\#*
+
+# User-specific files
+user_profiles/
+user_resumes/
+user_applications/
+
+# Runtime files
+*.pid
+*.seed
+*.pid.lock
+
+# Optional REPL history
+.node_repl_history
+
+# Output of 'npm pack'
+*.tgz
+
+# Yarn Integrity file
+.yarn-integrity
+
+# dotenv environment variable files
+.env.test
+
+# Stores VSCode versions used for testing VSCode extensions
+.vscode-test
+
+# Dependency directories
+jspm_packages/
+
+# TypeScript cache
+*.tsbuildinfo
+
+# Optional npm cache directory
+.npm
+
+# Optional eslint cache
+.eslintcache
+
+# Microbundle cache
+.rpt2_cache/
+.rts2_cache_cjs/
+.rts2_cache_es/
+.rts2_cache_umd/
+
+# Optional REPL history
+.node_repl_history
+
+# Output of 'npm pack'
+*.tgz
+
+# Yarn Integrity file
+.yarn-integrity
+
+# parcel-bundler cache (https://parceljs.org/)
+.cache
+.parcel-cache
+
+# Next.js build output
+.next
+
+# Nuxt.js build / generate output
+.nuxt
+dist
+
+# Storybook build outputs
+.out
+.storybook-out
+storybook-static
+
+# Temporary folders
+tmp/
+temp/
+
+# Logs
+logs
+*.log
+
+# Runtime data
+pids
+*.pid
+*.seed
+*.pid.lock
+
+# Grunt intermediate storage
+.grunt
+
+# Bower dependency directory
+bower_components
+
+# node-waf configuration
+.lock-wscript
+
+# Compiled binary addons
+build/Release
+
+# Dependency directories
+node_modules/
+jspm_packages/
+
+# Optional npm cache directory
+.npm
+
+# Optional REPL history
+.node_repl_history
+
+# Output of 'npm pack'
+*.tgz
+
+# Yarn Integrity file
+.yarn-integrity
+
+# dotenv environment variable files
+.env
+
+# Serverless directories
+.serverless
+
+# Local DynamoDB
+.dynamodb
+
+# TernJS port file
+.tern-port
+
+# Stores VSCode versions used for testing VSCode extensions
+.vscode-test
+
+# Service worker
+sw.*
+
+# Local configuration files that might contain sensitive data
+config/local_*

@@ -1,0 +1,68 @@
+{
+  "resumes": [
+    {
+      "resume_id": "resume_ai_automation",
+      "label": "Aarjun_AIAutomation.pdf",
+      "role_focus": "ai_automation",
+      "languages": ["en"],
+      "local_path": "/Users/apple/TechStack/Resume/Aarjun_AIAutomation.pdf",
+      "embedding_version": "v1-text-embedding-3-small"
+    },
+    {
+      "resume_id": "resume_ai_ml",
+      "label": "Aarjun_AIML.pdf",
+      "role_focus": "ai_ml_generalist",
+      "languages": ["en"],
+      "local_path": "/Users/apple/TechStack/Resume/Aarjun_AIML.pdf",
+      "embedding_version": "v1-text-embedding-3-small"
+    },
+    {
+      "resume_id": "resume_data_engineering",
+      "label": "Aarjun_DataEngineering.pdf",
+      "role_focus": "data_engineering",
+      "languages": ["en"],
+      "local_path": "/Users/apple/TechStack/Resume/Aarjun_DataEngineering.pdf",
+      "embedding_version": "v1-text-embedding-3-small"
+    },
+    {
+      "resume_id": "resume_data_science",
+      "label": "Aarjun_DataScience.pdf",
+      "role_focus": "data_science",
+      "languages": ["en"],
+      "local_path": "/Users/apple/TechStack/Resume/Aarjun_DataScience.pdf",
+      "embedding_version": "v1-text-embedding-3-small"
+    },
+    {
+      "resume_id": "resume_generic",
+      "label": "Aarjun_Gen.pdf",
+      "role_focus": "general_ai_ml",
+      "languages": ["en"],
+      "local_path": "/Users/apple/TechStack/Resume/Aarjun_Gen.pdf",
+      "embedding_version": "v1-text-embedding-3-small"
+    },
+    {
+      "resume_id": "resume_llm_genai",
+      "label": "Aarjun_LLMGenAI.pdf",
+      "role_focus": "llm_genai",
+      "languages": ["en"],
+      "local_path": "/Users/apple/TechStack/Resume/Aarjun_LLMGenAI.pdf",
+      "embedding_version": "v1-text-embedding-3-small"
+    },
+    {
+      "resume_id": "resume_mlops",
+      "label": "Aarjun_MLOps.pdf",
+      "role_focus": "mlops",
+      "languages": ["en"],
+      "local_path": "/Users/apple/TechStack/Resume/Aarjun_MLOps.pdf",
+      "embedding_version": "v1-text-embedding-3-small"
+    },
+    {
+      "resume_id": "resume_original",
+      "label": "Aarjun_OG.pdf",
+      "role_focus": "original_backup",
+      "languages": ["en"],
+      "local_path": "/Users/apple/TechStack/Resume/Aarjun_OG.pdf",
+      "embedding_version": "v1-text-embedding-3-small"
+    }
+  ]
+}

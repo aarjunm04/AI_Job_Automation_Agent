@@ -1,0 +1,600 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Job Automation Agent</title>
+    <link rel="stylesheet" href="sidebar.css">
+    
+    <!-- Preconnect to external services -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="dns-prefetch" href="//localhost:8080">
+    
+    <!-- Meta tags for Chrome Extension -->
+    <meta name="description" content="AI-powered job automation with intelligent application management">
+    <meta name="theme-color" content="#667eea">
+</head>
+<body>
+    <!-- Loading Screen -->
+    <div id="loading-screen" class="loading-screen">
+        <div class="loading-content">
+            <div class="loading-spinner"></div>
+            <h3>🤖 AI Job Automation</h3>
+            <p>Initializing intelligent systems...</p>
+        </div>
+    </div>
+
+    <!-- Main Application -->
+    <div id="main-app" class="app-container" style="display: none;">
+        <!-- Header -->
+        <header class="app-header">
+            <div class="header-content">
+                <div class="logo-section">
+                    <div class="logo">🤖</div>
+                    <div class="app-info">
+                        <h1>AI Job Agent</h1>
+                        <span class="version">v1.0.0</span>
+                    </div>
+                </div>
+                
+                <div class="status-indicator">
+                    <div id="api-status" class="status-dot disconnected" title="Backend API Status"></div>
+                    <div id="mcp-status" class="status-dot disconnected" title="MCP Connection Status"></div>
+                </div>
+            </div>
+        </header>
+
+        <!-- Navigation Tabs -->
+        <nav class="tab-navigation">
+            <button class="tab-btn active" data-tab="dashboard">
+                <span class="tab-icon">📊</span>
+                <span class="tab-label">Dashboard</span>
+            </button>
+            <button class="tab-btn" data-tab="analysis">
+                <span class="tab-icon">🧠</span>
+                <span class="tab-label">Analysis</span>
+            </button>
+            <button class="tab-btn" data-tab="automation">
+                <span class="tab-icon">🤖</span>
+                <span class="tab-label">Automation</span>
+            </button>
+            <button class="tab-btn" data-tab="settings">
+                <span class="tab-icon">⚙️</span>
+                <span class="tab-label">Settings</span>
+            </button>
+        </nav>
+
+        <!-- Main Content Area -->
+        <main class="main-content">
+            
+            <!-- Dashboard Tab -->
+            <section id="dashboard-tab" class="tab-content active">
+                <div class="dashboard-grid">
+                    
+                    <!-- Current Job Analysis Card -->
+                    <div class="card current-job-card">
+                        <div class="card-header">
+                            <h3>🎯 Current Job Analysis</h3>
+                            <button id="analyze-current-btn" class="btn btn-primary btn-sm">Analyze</button>
+                        </div>
+                        <div class="card-body">
+                            <div id="current-job-content" class="current-job-content">
+                                <div class="no-job-message">
+                                    <div class="icon">📋</div>
+                                    <p>Navigate to a job posting to see AI-powered insights</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Quick Stats -->
+                    <div class="stats-grid">
+                        <div class="stat-card">
+                            <div class="stat-icon">📈</div>
+                            <div class="stat-content">
+                                <div class="stat-number" id="jobs-analyzed">0</div>
+                                <div class="stat-label">Jobs Analyzed</div>
+                            </div>
+                        </div>
+                        
+                        <div class="stat-card">
+                            <div class="stat-icon">✅</div>
+                            <div class="stat-content">
+                                <div class="stat-number" id="applications-sent">0</div>
+                                <div class="stat-label">Applications</div>
+                            </div>
+                        </div>
+                        
+                        <div class="stat-card">
+                            <div class="stat-icon">🎯</div>
+                            <div class="stat-content">
+                                <div class="stat-number" id="match-rate">0%</div>
+                                <div class="stat-label">Avg Match</div>
+                            </div>
+                        </div>
+                        
+                        <div class="stat-card">
+                            <div class="stat-icon">⚡</div>
+                            <div class="stat-content">
+                                <div class="stat-number" id="success-rate">0%</div>
+                                <div class="stat-label">Success Rate</div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Recent Activity -->
+                    <div class="card recent-activity-card">
+                        <div class="card-header">
+                            <h3>📚 Recent Activity</h3>
+                            <button id="refresh-activity-btn" class="btn btn-ghost btn-sm">Refresh</button>
+                        </div>
+                        <div class="card-body">
+                            <div id="recent-activity-list" class="activity-list">
+                                <div class="activity-item">
+                                    <div class="activity-icon">🔍</div>
+                                    <div class="activity-content">
+                                        <div class="activity-title">Welcome to AI Job Automation!</div>
+                                        <div class="activity-subtitle">Start browsing job sites to see AI insights</div>
+                                        <div class="activity-time">Just now</div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Quick Actions -->
+                    <div class="card quick-actions-card">
+                        <div class="card-header">
+                            <h3>⚡ Quick Actions</h3>
+                        </div>
+                        <div class="card-body">
+                            <div class="action-buttons">
+                                <button id="auto-fill-btn" class="action-btn" data-action="autofill">
+                                    <span class="action-icon">📝</span>
+                                    <span class="action-label">Auto-Fill Form</span>
+                                    <span class="action-shortcut">Ctrl+Shift+F</span>
+                                </button>
+                                
+                                <button id="research-company-btn" class="action-btn" data-action="research">
+                                    <span class="action-icon">🔍</span>
+                                    <span class="action-label">Research Company</span>
+                                </button>
+                                
+                                <button id="optimize-resume-btn" class="action-btn" data-action="resume">
+                                    <span class="action-icon">📄</span>
+                                    <span class="action-label">Optimize Resume</span>
+                                </button>
+                                
+                                <button id="quick-apply-btn" class="action-btn" data-action="apply">
+                                    <span class="action-icon">🚀</span>
+                                    <span class="action-label">Quick Apply</span>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Analysis Tab -->
+            <section id="analysis-tab" class="tab-content">
+                <div class="analysis-container">
+                    
+                    <!-- Job Analysis Results -->
+                    <div class="card analysis-results-card">
+                        <div class="card-header">
+                            <h3>🧠 Job Analysis Results</h3>
+                            <div class="analysis-controls">
+                                <select id="analysis-filter" class="select">
+                                    <option value="all">All Analyses</option>
+                                    <option value="high">High Match (85%+)</option>
+                                    <option value="medium">Medium Match (70-84%)</option>
+                                    <option value="low">Low Match (&lt;70%)</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="card-body">
+                            <div id="analysis-results-list" class="analysis-results-list">
+                                <div class="no-analysis-message">
+                                    <div class="icon">🔍</div>
+                                    <p>No job analyses yet. Start analyzing jobs to see insights here.</p>
+                                    <button class="btn btn-primary">Browse Job Sites</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Analysis Insights -->
+                    <div class="insights-grid">
+                        <div class="insight-card">
+                            <div class="insight-header">
+                                <h4>📊 Top Skills in Demand</h4>
+                            </div>
+                            <div class="insight-content">
+                                <div id="top-skills-list" class="skills-list">
+                                    <span class="skill-tag">Python</span>
+                                    <span class="skill-tag">Machine Learning</span>
+                                    <span class="skill-tag">Data Science</span>
+                                    <span class="skill-tag">AI</span>
+                                    <span class="skill-tag">SQL</span>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="insight-card">
+                            <div class="insight-header">
+                                <h4>🏢 Top Companies</h4>
+                            </div>
+                            <div class="insight-content">
+                                <div id="top-companies-list" class="companies-list">
+                                    <div class="company-item">
+                                        <div class="company-name">Loading...</div>
+                                        <div class="company-count">0 jobs</div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="insight-card">
+                            <div class="insight-header">
+                                <h4>📍 Top Locations</h4>
+                            </div>
+                            <div class="insight-content">
+                                <div id="top-locations-list" class="locations-list">
+                                    <div class="location-item">
+                                        <div class="location-name">Remote</div>
+                                        <div class="location-percentage">60%</div>
+                                    </div>
+                                    <div class="location-item">
+                                        <div class="location-name">Bangalore</div>
+                                        <div class="location-percentage">25%</div>
+                                    </div>
+                                    <div class="location-item">
+                                        <div class="location-name">Mumbai</div>
+                                        <div class="location-percentage">15%</div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Automation Tab -->
+            <section id="automation-tab" class="tab-content">
+                <div class="automation-container">
+                    
+                    <!-- Automation Status -->
+                    <div class="card automation-status-card">
+                        <div class="card-header">
+                            <h3>🤖 Automation Status</h3>
+                            <div class="automation-toggle">
+                                <label class="toggle-switch">
+                                    <input type="checkbox" id="automation-enabled">
+                                    <span class="toggle-slider"></span>
+                                </label>
+                                <span class="toggle-label">Auto-Apply Enabled</span>
+                            </div>
+                        </div>
+                        <div class="card-body">
+                            <div class="automation-info">
+                                <div class="info-item">
+                                    <span class="info-label">Status:</span>
+                                    <span id="automation-status" class="status-text">Disabled</span>
+                                </div>
+                                <div class="info-item">
+                                    <span class="info-label">Applications Today:</span>
+                                    <span id="daily-applications">0 / 15</span>
+                                </div>
+                                <div class="info-item">
+                                    <span class="info-label">Success Rate:</span>
+                                    <span id="automation-success-rate">0%</span>
+                                </div>
+                                <div class="info-item">
+                                    <span class="info-label">Next Run:</span>
+                                    <span id="next-automation-run">Not scheduled</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Automation Rules -->
+                    <div class="card automation-rules-card">
+                        <div class="card-header">
+                            <h3>📋 Automation Rules</h3>
+                        </div>
+                        <div class="card-body">
+                            <div class="rules-list">
+                                <div class="rule-item">
+                                    <div class="rule-content">
+                                        <div class="rule-title">Minimum Match Score</div>
+                                        <div class="rule-description">Only apply to jobs with 85%+ match score</div>
+                                    </div>
+                                    <div class="rule-control">
+                                        <input type="range" id="min-match-score" min="50" max="95" value="85" class="slider">
+                                        <span class="slider-value">85%</span>
+                                    </div>
+                                </div>
+                                
+                                <div class="rule-item">
+                                    <div class="rule-content">
+                                        <div class="rule-title">Daily Application Limit</div>
+                                        <div class="rule-description">Maximum applications per day</div>
+                                    </div>
+                                    <div class="rule-control">
+                                        <input type="number" id="daily-limit" min="1" max="50" value="15" class="input-number">
+                                    </div>
+                                </div>
+                                
+                                <div class="rule-item">
+                                    <div class="rule-content">
+                                        <div class="rule-title">Preferred Platforms</div>
+                                        <div class="rule-description">Priority platforms for automation</div>
+                                    </div>
+                                    <div class="rule-control">
+                                        <div class="platform-checkboxes">
+                                            <label class="checkbox-label">
+                                                <input type="checkbox" checked> LinkedIn
+                                            </label>
+                                            <label class="checkbox-label">
+                                                <input type="checkbox" checked> Indeed
+                                            </label>
+                                            <label class="checkbox-label">
+                                                <input type="checkbox" checked> Naukri
+                                            </label>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Manual Controls -->
+                    <div class="card manual-controls-card">
+                        <div class="card-header">
+                            <h3>🎮 Manual Controls</h3>
+                        </div>
+                        <div class="card-body">
+                            <div class="control-buttons">
+                                <button id="run-discovery-btn" class="btn btn-primary">
+                                    <span class="btn-icon">🔍</span>
+                                    Run Job Discovery
+                                </button>
+                                
+                                <button id="run-analysis-btn" class="btn btn-secondary">
+                                    <span class="btn-icon">🧠</span>
+                                    Analyze Discovered Jobs
+                                </button>
+                                
+                                <button id="run-applications-btn" class="btn btn-success">
+                                    <span class="btn-icon">🚀</span>
+                                    Submit Applications
+                                </button>
+                                
+                                <button id="full-automation-btn" class="btn btn-gradient">
+                                    <span class="btn-icon">⚡</span>
+                                    Full Automation
+                                </button>
+                            </div>
+                            
+                            <div class="execution-log">
+                                <div class="log-header">
+                                    <h4>📋 Execution Log</h4>
+                                    <button id="clear-log-btn" class="btn btn-ghost btn-sm">Clear</button>
+                                </div>
+                                <div id="execution-log-content" class="log-content">
+                                    <div class="log-entry">
+                                        <span class="log-time">00:55:12</span>
+                                        <span class="log-message">AI Job Automation Extension loaded</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Settings Tab -->
+            <section id="settings-tab" class="tab-content">
+                <div class="settings-container">
+                    
+                    <!-- User Profile -->
+                    <div class="card profile-card">
+                        <div class="card-header">
+                            <h3>👤 User Profile</h3>
+                            <button id="save-profile-btn" class="btn btn-primary btn-sm">Save</button>
+                        </div>
+                        <div class="card-body">
+                            <div class="form-grid">
+                                <div class="form-group">
+                                    <label for="user-name">Full Name</label>
+                                    <input type="text" id="user-name" class="form-input" value="Aarjun Mahule">
+                                </div>
+                                
+                                <div class="form-group">
+                                    <label for="user-email">Email</label>
+                                    <input type="email" id="user-email" class="form-input" value="aarjun.mahule@example.com">
+                                </div>
+                                
+                                <div class="form-group">
+                                    <label for="user-phone">Phone</label>
+                                    <input type="tel" id="user-phone" class="form-input" value="+91-9921652687">
+                                </div>
+                                
+                                <div class="form-group">
+                                    <label for="user-location">Location</label>
+                                    <input type="text" id="user-location" class="form-input" value="Nagpur, Maharashtra, India">
+                                </div>
+                                
+                                <div class="form-group">
+                                    <label for="user-title">Current Title</label>
+                                    <input type="text" id="user-title" class="form-input" value="Data Science Student">
+                                </div>
+                                
+                                <div class="form-group">
+                                    <label for="user-experience">Experience Level</label>
+                                    <select id="user-experience" class="form-select">
+                                        <option value="0-1">0-1 years</option>
+                                        <option value="1-2" selected>1-2 years</option>
+                                        <option value="2-3">2-3 years</option>
+                                        <option value="3-5">3-5 years</option>
+                                        <option value="5+">5+ years</option>
+                                    </select>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Preferences -->
+                    <div class="card preferences-card">
+                        <div class="card-header">
+                            <h3>⚙️ Preferences</h3>
+                        </div>
+                        <div class="card-body">
+                            <div class="preference-groups">
+                                <div class="preference-group">
+                                    <h4>🔔 Notifications</h4>
+                                    <div class="preference-options">
+                                        <label class="checkbox-label">
+                                            <input type="checkbox" id="notifications-enabled" checked>
+                                            Enable browser notifications
+                                        </label>
+                                        <label class="checkbox-label">
+                                            <input type="checkbox" id="high-match-notifications" checked>
+                                            Notify on high-match jobs (85%+)
+                                        </label>
+                                        <label class="checkbox-label">
+                                            <input type="checkbox" id="application-notifications" checked>
+                                            Notify on successful applications
+                                        </label>
+                                    </div>
+                                </div>
+                                
+                                <div class="preference-group">
+                                    <h4>🤖 Automation</h4>
+                                    <div class="preference-options">
+                                        <label class="checkbox-label">
+                                            <input type="checkbox" id="auto-analysis" checked>
+                                            Automatically analyze job pages
+                                        </label>
+                                        <label class="checkbox-label">
+                                            <input type="checkbox" id="auto-fill" checked>
+                                            Enable auto-fill suggestions
+                                        </label>
+                                        <label class="checkbox-label">
+                                            <input type="checkbox" id="stealth-mode">
+                                            Enable stealth mode
+                                        </label>
+                                    </div>
+                                </div>
+                                
+                                <div class="preference-group">
+                                    <h4>📊 Analytics</h4>
+                                    <div class="preference-options">
+                                        <label class="checkbox-label">
+                                            <input type="checkbox" id="usage-analytics" checked>
+                                            Share usage analytics (anonymous)
+                                        </label>
+                                        <label class="checkbox-label">
+                                            <input type="checkbox" id="performance-metrics" checked>
+                                            Enable performance tracking
+                                        </label>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- API Configuration -->
+                    <div class="card api-config-card">
+                        <div class="card-header">
+                            <h3>🔗 API Configuration</h3>
+                            <button id="test-connection-btn" class="btn btn-secondary btn-sm">Test Connection</button>
+                        </div>
+                        <div class="card-body">
+                            <div class="api-status-grid">
+                                <div class="api-status-item">
+                                    <div class="api-name">Backend API</div>
+                                    <div class="api-url">localhost:8080</div>
+                                    <div id="backend-status" class="api-status status-disconnected">Disconnected</div>
+                                </div>
+                                
+                                <div class="api-status-item">
+                                    <div class="api-name">MCP Service</div>
+                                    <div class="api-url">localhost:3001</div>
+                                    <div id="mcp-service-status" class="api-status status-disconnected">Disconnected</div>
+                                </div>
+                                
+                                <div class="api-status-item">
+                                    <div class="api-name">Notion Database</div>
+                                    <div class="api-url">notion.so</div>
+                                    <div id="notion-status" class="api-status status-unknown">Unknown</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- System Information -->
+                    <div class="card system-info-card">
+                        <div class="card-header">
+                            <h3>ℹ️ System Information</h3>
+                        </div>
+                        <div class="card-body">
+                            <div class="system-info-grid">
+                                <div class="info-row">
+                                    <span class="info-label">Extension Version:</span>
+                                    <span class="info-value">1.0.0</span>
+                                </div>
+                                <div class="info-row">
+                                    <span class="info-label">Chrome Version:</span>
+                                    <span id="chrome-version" class="info-value">Loading...</span>
+                                </div>
+                                <div class="info-row">
+                                    <span class="info-label">Last Update:</span>
+                                    <span class="info-value">October 2025</span>
+                                </div>
+                                <div class="info-row">
+                                    <span class="info-label">Total Storage Used:</span>
+                                    <span id="storage-used" class="info-value">Loading...</span>
+                                </div>
+                            </div>
+                            
+                            <div class="system-actions">
+                                <button id="clear-cache-btn" class="btn btn-outline">Clear Cache</button>
+                                <button id="export-data-btn" class="btn btn-outline">Export Data</button>
+                                <button id="reset-extension-btn" class="btn btn-danger">Reset Extension</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </main>
+
+        <!-- Footer -->
+        <footer class="app-footer">
+            <div class="footer-content">
+                <div class="footer-links">
+                    <a href="#" id="help-link">Help</a>
+                    <a href="#" id="feedback-link">Feedback</a>
+                    <a href="#" id="privacy-link">Privacy</a>
+                </div>
+                <div class="footer-info">
+                    <span>AI Job Automation Agent</span>
+                    <span class="footer-separator">•</span>
+                    <span>Made with ❤️ for job seekers</span>
+                </div>
+            </div>
+        </footer>
+    </div>
+
+    <!-- Toast Notifications Container -->
+    <div id="toast-container" class="toast-container"></div>
+    
+    <!-- Modal Overlays Container -->
+    <div id="modal-container" class="modal-container"></div>
+
+    <!-- Scripts -->
+    <script src="../utils/storage.js"></script>
+    <script src="../utils/api.js"></script>
+    <script src="sidebar.js"></script>
+</body>
+</html>
