@@ -37,12 +37,13 @@
     "https://*.glassdoor.com/*",
     "https://*.dailyremote.com/*",
     "https://*.simplyhired.com/*",
-    "http://localhost/*",
-    "https://localhost/*"
+    "http://localhost:8080/*",
+    "https://localhost:8080/*"
   ],
 
   "background": {
-  "service_worker": "background.js"
+    "service_worker": "background.js",
+    "type": "module"
   },
 
   "content_scripts": [
@@ -71,68 +72,65 @@
         "https://*.dailyremote.com/*",
         "https://*.simplyhired.com/*"
       ],
-      "js": ["content/content.js"],
-      "css": ["sidebar/sidebar.css"],
+      "js": ["content.js"],
+      "css": ["sidebar.css"],
       "run_at": "document_end"
     }
   ],
 
   "action": {
-    "default_popup": "sidebar/sidebar.html",
-    "default_title": "AI Job Automation Agent",
-    "default_icon": {
-      "16": "icons/icon-16.png",
-      "32": "icons/icon-32.png",
-      "48": "icons/icon-48.png",
-      "128": "icons/icon-128.png"
-    }
+    "default_popup": "sidebar.html",
+    "default_title": "AI Job Automation Agent"
   },
 
   "side_panel": {
-    "default_path": "sidebar/sidebar.html"
+    "default_path": "sidebar.html"
   },
 
   "web_accessible_resources": [
     {
       "resources": [
-        "sidebar/*",
-        "utils/*",
-        "icons/*"
+        "sidebar.html",
+        "sidebar.css",
+        "extension_config.js",
+        "notion_api.js",
+        "mcp_client.js"
       ],
       "matches": ["<all_urls>"]
     }
   ],
 
-  "options_page": "sidebar/sidebar.html",
+  "options_page": "sidebar.html",
 
-"commands": {
-  "analyze_job": {
-    "suggested_key": {
-      "default": "Ctrl+Shift+A",
-      "mac": "Command+Shift+A"
+  "commands": {
+    "analyze_job": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+A",
+        "mac": "Command+Shift+A"
+      },
+      "description": "Analyze current job with AI"
     },
-    "description": "Analyze the current page"
+    "auto_fill_now": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+F",
+        "mac": "Command+Shift+F"
+      },
+      "description": "Auto-fill application form"
+    },
+    "toggle_sidebar": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+S",
+        "mac": "Command+Shift+S"
+      },
+      "description": "Toggle AI sidebar"
+    }
   },
-  "auto_fill_now": {
-    "suggested_key": {
-      "default": "Ctrl+Shift+F",
-      "mac": "Command+Shift+F"
-    },
-    "description": "Auto-fill any form on the current page"
-  },
-  "toggle_sidebar": {
-    "suggested_key": {
-      "default": "Ctrl+Shift+S",
-      "mac": "Command+Shift+S"
-    },
-    "description": "Toggle the extension sidebar"
-  }
-},
 
   "externally_connectable": {
     "matches": [
-      "http://localhost/*",
-      "https://localhost/*"
+      "http://localhost:8080/*",
+      "https://localhost:8080/*"
     ]
   }
 }
+

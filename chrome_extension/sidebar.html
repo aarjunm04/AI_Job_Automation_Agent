@@ -1,0 +1,493 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI Job Automation Agent</title>
+  <link rel="stylesheet" href="sidebar.css">
+</head>
+<body>
+  <!-- Loading Screen -->
+  <div class="loading-screen" id="loadingScreen">
+    <div class="loading-content">
+      <div class="loading-spinner"></div>
+      <h3>AI Job Automation</h3>
+      <p>Initializing...</p>
+    </div>
+  </div>
+
+  <!-- Main Application -->
+  <div class="app-container" id="appContainer" style="display: none;">
+    
+    <!-- Header -->
+    <header class="app-header">
+      <div class="header-content">
+        <div class="logo-section">
+          <div class="logo">🤖</div>
+          <div class="app-info">
+            <h1>AI Job Agent</h1>
+            <span class="version">v1.0.0</span>
+          </div>
+        </div>
+        <div class="status-indicator">
+          <div class="status-dot" id="statusDot"></div>
+          <span id="statusText">Connecting...</span>
+        </div>
+      </div>
+    </header>
+
+    <!-- Tab Navigation -->
+    <nav class="tab-navigation">
+      <button class="tab-btn active" data-tab="dashboard">
+        <span class="tab-icon">📊</span>
+        <span class="tab-label">Dashboard</span>
+      </button>
+      <button class="tab-btn" data-tab="chat">
+        <span class="tab-icon">💬</span>
+        <span class="tab-label">AI Chat</span>
+      </button>
+      <button class="tab-btn" data-tab="analysis">
+        <span class="tab-icon">🎯</span>
+        <span class="tab-label">Analysis</span>
+      </button>
+      <button class="tab-btn" data-tab="automation">
+        <span class="tab-icon">⚡</span>
+        <span class="tab-label">Automation</span>
+      </button>
+      <button class="tab-btn" data-tab="profile">
+        <span class="tab-icon">👤</span>
+        <span class="tab-label">Profile</span>
+      </button>
+      <button class="tab-btn" data-tab="settings">
+        <span class="tab-icon">⚙️</span>
+        <span class="tab-label">Settings</span>
+      </button>
+    </nav>
+
+    <!-- Main Content -->
+    <main class="main-content">
+      
+      <!-- Dashboard Tab -->
+      <div class="tab-content active" id="dashboard">
+        <div class="dashboard-grid">
+          
+          <!-- Stats Grid -->
+          <div class="stats-grid">
+            <div class="stat-card">
+              <div class="stat-icon">📋</div>
+              <div class="stat-content">
+                <div class="stat-number" id="statsJobsAnalyzed">0</div>
+                <div class="stat-label">Jobs Analyzed</div>
+              </div>
+            </div>
+            
+            <div class="stat-card">
+              <div class="stat-icon">✅</div>
+              <div class="stat-content">
+                <div class="stat-number" id="statsApplications">0</div>
+                <div class="stat-label">Applications</div>
+              </div>
+            </div>
+            
+            <div class="stat-card">
+              <div class="stat-icon">🎯</div>
+              <div class="stat-content">
+                <div class="stat-number" id="statsAvgMatch">0%</div>
+                <div class="stat-label">Avg Match</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Current Job Card -->
+          <div class="card current-job-card">
+            <div class="card-header">
+              <h3>🎯 Current Job</h3>
+            </div>
+            <div class="card-body">
+              <div id="currentJobContent">
+                <div class="no-job-message">
+                  <div class="icon">💼</div>
+                  <p>Navigate to a job posting to see AI insights</p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Recent Activity -->
+          <div class="card recent-activity-card">
+            <div class="card-header">
+              <h3>📚 Recent Activity</h3>
+            </div>
+            <div class="card-body">
+              <div class="activity-list" id="activityList">
+                <div class="activity-item">
+                  <div class="activity-icon">🤖</div>
+                  <div class="activity-content">
+                    <div class="activity-title">Welcome to AI Job Automation!</div>
+                    <div class="activity-subtitle">Start browsing job sites to see AI insights</div>
+                    <div class="activity-time">Just now</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+      <!-- AI Chat Tab -->
+      <div class="tab-content" id="chat">
+        <div class="card" style="height: calc(100vh - 200px); display: flex; flex-direction: column;">
+          <div class="card-header">
+            <h3>💬 AI Assistant Chat</h3>
+            <button class="btn btn-sm btn-outline" id="clearChatBtn">Clear Chat</button>
+          </div>
+          <div class="card-body" style="flex: 1; display: flex; flex-direction: column; padding: 0;">
+            
+            <!-- Chat Messages -->
+            <div id="chatMessages" style="flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 12px;">
+              <div style="text-align: center; color: #999; font-size: 13px; padding: 20px;">
+                💬 Start a conversation with your AI assistant
+              </div>
+            </div>
+
+            <!-- Chat Input -->
+            <div style="padding: 16px; border-top: 1px solid #e0e0e0; background: #f9fafb;">
+              <div style="display: flex; gap: 8px; align-items: flex-end;">
+                <textarea 
+                  id="chatInput" 
+                  placeholder="Ask anything about jobs, resumes, or career advice..."
+                  style="flex: 1; min-height: 60px; max-height: 120px; padding: 12px; border: 1px solid #d1d5db; border-radius: 8px; font-family: inherit; font-size: 14px; resize: vertical;"
+                  rows="2"
+                ></textarea>
+                <button class="btn btn-primary" id="sendChatBtn" style="height: 60px; padding: 0 24px;">
+                  <span style="font-size: 20px;">📤</span>
+                </button>
+              </div>
+              <div style="margin-top: 8px; font-size: 12px; color: #6b7280;">
+                Powered by MCP • Session persistent across tabs
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Analysis Tab -->
+      <div class="tab-content" id="analysis">
+        <div class="card">
+          <div class="card-header">
+            <h3>🎯 Job Analysis</h3>
+          </div>
+          <div class="card-body" id="analysisContent">
+            <div class="no-job-message">
+              <div class="icon">📊</div>
+              <p>No job analysis available. Navigate to a job posting and click "Analyze Job"</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Analysis History -->
+        <div class="card" style="margin-top: 20px;">
+          <div class="card-header">
+            <h3>📚 Analysis History</h3>
+          </div>
+          <div class="card-body">
+            <div id="analysisHistory">
+              <p style="text-align: center; color: #999; padding: 20px;">No previous analyses</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Automation Tab -->
+      <div class="tab-content" id="automation">
+        <div class="card">
+          <div class="card-header">
+            <h3>🤖 Automation Status</h3>
+          </div>
+          <div class="card-body">
+            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px;">
+              <div>
+                <div style="font-weight: 600; font-size: 16px;">Auto-Apply</div>
+                <div style="font-size: 13px; color: #6b7280;">Automatically apply to matching jobs</div>
+              </div>
+              <label class="switch">
+                <input type="checkbox" id="autoApplyToggle">
+                <span class="slider"></span>
+              </label>
+            </div>
+
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; padding: 16px; background: #f9fafb; border-radius: 8px;">
+              <div>
+                <div style="font-size: 12px; color: #6b7280; margin-bottom: 4px;">Applications Today</div>
+                <div style="font-size: 20px; font-weight: 700;" id="applicationsToday">0 / 15</div>
+              </div>
+              <div>
+                <div style="font-size: 12px; color: #6b7280; margin-bottom: 4px;">Success Rate</div>
+                <div style="font-size: 20px; font-weight: 700;" id="successRate">0%</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Automation Rules -->
+        <div class="card" style="margin-top: 20px;">
+          <div class="card-header">
+            <h3>📋 Automation Rules</h3>
+          </div>
+          <div class="card-body">
+            
+            <div class="form-group" style="margin-bottom: 20px;">
+              <label style="display: block; font-weight: 600; margin-bottom: 8px;">Minimum Match Score</label>
+              <input type="range" id="matchThreshold" min="50" max="100" value="85" style="width: 100%;">
+              <div style="display: flex; justify-content: space-between; font-size: 12px; color: #6b7280; margin-top: 4px;">
+                <span>50%</span>
+                <span id="matchThresholdValue">85%</span>
+                <span>100%</span>
+              </div>
+              <div style="font-size: 13px; color: #6b7280; margin-top: 8px;">Only apply to jobs with this match score or higher</div>
+            </div>
+
+            <div class="form-group" style="margin-bottom: 20px;">
+              <label style="display: block; font-weight: 600; margin-bottom: 8px;">Daily Application Limit</label>
+              <input type="number" id="dailyLimit" min="1" max="50" value="15" style="width: 100%; padding: 10px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 14px;">
+              <div style="font-size: 13px; color: #6b7280; margin-top: 8px;">Maximum applications per day</div>
+            </div>
+
+            <button class="btn btn-primary" id="saveAutomationRules" style="width: 100%;">Save Rules</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Profile Tab -->
+      <div class="tab-content" id="profile">
+        <div class="card">
+          <div class="card-header">
+            <h3>👤 User Profile</h3>
+          </div>
+          <div class="card-body">
+            <form id="profileForm">
+              
+              <div class="form-group">
+                <label>Full Name</label>
+                <input type="text" name="full_name" placeholder="John Doe" class="form-control">
+              </div>
+
+              <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+                <div class="form-group">
+                  <label>First Name</label>
+                  <input type="text" name="first_name" placeholder="John" class="form-control">
+                </div>
+                <div class="form-group">
+                  <label>Last Name</label>
+                  <input type="text" name="last_name" placeholder="Doe" class="form-control">
+                </div>
+              </div>
+
+              <div class="form-group">
+                <label>Email</label>
+                <input type="email" name="email" placeholder="john@example.com" class="form-control">
+              </div>
+
+              <div class="form-group">
+                <label>Phone</label>
+                <input type="tel" name="phone" placeholder="+1 234 567 8900" class="form-control">
+              </div>
+
+              <div class="form-group">
+                <label>LinkedIn URL</label>
+                <input type="url" name="linkedin" placeholder="https://linkedin.com/in/johndoe" class="form-control">
+              </div>
+
+              <div class="form-group">
+                <label>Location</label>
+                <input type="text" name="location" placeholder="San Francisco, CA" class="form-control">
+              </div>
+
+              <div class="form-group">
+                <label>GitHub URL</label>
+                <input type="url" name="github" placeholder="https://github.com/johndoe" class="form-control">
+              </div>
+
+              <div class="form-group">
+                <label>Portfolio Website</label>
+                <input type="url" name="portfolio" placeholder="https://johndoe.com" class="form-control">
+              </div>
+
+              <div class="form-group">
+                <label>Cover Letter Template</label>
+                <textarea name="cover_letter" rows="6" placeholder="Default cover letter content..." class="form-control"></textarea>
+              </div>
+
+              <button type="submit" class="btn btn-primary" style="width: 100%;">Save Profile</button>
+            </form>
+          </div>
+        </div>
+      </div>
+
+      <!-- Settings Tab -->
+      <div class="tab-content" id="settings">
+        
+        <!-- API Configuration -->
+        <div class="card">
+          <div class="card-header">
+            <h3>🔗 API Configuration</h3>
+          </div>
+          <div class="card-body">
+            
+            <div class="form-group">
+              <label>MCP Base URL</label>
+              <input type="text" id="mcpBaseUrl" value="http://localhost:8080" class="form-control">
+              <div style="font-size: 13px; color: #6b7280; margin-top: 4px;">
+                Status: <span id="mcpStatus" style="font-weight: 600;">Unknown</span>
+              </div>
+            </div>
+
+            <div class="form-group">
+              <label>MCP API Key</label>
+              <input type="password" id="mcpApiKey" placeholder="Enter your MCP API key" class="form-control">
+              <div style="font-size: 13px; color: #6b7280; margin-top: 4px;">
+                Stored securely in browser
+              </div>
+            </div>
+
+            <div style="display: flex; gap: 8px;">
+              <button class="btn btn-primary" id="saveMcpConfig" style="flex: 1;">Save Config</button>
+              <button class="btn btn-outline" id="testMcpConnection">Test Connection</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Notion Integration -->
+        <div class="card" style="margin-top: 20px;">
+          <div class="card-header">
+            <h3>📝 Notion Integration</h3>
+          </div>
+          <div class="card-body">
+            
+            <div class="form-group">
+              <label>Notion Webhook URL</label>
+              <input type="url" id="notionWebhook" placeholder="https://your-notion-webhook-url" class="form-control">
+              <div style="font-size: 13px; color: #6b7280; margin-top: 4px;">
+                Applications will be logged to your Notion database
+              </div>
+            </div>
+
+            <button class="btn btn-primary" id="saveNotionConfig" style="width: 100%;">Save Webhook</button>
+          </div>
+        </div>
+
+        <!-- Activity Log -->
+        <div class="card" style="margin-top: 20px;">
+          <div class="card-header">
+            <h3>📋 Activity Log</h3>
+            <button class="btn btn-sm btn-outline" id="clearActivityLog">Clear Log</button>
+          </div>
+          <div class="card-body">
+            <div id="fullActivityLog" style="max-height: 300px; overflow-y: auto;">
+              <p style="text-align: center; color: #999; padding: 20px;">No activity yet</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- System Info -->
+        <div class="card" style="margin-top: 20px;">
+          <div class="card-header">
+            <h3>ℹ️ System Information</h3>
+          </div>
+          <div class="card-body">
+            <div style="font-size: 13px; line-height: 1.8;">
+              <div><strong>Extension Version:</strong> 1.0.0</div>
+              <div><strong>Chrome Version:</strong> <span id="chromeVersion">Loading...</span></div>
+              <div><strong>Last Update:</strong> January 2026</div>
+              <div><strong>Storage Used:</strong> <span id="storageUsed">Loading...</span></div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+    </main>
+  </div>
+
+  <!-- Embedded JavaScript -->
+  <script src="sidebar.js"></script>
+
+
+  <!-- Toggle Switch CSS (inline) -->
+  <style>
+    .form-control {
+      width: 100%;
+      padding: 10px 12px;
+      border: 1px solid #d1d5db;
+      border-radius: 6px;
+      font-size: 14px;
+      font-family: inherit;
+      transition: border-color 0.2s;
+    }
+
+    .form-control:focus {
+      outline: none;
+      border-color: #2563eb;
+      box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+    }
+
+    .form-group {
+      margin-bottom: 16px;
+    }
+
+    .form-group label {
+      display: block;
+      font-weight: 600;
+      margin-bottom: 6px;
+      font-size: 14px;
+      color: #374151;
+    }
+
+    .switch {
+      position: relative;
+      display: inline-block;
+      width: 52px;
+      height: 28px;
+    }
+
+    .switch input {
+      opacity: 0;
+      width: 0;
+      height: 0;
+    }
+
+    .slider {
+      position: absolute;
+      cursor: pointer;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background-color: #ccc;
+      transition: .3s;
+      border-radius: 28px;
+    }
+
+    .slider:before {
+      position: absolute;
+      content: "";
+      height: 20px;
+      width: 20px;
+      left: 4px;
+      bottom: 4px;
+      background-color: white;
+      transition: .3s;
+      border-radius: 50%;
+    }
+
+    input:checked + .slider {
+      background-color: #10b981;
+    }
+
+    input:checked + .slider:before {
+      transform: translateX(24px);
+    }
+  </style>
+</body>
+</html>

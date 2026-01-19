@@ -1,720 +1,736 @@
 /**
- * background.js
- * AI Job Automation Agent - Background Service Worker (Manifest V3)
- *
- * Production-grade refactor:
- *  - Defensively creates context menus
- *  - MCP bridge with session lifecycle & retries
- *  - Notion logging integration via NotionAPI (if available)
- *  - Message routing for content <-> sidebar
- *  - Storage and state persistence
- *  - Safe networking helpers
- *
- * Keep in sync with content.js and sidebar.js message types.
- *
- * Author: AI Job Automation Team (refactor 2025)
+ * =============================================================================
+ * AI JOB AUTOMATION AGENT - BACKGROUND SERVICE WORKER (COMPLETE)
+ * =============================================================================
+ * 
+ * Manifest V3 service worker - central orchestrator for the extension.
+ * 
+ * Responsibilities:
+ * - MCP client management and message routing
+ * - Job detection and caching
+ * - Resume generation via RAG endpoint
+ * - Notion logging integration
+ * - Context menus and keyboard commands
+ * - Storage management (sync/local)
+ * - Message broker between content scripts and sidebar
+ * 
+ * Author: AI Job Automation Team
+ * Version: 1.0.0
+ * =============================================================================
  */
 
 'use strict';
 
-const BG = (() => {
-  // -----------------------
-  // CONFIG
-  // -----------------------
-  const CONFIG = {
-    DEBUG: false,
-    API_BASE_URL: 'http://localhost:8080', // override via storage if needed
-    MCP_ENDPOINT: 'http://localhost:3001',
-    EXTENSION_VERSION: '1.0.0',
-    STORAGE_KEYS: {
-      USER_SETTINGS: 'user_settings',
-      JOB_CACHE: 'job_cache',
-      ANALYSIS_HISTORY: 'analysis_history',
-      EXTENSION_STATE: 'extension_state',
-      API_CONFIG: 'api_config'
-    },
-    CONTEXT_MENUS: [
-      { id: 'ai_analyze', title: '🧠 Analyze Job with AI' },
-      { id: 'ai_auto_fill', title: '📝 Auto-Fill Application Form' },
-      { id: 'ai_log_apply', title: '📌 Log Application to Notion' }
-    ],
-    DEFAULT_SETTINGS: {
-      auto_analysis: true,
-      notifications: true,
-      debug_mode: false,
-      preferred_platforms: ['linkedin', 'indeed', 'naukri'],
-      match_threshold: 70
-    },
-    FETCH_TIMEOUT_MS: 10_000,
-    MCP_RETRY: 3,
-    NOTION_WEBHOOK_KEY: 'notion_webhook_url'
-  };
+// Import dependencies
+import { 
+  MCP_CONFIG,
+  STORAGE_KEYS, 
+  DEFAULT_USER_SETTINGS,
+  TIMING,
+  FEATURES,
+  UI_IDS,
+  MCP_TASK_TYPES,
+  loadRuntimeConfig
+} from './extension_config.js';
 
-  // -----------------------
-  // UTILITIES
-  // -----------------------
-  const log = (...args) => { if (CONFIG.DEBUG) console.log('[BG]', ...args); };
-  const info = (...args) => console.info('[BG]', ...args);
-  const warn = (...args) => console.warn('[BG]', ...args);
-  const error = (...args) => console.error('[BG]', ...args);
+import mcpClient from './mcp_client.js';
 
-  async function storageLocalGet(keys) {
-    return new Promise((resolve) => chrome.storage.local.get(keys, (res) => resolve(res || {})));
-  }
-  async function storageLocalSet(obj) {
-    return new Promise((resolve, reject) => {
-      chrome.storage.local.set(obj, () => {
-        const e = chrome.runtime.lastError;
-        if (e) reject(e);
-        else resolve();
-      });
+/**
+ * =============================================================================
+ * GLOBAL STATE
+ * =============================================================================
+ */
+const STATE = {
+  runtimeConfig: null,
+  notionApi: null,
+  connectedPorts: new Set(),
+  isInitialized: false,
+  mcpEnabled: true,
+  debugMode: false
+};
+
+/**
+ * =============================================================================
+ * LOGGING UTILITIES
+ * =============================================================================
+ */
+const log = (...args) => {
+  if (STATE.debugMode) console.log('[BG]', ...args);
+};
+
+const info = (...args) => console.info('[BG]', ...args);
+const warn = (...args) => console.warn('[BG]', ...args);
+const error = (...args) => console.error('[BG]', ...args);
+
+/**
+ * =============================================================================
+ * STORAGE HELPERS
+ * =============================================================================
+ */
+const Storage = {
+  async getSync(keys) {
+    return new Promise(resolve => {
+      chrome.storage.sync.get(keys, result => resolve(result || {}));
     });
-  }
-  async function storageSyncGet(keys) {
-    return new Promise((resolve) => chrome.storage.sync.get(keys, (res) => resolve(res || {})));
-  }
-  async function storageSyncSet(obj) {
+  },
+
+  async setSync(obj) {
     return new Promise((resolve, reject) => {
       chrome.storage.sync.set(obj, () => {
-        const e = chrome.runtime.lastError;
-        if (e) reject(e);
+        if (chrome.runtime.lastError) reject(chrome.runtime.lastError);
+        else resolve();
+      });
+    });
+  },
+
+  async getLocal(keys) {
+    return new Promise(resolve => {
+      chrome.storage.local.get(keys, result => resolve(result || {}));
+    });
+  },
+
+  async setLocal(obj) {
+    return new Promise((resolve, reject) => {
+      chrome.storage.local.set(obj, () => {
+        if (chrome.runtime.lastError) reject(chrome.runtime.lastError);
         else resolve();
       });
     });
   }
+};
 
-  function timeoutPromise(ms, promise) {
-    return Promise.race([
-      promise,
-      new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), ms))
-    ]);
+/**
+ * =============================================================================
+ * HTTP UTILITIES
+ * =============================================================================
+ */
+async function fetchWithTimeout(url, options = {}, timeoutMs = 15000) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const response = await fetch(url, { ...options, signal: controller.signal });
+    clearTimeout(timeoutId);
+    return response;
+  } catch (err) {
+    clearTimeout(timeoutId);
+    throw err;
   }
+}
 
-  async function safeFetch(url, opts = {}, timeoutMs = CONFIG.FETCH_TIMEOUT_MS) {
-    try {
-      const res = await timeoutPromise(timeoutMs, fetch(url, opts));
-      return res;
-    } catch (err) {
-      throw err;
+/**
+ * =============================================================================
+ * NOTION API INTEGRATION
+ * =============================================================================
+ */
+async function initNotionApi() {
+  try {
+    if (!FEATURES.ENABLE_NOTION_LOGGING) {
+      log('Notion logging disabled by feature flag');
+      return;
     }
+
+    if (typeof NotionAPI !== 'function') {
+      warn('NotionAPI class not available, skipping initialization');
+      return;
+    }
+
+    const webhookUrl = STATE.runtimeConfig?.notion?.webhook_url;
+    if (!webhookUrl) {
+      log('Notion webhook URL not configured');
+      return;
+    }
+
+    STATE.notionApi = new NotionAPI({ webhookUrl });
+    info('Notion API initialized');
+  } catch (err) {
+    warn('Failed to initialize Notion API', err);
   }
+}
 
-  // -----------------------
-  // GLOBAL STATE
-  // -----------------------
-  let STATE = {
-    apiBaseUrl: CONFIG.API_BASE_URL,
-    apiConfig: null,
-    extensionState: { isActive: true, apiStatus: 'disconnected' },
-    mcp: { sessionId: null, connected: false },
-    notionApi: null,
-    ports: new Set()
-  };
+async function logToNotion(jobData) {
+  try {
+    if (!FEATURES.ENABLE_NOTION_LOGGING) return { success: false, error: 'disabled' };
 
-  // -----------------------
-  // NOTION API WRAPPER (if NotionAPI exposed)
-  // -----------------------
-  function initNotionApi() {
-    try {
-      if (typeof self.NotionAPI === 'function') {
-        const webhook = (STATE.apiConfig && STATE.apiConfig[CONFIG.NOTION_WEBHOOK_KEY]) || null;
-        if (!webhook) {
-          log('Notion webhook not configured; NotionAPI not initialized');
-          return;
-        }
-        STATE.notionApi = new self.NotionAPI({ webhookUrl: webhook });
-        log('NotionAPI initialized');
-      } else {
-        log('NotionAPI not found in global scope; skipping initialization');
-      }
-    } catch (e) {
-      warn('Failed to init NotionAPI', e);
+    if (STATE.notionApi && typeof STATE.notionApi.logApplication === 'function') {
+      return await STATE.notionApi.logApplication(jobData);
     }
+
+    // Fallback to direct webhook POST
+    const webhookUrl = STATE.runtimeConfig?.notion?.webhook_url;
+    if (!webhookUrl) {
+      return { success: false, error: 'no_webhook_configured' };
+    }
+
+    const response = await fetchWithTimeout(webhookUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        ...jobData,
+        timestamp: new Date().toISOString(),
+        source: 'chrome_extension'
+      })
+    }, 10000);
+
+    if (!response.ok) {
+      throw new Error(`Webhook returned ${response.status}`);
+    }
+
+    return { success: true };
+  } catch (err) {
+    warn('Notion logging failed', err);
+    return { success: false, error: err.message };
   }
+}
 
-  // -----------------------
-  // MCP BRIDGE
-  // -----------------------
-  class MCPBridge {
-    constructor(baseUrl) {
-      this.baseUrl = baseUrl || STATE.apiBaseUrl;
-      this.sessionId = null;
-      this.connected = false;
-      this.retry = CONFIG.MCP_RETRY;
-    }
-
-    async _post(path, body = {}, headers = {}) {
-      const url = `${this.baseUrl}${path}`;
-      try {
-        const res = await safeFetch(url, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', ...headers },
-          body: JSON.stringify(body)
-        });
-        if (!res.ok) {
-          const text = await res.text().catch(() => '');
-          throw new Error(`HTTP ${res.status} ${text}`);
-        }
-        return await res.json().catch(() => null);
-      } catch (e) {
-        throw e;
-      }
-    }
-
-    async startSession() {
-      for (let attempt = 0; attempt < this.retry; attempt++) {
-        try {
-          const resp = await this._post('/mcp/session/start', {
-            client_type: 'chrome_extension',
-            user_agent: navigator.userAgent
-          });
-          if (resp && resp.session_id) {
-            this.sessionId = resp.session_id;
-            this.connected = true;
-            STATE.mcp.sessionId = this.sessionId;
-            STATE.mcp.connected = true;
-            await persistExtensionState();
-            info('MCP session started', this.sessionId);
-            return this.sessionId;
-          }
-        } catch (err) {
-          warn('MCP startSession attempt failed', attempt, err.message);
-          await new Promise(r => setTimeout(r, 500 * (attempt + 1)));
-        }
-      }
-      this.connected = false;
-      throw new Error('MCP startSession failed');
-    }
-
-    async endSession() {
-      if (!this.sessionId) return;
-      try {
-        await this._post('/mcp/session/end', { session_id: this.sessionId });
-      } catch (e) { /* ignore gracefully */ }
-      this.sessionId = null;
-      this.connected = false;
-      STATE.mcp = { sessionId: null, connected: false };
-      await persistExtensionState();
-      info('MCP session ended');
-    }
-
-    async postItem(item) {
-      if (!this.sessionId) {
-        await this.startSession().catch(e => { throw e; });
-      }
-      try {
-        const resp = await this._post('/v1/sessions/' + this.sessionId + '/items', item, { 'X-Session-ID': this.sessionId });
-        return resp;
-      } catch (err) {
-        warn('postItem failed', err);
-        throw err;
-      }
-    }
-  }
-
-  // create one bridge instance
-  const mcpBridge = new MCPBridge(STATE.apiBaseUrl);
-
-  // -----------------------
-  // CONTEXT MENUS (de-duplicated)
-  // -----------------------
-  async function initContextMenus() {
-    try {
-      // Remove all (defensive) then recreate. This avoids duplicate creation errors on service worker restart.
-      chrome.contextMenus.removeAll(() => {
-        CONFIG.CONTEXT_MENUS.forEach(menu => {
-          try {
-            chrome.contextMenus.create({
-              id: menu.id,
-              title: menu.title,
-              contexts: ['page']
-            }, () => {
-              if (chrome.runtime.lastError) {
-                // do not spam console; log if debug
-                log('contextMenus.create lastError', chrome.runtime.lastError.message);
-              } else {
-                log('Created context menu', menu.id);
-              }
-            });
-          } catch (e) {
-            warn('Failed to create context menu', menu.id, e);
-          }
-        });
-      });
-    } catch (e) {
-      warn('initContextMenus failed', e);
-    }
-  }
-
-  // -----------------------
-  // MESSAGE BROADCAST
-  // -----------------------
-  function broadcastMessage(message) {
-    // notify all connected ports (sidebar/popups)
-    STATE.ports.forEach(port => {
-      try {
-        port.postMessage(message);
-      } catch (e) {
-        try { STATE.ports.delete(port); } catch (_) {}
-      }
+/**
+ * =============================================================================
+ * ACTIVITY LOG
+ * =============================================================================
+ */
+async function logActivity(type, data = {}) {
+  try {
+    const activityLog = (await Storage.getLocal([STORAGE_KEYS.AI_ACTIVITY_LOG]))[STORAGE_KEYS.AI_ACTIVITY_LOG] || [];
+    
+    activityLog.unshift({
+      type,
+      timestamp: new Date().toISOString(),
+      ...data
     });
-  }
 
-  // -----------------------
-  // PERSIST EXT STATE
-  // -----------------------
-  async function persistExtensionState() {
-    try {
-      const obj = {};
-      obj[CONFIG.STORAGE_KEYS.EXTENSION_STATE] = STATE.extensionState;
-      await storageLocalSet(obj);
-    } catch (e) {
-      warn('persistExtensionState failed', e);
+    // Keep only last N entries
+    if (activityLog.length > TIMING.ACTIVITY_LOG_MAX_ENTRIES) {
+      activityLog.length = TIMING.ACTIVITY_LOG_MAX_ENTRIES;
     }
+
+    await Storage.setLocal({ [STORAGE_KEYS.AI_ACTIVITY_LOG]: activityLog });
+  } catch (err) {
+    warn('Failed to log activity', err);
   }
+}
 
-  // -----------------------
-  // NOTION LOGGING
-  // -----------------------
-  async function logApplicationToNotion(jobData = {}) {
+/**
+ * =============================================================================
+ * MESSAGE HANDLERS
+ * =============================================================================
+ */
+const MessageHandlers = {
+  /**
+   * MCP completion request from sidebar or content
+   */
+  async MCP_COMPLETE(payload, sender) {
     try {
-      if (STATE.notionApi && typeof STATE.notionApi.logApplication === 'function') {
-        return await STATE.notionApi.logApplication(jobData);
+      if (!FEATURES.ENABLE_MCP_CHAT) {
+        return { success: false, error: 'MCP chat is disabled' };
       }
-      // fallback: try webhook POST if url available in apiConfig
-      const webhook = (STATE.apiConfig && STATE.apiConfig[CONFIG.NOTION_WEBHOOK_KEY]) || null;
-      if (!webhook) {
-        warn('Notion webhook not configured');
-        return { success: false, error: 'no_noton_webhook' };
+
+      const { sessionName, taskType, prompt, meta } = payload;
+
+      if (!taskType || !prompt) {
+        return { success: false, error: 'taskType and prompt are required' };
       }
-      // do a single POST with timeout
-      const res = await safeFetch(webhook, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(jobData)
-      }, CONFIG.FETCH_TIMEOUT_MS);
-      if (!res.ok) {
-        const text = await res.text().catch(() => '');
-        return { success: false, error: `HTTP ${res.status}: ${text}` };
+
+      // Call MCP client
+      const result = await mcpClient.complete({
+        sessionName: sessionName || 'default',
+        taskType,
+        prompt,
+        meta: {
+          ...meta,
+          tab_url: sender.tab?.url,
+          sender_origin: sender.tab ? 'content' : 'sidebar'
+        }
+      });
+
+      // Log activity
+      if (result.success) {
+        await logActivity('mcp_completion', {
+          taskType,
+          promptLength: prompt.length,
+          completionLength: result.completion?.length || 0
+        });
       }
-      return { success: true, raw: await res.json().catch(() => null) };
-    } catch (e) {
-      warn('logApplicationToNotion failed', e);
-      return { success: false, error: String(e) };
-    }
-  }
 
-  // -----------------------
-  // MESSAGE HANDLERS
-  // -----------------------
-  async function handleMessage(message, sender, sendResponse) {
-    try {
-      if (!message || !message.type) return sendResponse({ success: false, error: 'no_message_type' });
+      return result;
 
-      switch (message.type) {
-        // Called by content script when a job detail is detected
-        case 'JOB_DETECTED':
-          {
-            // cache job data for 24 hours
-            const jobData = message.jobData || {};
-            const cacheKey = `job_${(jobData.url || '').slice(0, 200)}`;
-            const jobCacheObj = (await storageLocalGet([CONFIG.STORAGE_KEYS.JOB_CACHE]))[CONFIG.STORAGE_KEYS.JOB_CACHE] || {};
-            jobCacheObj[cacheKey] = { jobData, timestamp: Date.now() };
-            await storageLocalSet({ [CONFIG.STORAGE_KEYS.JOB_CACHE]: jobCacheObj });
-
-            // broadcast to UI (sidebar)
-            broadcastMessage({ type: 'JOB_DETECTED', jobData });
-            return sendResponse({ success: true });
-          }
-
-        // request: extract profile from storage
-        case 'GET_USER_PROFILE':
-          {
-            const sync = await storageSyncGet([CONFIG.STORAGE_KEYS.USER_SETTINGS]);
-            const profile = (sync && sync[CONFIG.STORAGE_KEYS.USER_SETTINGS]) || CONFIG.DEFAULT_SETTINGS;
-            return sendResponse({ success: true, profile });
-          }
-
-        // update profile
-        case 'UPDATE_PROFILE':
-          {
-            const payload = message.payload || message.settings || {};
-            try {
-              await storageSyncSet({ [CONFIG.STORAGE_KEYS.USER_SETTINGS]: payload });
-            } catch (e) {
-              warn('UPDATE_PROFILE: storageSyncSet failed, falling back to local', e);
-              await storageLocalSet({ [CONFIG.STORAGE_KEYS.USER_SETTINGS]: payload });
-            }
-            return sendResponse({ success: true });
-          }
-
-        // request to start dynamic resume generation (RAG)
-        case 'REQUEST_DYNAMIC_RESUME':
-          {
-            // proxy request to API_BASE_URL / rag endpoint
-            const jobTitle = (message.payload && message.payload.jobTitle) || '';
-            try {
-              const url = `${STATE.apiBaseUrl}/rag/dynamic_resume?job_title=${encodeURIComponent(jobTitle || '')}`;
-              const res = await safeFetch(url, { method: 'GET' }, CONFIG.FETCH_TIMEOUT_MS);
-              if (!res.ok) {
-                const text = await res.text().catch(() => '');
-                return sendResponse({ success: false, error: `HTTP ${res.status}: ${text}` });
-              }
-              const contentType = res.headers.get('content-type') || '';
-              let resumeMeta = null;
-              if (contentType.includes('application/json')) {
-                const json = await res.json().catch(() => null);
-                // expected: { resume_id, name, score, base64?, mime_type }
-                resumeMeta = json;
-              } else {
-                // binary response -> make available through GET_RESUME_BLOB handler (background stores base64)
-                const blob = await res.blob();
-                const arr = new Uint8Array(await blob.arrayBuffer());
-                const b64 = btoa(String.fromCharCode(...arr));
-                resumeMeta = { resume_id: `r_${Date.now()}`, base64: b64, mime_type: blob.type || 'application/pdf', name: `resume_${Date.now()}.pdf`, cached_at: new Date().toISOString() };
-              }
-              // store resume meta in sync/local for sidebar to read
-              const saved = (await storageSyncGet([CONFIG.STORAGE_KEYS.RESUMES_META]))[CONFIG.STORAGE_KEYS.RESUMES_META] || {};
-              saved[resumeMeta.resume_id] = resumeMeta;
-              await storageSyncSet({ [CONFIG.STORAGE_KEYS.RESUMES_META]: saved });
-              // also store blob in local storage (large) as base64
-              const blobs = (await storageLocalGet([CONFIG.STORAGE_KEYS.RESUME_BLOBS]))[CONFIG.STORAGE_KEYS.RESUME_BLOBS] || {};
-              if (resumeMeta.base64) blobs[resumeMeta.resume_id] = { base64: resumeMeta.base64, mime: resumeMeta.mime_type || 'application/pdf', fileName: resumeMeta.name };
-              await storageLocalSet({ [CONFIG.STORAGE_KEYS.RESUME_BLOBS]: blobs });
-
-              // respond success
-              return sendResponse({ success: true, resume: resumeMeta });
-            } catch (e) {
-              warn('REQUEST_DYNAMIC_RESUME failed', e);
-              return sendResponse({ success: false, error: String(e) });
-            }
-          }
-
-        // request to get resumes meta
-        case 'GET_RESUMES_META':
-          {
-            const meta = (await storageSyncGet([CONFIG.STORAGE_KEYS.RESUMES_META]))[CONFIG.STORAGE_KEYS.RESUMES_META] || {};
-            return sendResponse({ success: true, meta });
-          }
-
-        // request to get resume blob (base64) by id
-        case 'GET_RESUME_BLOB':
-          {
-            const resumeId = message.payload && message.payload.resumeId;
-            if (!resumeId) return sendResponse({ success: false, error: 'missing_resumeId' });
-            const blobs = (await storageLocalGet([CONFIG.STORAGE_KEYS.RESUME_BLOBS]))[CONFIG.STORAGE_KEYS.RESUME_BLOBS] || {};
-            const blob = blobs[resumeId];
-            if (!blob) return sendResponse({ success: false, error: 'not_found' });
-            return sendResponse({ success: true, base64: blob.base64, meta: { mime: blob.mime, fileName: blob.fileName } });
-          }
-
-        // apply events: content or sidebar will call this when an application is detected
-        case 'APPLY_STARTED':
-          {
-            // store temporary apply start record or broadcast
-            broadcastMessage({ type: 'APPLY_STARTED', metadata: message.metadata || {} });
-            return sendResponse({ success: true });
-          }
-
-        case 'APPLY_COMPLETED':
-          {
-            const payload = message.metadata || {};
-            // persist to activity log (local)
-            const logEntry = {
-              job_title: payload.jobTitle || payload.job_title || 'Applied',
-              company: payload.company || '',
-              job_url: payload.jobUrl || payload.job_url || payload.jobUrl || '',
-              timestamp: payload.timestamp || new Date().toISOString(),
-              resume_id: payload.resume_id || payload.resumeId || null
-            };
-            const existing = (await storageLocalGet([CONFIG.STORAGE_KEYS.ACTIVITY_LOG]))[CONFIG.STORAGE_KEYS.ACTIVITY_LOG] || [];
-            existing.unshift(logEntry);
-            if (existing.length > 500) existing.length = 500;
-            await storageLocalSet({ [CONFIG.STORAGE_KEYS.ACTIVITY_LOG]: existing });
-
-            // send to MCP
-            try {
-              await mcpBridge.postItem({ source: 'chrome_extension', job_url: logEntry.job_url, timestamp: logEntry.timestamp, status: 'applied' }).catch(e => { warn('MCP postItem failed', e); });
-            } catch (e) {
-              warn('APPLY_COMPLETED MCP error', e);
-            }
-
-            // send to Notion
-            try {
-              const notionResp = await logApplicationToNotion({
-                job_url: logEntry.job_url, job_title: logEntry.job_title, company: logEntry.company, timestamp: logEntry.timestamp, resume_id: logEntry.resume_id
-              });
-              if (!notionResp || !notionResp.success) {
-                warn('Notion logging failed', notionResp && notionResp.error);
-              }
-            } catch (e) { warn('Notion logging error', e); }
-
-            // broadcast to connected UI
-            broadcastMessage({ type: 'APPLICATION_COMPLETED', payload: logEntry });
-            return sendResponse({ success: true });
-          }
-
-        case 'GET_EXTENSION_STATUS':
-          {
-            const status = {
-              active: STATE.extensionState.isActive,
-              apiStatus: STATE.extensionState.apiStatus,
-              mcpConnected: !!(STATE.mcp && STATE.mcp.connected),
-              version: CONFIG.EXTENSION_VERSION,
-              apiEndpoints: { rag: !!STATE.apiConfig?.rag, notion: !!STATE.apiConfig?.notion }
-            };
-            return sendResponse({ success: true, status });
-          }
-
-        case 'REQUEST_INJECT_AND_AUTOFILL':
-          {
-            // attempt to ensure content script exists and forward autofill
-            const tabs = await new Promise((res) => chrome.tabs.query({ active: true, currentWindow: true }, res));
-            const tab = tabs && tabs[0];
-            if (!tab || !tab.id) return sendResponse({ success: false, error: 'no_active_tab' });
-            try {
-              // ensure content script is injected via scripting API (manifest must declare)
-              try {
-                chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['content/content.js'] }, () => { /* ignore */ });
-              } catch (_) { /* ignore injection failure; maybe already injected */ }
-              // send auto-fill message
-              chrome.tabs.sendMessage(tab.id, { type: 'AUTO_FILL_FORM', resumeMode: message.payload && message.payload.resumeMode }, (resp) => {
-                // we don't strictly wait; return success if message posted
-              });
-              return sendResponse({ success: true });
-            } catch (e) {
-              return sendResponse({ success: false, error: String(e) });
-            }
-          }
-
-        default:
-          warn('Unknown message type', message.type);
-          return sendResponse({ success: false, error: 'unknown_message' });
-      }
     } catch (err) {
-      error('handleMessage top-level error', err);
-      try { sendResponse({ success: false, error: String(err) }); } catch (_) {}
+      error('MCP_COMPLETE handler failed', err);
+      return { success: false, error: err.message };
     }
-  }
+  },
 
-  // -----------------------
-  // CONTEXT MENU CLICK HANDLER
-  // -----------------------
-  async function onContextMenuClick(info, tab) {
+  /**
+   * Job detected on page
+   */
+  async JOB_DETECTED(payload, sender) {
     try {
-      if (!info.menuItemId) return;
-      switch (info.menuItemId) {
-        case 'ai_analyze':
-          try {
-            // ask content to extract job and send to MCP/analyze
-            if (tab && tab.id) {
-              chrome.tabs.sendMessage(tab.id, { type: 'EXTRACT_JOB_DATA' }, (resp) => {
-                // If content returns jobData, trigger analysis pipeline in backend (MCP)
-                if (resp && resp.jobData) {
-                  // forward to MCP or other service via background
-                  safeFetch(`${STATE.apiBaseUrl}/mcp/analyze-job`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ job_data: resp.jobData })
-                  }).catch(e => warn('mcp analyze POST failed', e));
-                } else {
-                  warn('EXTRACT_JOB_DATA not returned or empty');
-                }
-              });
-            }
-          } catch (e) { warn('ai_analyze click failed', e); }
-          break;
+      const jobData = payload.jobData || {};
+      const jobUrl = jobData.url || sender.tab?.url || '';
 
-        case 'ai_auto_fill':
-          if (tab && tab.id) {
-            chrome.tabs.sendMessage(tab.id, { type: 'AUTO_FILL_FORM' }, (resp) => { /* noop */ });
-          }
-          break;
+      // Cache job data
+      const cacheKey = `job_${jobUrl.slice(0, 200)}`;
+      const jobCache = (await Storage.getLocal([STORAGE_KEYS.JOB_CACHE]))[STORAGE_KEYS.JOB_CACHE] || {};
+      
+      jobCache[cacheKey] = {
+        jobData,
+        timestamp: Date.now()
+      };
 
-        case 'ai_log_apply':
-          if (tab && tab.id) {
-            chrome.tabs.sendMessage(tab.id, { type: 'EXTRACT_JOB_DATA_AND_LOG' }, (resp) => { /* noop */ });
-          }
-          break;
+      await Storage.setLocal({ [STORAGE_KEYS.JOB_CACHE]: jobCache });
 
-        default:
-          break;
-      }
-    } catch (e) {
-      warn('onContextMenuClick error', e);
-    }
-  }
+      // Broadcast to all connected ports (sidebar)
+      broadcastToSidebar({ type: 'JOB_DETECTED', jobData });
 
-  // -----------------------
-  // ON INSTALLED / STARTUP
-  // -----------------------
-  async function onInstalled(details) {
-    try {
-      CONFIG.DEBUG = (await storageSyncGet([CONFIG.STORAGE_KEYS.USER_SETTINGS]))[CONFIG.STORAGE_KEYS.USER_SETTINGS]?.debug_mode || CONFIG.DEBUG;
-      info('Extension installed/updated', details);
-      // set default settings on first install
-      if (details.reason === 'install') {
-        await storageSyncSet({ [CONFIG.STORAGE_KEYS.USER_SETTINGS]: CONFIG.DEFAULT_SETTINGS });
-      }
-      // load apiConfig if present
-      const apiConf = (await storageLocalGet([CONFIG.STORAGE_KEYS.API_CONFIG]))[CONFIG.STORAGE_KEYS.API_CONFIG] || null;
-      STATE.apiConfig = apiConf;
-      // initialize notion api if webhook present
-      initNotionApi();
-      // init context menus
-      await initContextMenus();
-      // initialize MCP session if desired
-      try { await mcpBridge.startSession().catch(()=>{}); } catch (_) {}
-      // persist state
-      await persistExtensionState();
-    } catch (e) { warn('onInstalled failed', e); }
-  }
-
-  // -----------------------
-  // TABS & NAV ALERTS
-  // -----------------------
-  function onTabUpdated(tabId, changeInfo, tab) {
-    try {
-      if (changeInfo.status === 'complete' && tab && tab.url) {
-        // notify content script if this looks like job site
-        const supportedPlatforms = [
-          'linkedin.com', 'indeed.com', 'naukri.com', 'flexjobs.com',
-          'weworkremotely.com', 'remotive.io', 'wellfound.com', 'angel.co',
-          'justremote.co', 'remoteok.io', 'glassdoor.com'
-        ];
-        const isJobSite = supportedPlatforms.some(p => tab.url.includes(p));
-        if (isJobSite) {
-          // try to send a lightweight message; content script will extract
-          try {
-            chrome.tabs.sendMessage(tabId, { type: 'JOB_SITE_DETECTED', url: tab.url }, (resp) => { /* noop */ });
-          } catch (e) { /* ignore */ }
-        }
-      }
-    } catch (e) { warn('onTabUpdated error', e); }
-  }
-
-  // -----------------------
-  // PORT CONNECTIONS (sidebar popup)
-  // -----------------------
-  function onPortConnected(port) {
-    try {
-      STATE.ports.add(port);
-      log('port connected', port.name);
-      port.onMessage.addListener((msg) => {
-        // port message handling (if any)
-        if (!msg || !msg.type) return;
-        switch (msg.type) {
-          case 'PING':
-            port.postMessage({ type: 'PONG' });
-            break;
-          default:
-            break;
-        }
+      // Log activity
+      await logActivity('job_detected', {
+        job_title: jobData.title,
+        company: jobData.company,
+        url: jobUrl
       });
-      port.onDisconnect.addListener(() => {
-        try { STATE.ports.delete(port); } catch (e) { /* ignore */ }
-      });
-    } catch (e) { warn('onPortConnected failed', e); }
-  }
 
-  // -----------------------
-  // KEEP SERVICE WORKER ALIVE (best-effort)
-  // -----------------------
-  function keepAlive() {
-    try {
-      // call a benign API to keep service worker active in dev; no-op in prod
-      setInterval(() => {
-        // use a low-cost call
-        if (typeof chrome.runtime.getPlatformInfo === 'function') {
-          chrome.runtime.getPlatformInfo(() => { /* noop */ });
-        }
-      }, 20_000);
-    } catch (e) { /* ignore */ }
-  }
-
-  // -----------------------
-  // BINDING & BOOT
-  // -----------------------
-  // runtime message listener
-  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    // keep message channel open for async responses
-    try {
-      handleMessage(message, sender, sendResponse);
-    } catch (e) {
-      error('runtime.onMessage error', e);
-      try { sendResponse({ success: false, error: e.message }); } catch (_) {}
+      return { success: true };
+    } catch (err) {
+      error('JOB_DETECTED handler failed', err);
+      return { success: false, error: err.message };
     }
-    return true;
-  });
+  },
 
-  chrome.contextMenus.onClicked.addListener(onContextMenuClick);
-  chrome.runtime.onConnect.addListener(onPortConnected);
-  chrome.tabs.onUpdated.addListener(onTabUpdated);
-
-  chrome.runtime.onInstalled.addListener(onInstalled);
-
-  chrome.commands.onCommand.addListener(async (command, tab) => {
+  /**
+   * Get user profile
+   */
+  async GET_USER_PROFILE(payload, sender) {
     try {
-      switch (command) {
-        case 'analyze-job':
-        case 'analyze_job':
-        case 'ai_analyze':
-          if (tab && tab.id) chrome.tabs.sendMessage(tab.id, { type: 'EXTRACT_JOB_DATA' });
-          break;
-        case 'auto-fill':
-        case 'auto_fill_now':
-        case 'ai_auto_fill':
-          if (tab && tab.id) chrome.tabs.sendMessage(tab.id, { type: 'AUTO_FILL_FORM' });
-          break;
-        case 'toggle-sidebar':
-          if (tab && tab.id) chrome.tabs.sendMessage(tab.id, { type: 'TOGGLE_SIDEBAR' });
-          break;
-        default:
-          log('unknown command', command);
+      const settings = (await Storage.getSync([STORAGE_KEYS.USER_SETTINGS]))[STORAGE_KEYS.USER_SETTINGS];
+      const profile = settings || DEFAULT_USER_SETTINGS;
+      return { success: true, profile };
+    } catch (err) {
+      error('GET_USER_PROFILE failed', err);
+      return { success: false, error: err.message };
+    }
+  },
+
+  /**
+   * Update user profile
+   */
+  async UPDATE_PROFILE(payload, sender) {
+    try {
+      const newProfile = payload.profile || payload.settings || {};
+      await Storage.setSync({ [STORAGE_KEYS.USER_SETTINGS]: newProfile });
+      
+      await logActivity('profile_updated', {
+        fields: Object.keys(newProfile)
+      });
+
+      return { success: true };
+    } catch (err) {
+      error('UPDATE_PROFILE failed', err);
+      return { success: false, error: err.message };
+    }
+  },
+
+  /**
+   * Request dynamic resume generation
+   */
+  async REQUEST_DYNAMIC_RESUME(payload, sender) {
+    try {
+      if (!FEATURES.ENABLE_DYNAMIC_RESUME) {
+        return { success: false, error: 'Dynamic resume generation is disabled' };
       }
-    } catch (e) { warn('onCommand error', e); }
-  });
 
-  // graceful suspend handling
-  chrome.runtime.onSuspend.addListener(async () => {
-    try {
-      log('service worker suspending — cleanup tasks');
-      // end MCP session gracefully
-      await mcpBridge.endSession().catch(()=>{});
-      // flush queued notion logs if possible
-      if (STATE.notionApi && STATE.notionApi.processQueue) {
-        try { await STATE.notionApi.processQueue(); } catch (_) {}
+      const jobTitle = payload.jobTitle || '';
+      const ragUrl = `${STATE.runtimeConfig.mcp.base_url}/rag/dynamic_resume?job_title=${encodeURIComponent(jobTitle)}`;
+
+      const response = await fetchWithTimeout(ragUrl, { method: 'GET' }, 20000);
+
+      if (!response.ok) {
+        throw new Error(`RAG endpoint returned ${response.status}`);
       }
-      await persistExtensionState();
-    } catch (e) { warn('onSuspend error', e); }
-  });
 
-  // startup (immediate)
-  (async function bootstrap() {
+      const contentType = response.headers.get('content-type') || '';
+      let resumeMeta;
+
+      if (contentType.includes('application/json')) {
+        resumeMeta = await response.json();
+      } else {
+        // Binary response - convert to base64
+        const blob = await response.blob();
+        const arrayBuffer = await blob.arrayBuffer();
+        const uint8Array = new Uint8Array(arrayBuffer);
+        const base64 = btoa(String.fromCharCode(...uint8Array));
+
+        resumeMeta = {
+          resume_id: `resume_${Date.now()}`,
+          name: `resume_${jobTitle.slice(0, 30)}.pdf`,
+          base64,
+          mime_type: blob.type || 'application/pdf',
+          cached_at: new Date().toISOString()
+        };
+      }
+
+      // Store resume metadata
+      const resumesMeta = (await Storage.getSync([STORAGE_KEYS.RESUMES_META]))[STORAGE_KEYS.RESUMES_META] || {};
+      resumesMeta[resumeMeta.resume_id] = resumeMeta;
+      await Storage.setSync({ [STORAGE_KEYS.RESUMES_META]: resumesMeta });
+
+      // Store blob in local storage
+      if (resumeMeta.base64) {
+        const resumeBlobs = (await Storage.getLocal([STORAGE_KEYS.RESUME_BLOBS]))[STORAGE_KEYS.RESUME_BLOBS] || {};
+        resumeBlobs[resumeMeta.resume_id] = {
+          base64: resumeMeta.base64,
+          mime: resumeMeta.mime_type,
+          fileName: resumeMeta.name
+        };
+        await Storage.setLocal({ [STORAGE_KEYS.RESUME_BLOBS]: resumeBlobs });
+      }
+
+      await logActivity('resume_generated', {
+        job_title: jobTitle,
+        resume_id: resumeMeta.resume_id
+      });
+
+      return { success: true, resume: resumeMeta };
+
+    } catch (err) {
+      error('REQUEST_DYNAMIC_RESUME failed', err);
+      return { success: false, error: err.message };
+    }
+  },
+
+  /**
+   * Get resumes metadata
+   */
+  async GET_RESUMES_META(payload, sender) {
     try {
-      // load API config
-      const local = await storageLocalGet([CONFIG.STORAGE_KEYS.API_CONFIG]);
-      STATE.apiConfig = local[CONFIG.STORAGE_KEYS.API_CONFIG] || null;
-      if (STATE.apiConfig && STATE.apiConfig.api_base_url) STATE.apiBaseUrl = STATE.apiConfig.api_base_url;
-      // init Notion API if available
-      initNotionApi();
-      // create context menus
-      await initContextMenus();
-      // try to start MCP session in background (non-blocking)
-      mcpBridge.startSession().catch((e) => { log('MCP startSession non-blocking failure', e && e.message); });
-      // set up keep alive
-      keepAlive();
-      info('Background bootstrapped');
-    } catch (e) {
-      warn('bootstrap failed', e);
+      const meta = (await Storage.getSync([STORAGE_KEYS.RESUMES_META]))[STORAGE_KEYS.RESUMES_META] || {};
+      return { success: true, meta };
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  },
+
+  /**
+   * Get resume blob by ID
+   */
+  async GET_RESUME_BLOB(payload, sender) {
+    try {
+      const resumeId = payload.resumeId;
+      if (!resumeId) {
+        return { success: false, error: 'resumeId is required' };
+      }
+
+      const resumeBlobs = (await Storage.getLocal([STORAGE_KEYS.RESUME_BLOBS]))[STORAGE_KEYS.RESUME_BLOBS] || {};
+      const blob = resumeBlobs[resumeId];
+
+      if (!blob) {
+        return { success: false, error: 'Resume not found' };
+      }
+
+      return {
+        success: true,
+        base64: blob.base64,
+        meta: {
+          mime: blob.mime,
+          fileName: blob.fileName
+        }
+      };
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  },
+
+  /**
+   * Log application to Notion
+   */
+  async LOG_APPLICATION(payload, sender) {
+    try {
+      const jobData = payload.jobData || {};
+      const result = await logToNotion(jobData);
+
+      if (result.success) {
+        await logActivity('application_logged', {
+          job_title: jobData.job_title,
+          company: jobData.company
+        });
+      }
+
+      return result;
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  },
+
+  /**
+   * Get activity log
+   */
+  async GET_ACTIVITY_LOG(payload, sender) {
+    try {
+      const activityLog = (await Storage.getLocal([STORAGE_KEYS.AI_ACTIVITY_LOG]))[STORAGE_KEYS.AI_ACTIVITY_LOG] || [];
+      return { success: true, log: activityLog };
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  },
+
+  /**
+   * Test MCP connection
+   */
+  async TEST_MCP_CONNECTION(payload, sender) {
+    try {
+      const result = await mcpClient.testConnection();
+      return result;
+    } catch (err) {
+      return { success: false, message: err.message };
+    }
+  },
+
+  /**
+   * Update MCP API key
+   */
+  async UPDATE_MCP_API_KEY(payload, sender) {
+    try {
+      const apiKey = payload.apiKey;
+      if (!apiKey) {
+        return { success: false, error: 'API key is required' };
+      }
+
+      await mcpClient.updateApiKey(apiKey);
+      return { success: true };
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  },
+
+  /**
+   * Clear MCP session
+   */
+  async CLEAR_MCP_SESSION(payload, sender) {
+    try {
+      const sessionName = payload.sessionName || 'default';
+      mcpClient.clearSession(sessionName);
+      return { success: true };
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  }
+};
+
+/**
+ * =============================================================================
+ * MESSAGE ROUTER
+ * =============================================================================
+ */
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  (async () => {
+    try {
+      if (!message || !message.type) {
+        sendResponse({ success: false, error: 'Invalid message format' });
+        return;
+      }
+
+      const handler = MessageHandlers[message.type];
+      if (!handler) {
+        warn(`No handler for message type: ${message.type}`);
+        sendResponse({ success: false, error: `Unknown message type: ${message.type}` });
+        return;
+      }
+
+      const result = await handler(message.payload || {}, sender);
+      sendResponse(result);
+
+    } catch (err) {
+      error('Message handler error', err);
+      sendResponse({ success: false, error: err.message });
     }
   })();
 
-  // Expose for testing/debug
-  return {
-    _internal: {
-      CONFIG, STATE, mcpBridge, initContextMenus, logApplicationToNotion
-    }
-  };
+  return true; // Keep channel open for async response
+});
 
-})();
+/**
+ * =============================================================================
+ * PORT CONNECTIONS (Sidebar)
+ * =============================================================================
+ */
+chrome.runtime.onConnect.addListener((port) => {
+  STATE.connectedPorts.add(port);
+  log('Port connected:', port.name);
+
+  port.onMessage.addListener((msg) => {
+    log('Port message:', msg);
+  });
+
+  port.onDisconnect.addListener(() => {
+    STATE.connectedPorts.delete(port);
+    log('Port disconnected');
+  });
+});
+
+function broadcastToSidebar(message) {
+  STATE.connectedPorts.forEach(port => {
+    try {
+      port.postMessage(message);
+    } catch (err) {
+      STATE.connectedPorts.delete(port);
+    }
+  });
+}
+
+/**
+ * =============================================================================
+ * CONTEXT MENUS
+ * =============================================================================
+ */
+async function initContextMenus() {
+  try {
+    chrome.contextMenus.removeAll(() => {
+      const menus = [
+        { id: UI_IDS.CONTEXT_ANALYZE_JOB, title: '🧠 Analyze Job with AI' },
+        { id: UI_IDS.CONTEXT_AUTO_FILL, title: '📝 Auto-Fill Application Form' },
+        { id: UI_IDS.CONTEXT_LOG_NOTION, title: '📌 Log Application to Notion' }
+      ];
+
+      menus.forEach(menu => {
+        chrome.contextMenus.create({
+          id: menu.id,
+          title: menu.title,
+          contexts: ['page']
+        }, () => {
+          if (chrome.runtime.lastError) {
+            log('Context menu creation error:', chrome.runtime.lastError.message);
+          }
+        });
+      });
+    });
+
+    info('Context menus initialized');
+  } catch (err) {
+    warn('Failed to initialize context menus', err);
+  }
+}
+
+chrome.contextMenus.onClicked.addListener((info, tab) => {
+  try {
+    switch (info.menuItemId) {
+      case UI_IDS.CONTEXT_ANALYZE_JOB:
+        chrome.tabs.sendMessage(tab.id, { type: 'ANALYZE_JOB' });
+        break;
+      case UI_IDS.CONTEXT_AUTO_FILL:
+        chrome.tabs.sendMessage(tab.id, { type: 'AUTO_FILL_FORM' });
+        break;
+      case UI_IDS.CONTEXT_LOG_NOTION:
+        chrome.tabs.sendMessage(tab.id, { type: 'LOG_APPLICATION_NOW' });
+        break;
+    }
+  } catch (err) {
+    warn('Context menu click handler error', err);
+  }
+});
+
+/**
+ * =============================================================================
+ * KEYBOARD COMMANDS
+ * =============================================================================
+ */
+chrome.commands.onCommand.addListener((command, tab) => {
+  try {
+    switch (command) {
+      case UI_IDS.COMMAND_ANALYZE:
+        chrome.tabs.sendMessage(tab.id, { type: 'ANALYZE_JOB' });
+        break;
+      case UI_IDS.COMMAND_AUTO_FILL:
+        chrome.tabs.sendMessage(tab.id, { type: 'AUTO_FILL_FORM' });
+        break;
+      case UI_IDS.COMMAND_TOGGLE_SIDEBAR:
+        chrome.tabs.sendMessage(tab.id, { type: 'TOGGLE_SIDEBAR' });
+        break;
+    }
+  } catch (err) {
+    warn('Command handler error', err);
+  }
+});
+
+/**
+ * =============================================================================
+ * TAB EVENTS
+ * =============================================================================
+ */
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if (changeInfo.status === 'complete' && tab.url) {
+    // Notify content script of navigation
+    try {
+      chrome.tabs.sendMessage(tabId, {
+        type: 'TAB_UPDATED',
+        url: tab.url
+      }, () => {
+        if (chrome.runtime.lastError) {
+          // Tab not ready or no listener, ignore
+        }
+      });
+    } catch (err) {
+      // Ignore
+    }
+  }
+});
+
+/**
+ * =============================================================================
+ * INITIALIZATION
+ * =============================================================================
+ */
+async function initialize() {
+  try {
+    info('Initializing background service worker...');
+
+    // Load runtime config
+    STATE.runtimeConfig = await loadRuntimeConfig();
+    STATE.debugMode = STATE.runtimeConfig.debug;
+    STATE.mcpEnabled = STATE.runtimeConfig.mcp.enabled;
+
+    // Initialize MCP client
+    if (STATE.mcpEnabled) {
+      await mcpClient.init();
+      info('MCP client ready');
+    }
+
+    // Initialize Notion API
+    await initNotionApi();
+
+    // Set up context menus
+    await initContextMenus();
+
+    // Check if user settings exist, if not create defaults
+    const settings = await Storage.getSync([STORAGE_KEYS.USER_SETTINGS]);
+    if (!settings[STORAGE_KEYS.USER_SETTINGS]) {
+      await Storage.setSync({ [STORAGE_KEYS.USER_SETTINGS]: DEFAULT_USER_SETTINGS });
+      info('Default user settings created');
+    }
+
+    STATE.isInitialized = true;
+    info('Background initialization complete');
+
+  } catch (err) {
+    error('Initialization failed', err);
+  }
+}
+
+/**
+ * =============================================================================
+ * LIFECYCLE EVENTS
+ * =============================================================================
+ */
+chrome.runtime.onInstalled.addListener((details) => {
+  info('Extension installed/updated:', details.reason);
+  initialize();
+});
+
+chrome.runtime.onStartup.addListener(() => {
+  info('Extension startup');
+  initialize();
+});
+
+chrome.runtime.onSuspend.addListener(() => {
+  info('Service worker suspending...');
+});
+
+// Initialize immediately
+initialize();
