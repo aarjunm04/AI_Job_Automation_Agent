@@ -328,3 +328,9 @@ sw.*
 
 # Local configuration files that might contain sensitive data
 config/local_*
+
+# ChromaDB (local vector store)
+.chroma/
+
+# Redis persistence
+dump.rdb
