@@ -64,6 +64,9 @@ import httpx
 # Logging
 from rich.logging import RichHandler
 
+# RAG Client integration
+from integrations import get_rag_client
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # SECTION 2: CONFIGURATION
@@ -121,6 +124,11 @@ class Settings(BaseSettings):
     
     # Logging
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
+
+    # RAG Configuration
+    RAG_BASE_URL: str = "http://localhost:8090"
+    RAG_API_KEY: str = "dev-dd3471442e4d2f6e86101a7d4874053d"
+
     
     class Config:
         env_file = ".env"
@@ -1203,6 +1211,10 @@ class MCPService:
 # Initialize service
 mcp_service = MCPService()
 
+# Initialize RAG client for resume selection (will be set during startup)
+rag_client: Optional[Any] = None
+
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # SECTION 10: FASTAPI APPLICATION
@@ -1246,6 +1258,21 @@ async def get_current_user(x_mcp_api_key: Optional[str] = Header(None)) -> dict:
     
     # TODO: Enhance with security.py for JWT, service accounts, etc.
     return {"user_id": "api_user", "role": "user"}
+
+
+async def auth_and_rate_limit(user: dict = Depends(get_current_user)) -> dict:
+    """
+    Combined authentication and rate limiting dependency.
+    Checks API key and enforces rate limits.
+    """
+    # Auth is already checked by get_current_user dependency
+    
+    # Rate limiting check (if rate limiter is available)
+    if mcp_service.rate_limiter:
+        # TODO: Implement rate limiting logic based on user/API key
+        pass
+    
+    return user
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1573,46 +1600,84 @@ async def ingest_jobs(
 # SECTION 14: API ROUTES - INTEGRATION TRIGGERS
 # ═══════════════════════════════════════════════════════════════════════════════
 
-@app.post("/suggest-resume", tags=["Integrations"])
+@app.post("/v1/suggest-resume", dependencies=[Depends(auth_and_rate_limit)], tags=["Integrations"])
 async def suggest_resume(
     session_id: str,
-    job_description: str,
-    user: dict = Depends(get_current_user)
+    job_description: str
 ):
     """
     Trigger RAG system for resume suggestion.
     
-    Returns optimal resume matches based on job description.
+    Analyzes job description and returns optimal resume match
+    based on vector similarity and skill matching.
+    
+    Args:
+        session_id: Session ID for tracking
+        job_description: Full job posting text
+        
+    Returns:
+        Selected resume with confidence score and analysis
     """
-    if not mcp_service.rag_client:
+    if not rag_client:
         raise HTTPException(
             status_code=503,
-            detail="RAG system not available. Implement integrations.py RagClient."
+            detail="RAG system not available. Ensure RAG server is running at localhost:8090"
         )
     
     try:
-        # TODO: Fetch user resumes from database/context
-        user_resumes = []
-        
-        suggestions = await mcp_service.rag_client.suggest_optimal_resume(
-            job_description,
-            user_resumes
+        # Call RAG client to select best resume
+        rag_result = await rag_client.select_best_resume(
+            job_description=job_description,
+            session_id=session_id,
+            top_k=10,
+            include_metadata=True
         )
         
-        # Store result in context
-        metadata = MetadataSchema(source="rag", tags=["resume_suggestion"])
+        # Store result in MCP context
+        metadata = MetadataSchema(
+            source="rag",
+            confidence=rag_result.get("confidence_score", 0.0),
+            tags=["resume_suggestion", "rag_analysis"]
+        )
+        
         item = ContextItemCreateSchema(
             role="assistant",
-            content=json.dumps({"suggestions": suggestions}),
-            metadata=metadata
+            content=json.dumps({
+                "selected_resume": rag_result.get("selected_resume"),
+                "resume_path": rag_result.get("selected_resume_path"),
+                "confidence_score": rag_result.get("confidence_score"),
+                "matching_skills": rag_result.get("matching_skills", []),
+                "analysis": rag_result.get("answer")
+            }),
+            metadata=metadata,
+            trusted=True
         )
+        
         await mcp_service.append_context_item(session_id, item)
         
-        return {"suggestions": suggestions}
+        logger.info(
+            f"RAG suggested '{rag_result.get('selected_resume')}' "
+            f"with {rag_result.get('confidence_score', 0):.2%} confidence "
+            f"for session {session_id}"
+        )
+        
+        return {
+            "status": "success",
+            "selected_resume": rag_result.get("selected_resume"),
+            "resume_path": rag_result.get("selected_resume_path"),
+            "confidence_score": rag_result.get("confidence_score", 0.0),
+            "matching_skills": rag_result.get("matching_skills", []),
+            "analysis": rag_result.get("answer"),
+            "chunks_retrieved": rag_result.get("chunks_retrieved", 0),
+            "session_id": session_id
+        }
         
     except Exception as e:
         logger.error(f"Resume suggestion failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(
+            status_code=500,
+            detail=f"RAG resume suggestion failed: {str(e)}"
+        )
 
 
 @app.post("/llm/complete", tags=["Integrations"])
@@ -1748,6 +1813,60 @@ async def readiness():
             detail={"ready": False, "checks": checks}
         )
 
+# -----------------------
+# RAG Resume Selection Endpoint
+# -----------------------
+@app.post("/v1/job/analyze", dependencies=[Depends(auth_and_rate_limit)])
+async def api_analyze_job_and_select_resume(
+    job_description: str,
+    session_id: str,
+    top_k: int = 10
+):
+    """
+    Analyze job posting and select best matching resume using RAG system
+    
+    Args:
+        job_description: Full job posting text
+        session_id: Session ID for tracking
+        top_k: Number of resume chunks to retrieve
+        
+    Returns:
+        Selected resume info with confidence score
+    """
+    if not rag_client:
+        raise HTTPException(
+            status_code=503,
+            detail="RAG system not available. Ensure RAG server is running at localhost:8090"
+        )
+    
+    try:
+        # Call RAG to select optimal resume
+        rag_result = await rag_client.select_best_resume(
+            job_description=job_description,
+            session_id=session_id,
+            top_k=top_k,
+            include_metadata=True
+        )
+        
+        return {
+            "status": "success",
+            "selected_resume": rag_result.get("selected_resume"),
+            "resume_path": rag_result.get("selected_resume_path"),
+            "confidence_score": rag_result.get("confidence_score", 0.0),
+            "matching_skills": rag_result.get("matching_skills", []),
+            "analysis": rag_result.get("answer"),
+            "chunks_retrieved": rag_result.get("chunks_retrieved", 0),
+            "session_id": session_id
+        }
+        
+    except Exception as e:
+        logger.error(f"Job analysis failed: {str(e)}")
+        return {
+            "status": "error",
+            "error": str(e),
+            "fallback_resume": "resume_generic"
+        }
+    
 
 @app.get("/metrics", tags=["Monitoring"])
 async def metrics():
@@ -1771,9 +1890,8 @@ async def metrics():
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @app.on_event("startup")
-async def startup_event():
-    """Initialize service on startup."""
-    logger.info("🚀 Starting up...")
+async def startup():
+    global rag_client
     
     # Migrate database
     await mcp_service.migrate()
@@ -1784,12 +1902,25 @@ async def startup_event():
     # Initialize integrations (will be loaded from other files)
     try:
         from integrations import get_rag_client, get_llm_router, get_notion_client
-        mcp_service.rag_client = get_rag_client()
+        rag_client = get_rag_client()
+        mcp_service.rag_client = rag_client
         mcp_service.llm_router = get_llm_router()
         mcp_service.notion_client = get_notion_client()
         logger.info("✅ Integration clients loaded")
-    except ImportError:
-        logger.warning("⚠️  Integration modules not found, using stubs")
+        
+        # Check RAG health
+        if rag_client and hasattr(rag_client, 'health_check'):
+            try:
+                is_healthy = await rag_client.health_check()
+                if is_healthy:
+                    logger.info("✅ RAG system connected successfully")
+                else:
+                    logger.warning("⚠️ RAG system not available - resume selection may fail")
+            except Exception as e:
+                logger.warning(f"⚠️ RAG health check failed: {e}")
+    except (ImportError, Exception) as e:
+        logger.warning(f"⚠️  Integration modules not fully loaded: {e}")
+        logger.warning("   Resume suggestion and LLM features may not be available")
     
     # Initialize cache
     try:
@@ -1797,8 +1928,8 @@ async def startup_event():
         mcp_service.cache = get_cache()
         mcp_service.compressor = get_compressor()
         logger.info("✅ Cache and compressor loaded")
-    except ImportError:
-        logger.warning("⚠️  Cache module not found")
+    except (ImportError, Exception) as e:
+        logger.warning(f"⚠️  Cache module not found: {e}")
     
     # Initialize security
     try:
@@ -1807,8 +1938,8 @@ async def startup_event():
         mcp_service.rate_limiter = get_rate_limiter()
         mcp_service.audit_logger = get_audit_logger()
         logger.info("✅ Security components loaded")
-    except ImportError:
-        logger.warning("⚠️  Security module not found")
+    except (ImportError, Exception) as e:
+        logger.warning(f"⚠️  Security module not found: {e}")
     
     logger.info(f"✅ {settings.service_name} v{settings.version} ready!")
     logger.info(f"📖 Docs: http://localhost:8080/docs" if settings.dev_mode else "")
@@ -1816,13 +1947,20 @@ async def startup_event():
 
 @app.on_event("shutdown")
 async def shutdown_event():
-    """Graceful shutdown."""
-    logger.info("🛑 Shutting down...")
+    global rag_client
     
     await mcp_service.shutdown()
-    await engine.dispose()
     
-    logger.info("✅ Shutdown complete")
+    # Cleanup RAG client
+    if rag_client:
+        try:
+            await rag_client.close()
+            logger.info("RAG client connection closed")
+        except Exception as e:
+            logger.error(f"Error closing RAG client: {e}")
+    
+    await engine.dispose()
+    logger.info("MCP service shutdown complete")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

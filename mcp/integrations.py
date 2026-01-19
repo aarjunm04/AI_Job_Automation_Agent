@@ -162,160 +162,233 @@ class CircuitBreaker:
 # RAG CLIENT (Resume Matching)
 # ═══════════════════════════════════════════════════════════════════════════════
 
+"""
+RAG CLIENT (Resume Matching)
+
+RAG system for resume-to-job matching.
+
+Uses vector embeddings to find optimal resume match for job description.
+
+TODO: Implement actual RAG logic with:
+- Embedding model (e.g., sentence-transformers, OpenAI embeddings)
+- Vector database (e.g., Pinecone, Weaviate, Qdrant, Chroma)
+- Resume parsing and chunking
+- Semantic search
+- Scoring and ranking
+"""
+
 class RagClient:
-    """
-    RAG system for resume-to-job matching.
-
-    Uses vector embeddings to find optimal resume match for job description.
-
-    TODO: Implement actual RAG logic with:
-    - Embedding model (e.g., sentence-transformers, OpenAI embeddings)
-    - Vector database (e.g., Pinecone, Weaviate, Qdrant, Chroma)
-    - Resume parsing and chunking
-    - Semantic search
-    - Scoring and ranking
-    """
-
+    """Client for RAG resume matching system running on port 8090"""
+    
     def __init__(
         self,
-        embedding_model: str = "all-MiniLM-L6-v2",
-        vector_db_url: str = None
+        base_url: str = "http://localhost:8090",
+        api_key: str = "dev-666a3ac3d47d42161b8ae35f93b9cbd1",
+        timeout: int = 30
     ):
         """
-        Initialize RAG client.
-
+        Initialize RAG client for resume selection
+        
         Args:
-            embedding_model: Embedding model name
-            vector_db_url: Vector database connection URL
+            base_url: RAG server URL (default: http://localhost:8090)
+            api_key: X-RAG-API-Key authentication header
+            timeout: Request timeout in seconds
         """
-        self.embedding_model = embedding_model
-        self.vector_db_url = vector_db_url or os.getenv("VECTOR_DB_URL")
-        self.circuit_breaker = CircuitBreaker()
-
-        # TODO: Initialize embedding model and vector DB
-        logger.info(f"✅ RagClient initialized (stub mode)")
-
-    async def suggest_optimal_resume(
+        self.base_url = base_url.rstrip('/')
+        self.api_key = api_key
+        self.timeout = timeout
+        self.client = httpx.AsyncClient(timeout=timeout)
+        
+        # Available specialized resumes
+        self.resume_types = [
+            'resume_ai_automation',
+            'resume_ai_ml', 
+            'resume_data_engineering',
+            'resume_data_science',
+            'resume_generic',
+            'resume_llm_genai',
+            'resume_mlops',
+            'resume_original'
+        ]
+        
+        logger.info(f"✅ RAG Client initialized - {base_url}")
+    
+    async def select_best_resume(
         self,
         job_description: str,
-        user_resumes: List[Dict[str, Any]],
-        top_k: int = 3
-    ) -> List[Dict[str, Any]]:
+        session_id: str,
+        top_k: int = 10,
+        include_metadata: bool = True
+    ) -> Dict[str, Any]:
         """
-        Find optimal resume matches for job description.
-
+        Query RAG system to select optimal resume for job posting
+        
         Args:
-            job_description: Job description text
-            user_resumes: List of user resumes with metadata
-            top_k: Number of top matches to return
-
+            job_description: Full job posting text with requirements
+            session_id: Unique session ID for context tracking
+            top_k: Number of resume chunks to retrieve (default: 10)
+            include_metadata: Include detailed metadata in response
+            
         Returns:
-            List of resume matches with scores
-
-        Example return:
-            [
-                {
-                    "resume_id": "resume_123",
-                    "resume_name": "Senior_Software_Engineer.pdf",
-                    "match_score": 0.87,
-                    "matching_skills": ["Python", "FastAPI", "Docker"],
-                    "missing_skills": ["Kubernetes"],
-                    "recommendation": "Strong match - highlights relevant experience"
-                }
-            ]
+            Dict containing:
+                - answer: RAG analysis explanation
+                - selected_resume: Resume name (e.g., 'resume_llm_genai')
+                - selected_resume_id: Resume identifier
+                - selected_resume_path: Full file path to resume
+                - confidence_score: Match confidence 0.0-1.0
+                - matching_skills: List of matched skills
+                - chunks_retrieved: Number of chunks analyzed
+                - session_id: Session identifier
+                
+        Example:
+            {
+                "answer": "Based on LLM requirements, resume_llm_genai is best match",
+                "selected_resume": "resume_llm_genai",
+                "selected_resume_path": "/Users/apple/TechStack/Resumes/resume_llm_genai.pdf",
+                "confidence_score": 0.94,
+                "matching_skills": ["Python", "RAG", "LangChain", "LLMs"],
+                "chunks_retrieved": 10,
+                "session_id": "sess_123"
+            }
         """
-        logger.info(f"RAG: Matching {len(user_resumes)} resumes to job")
-
         try:
-            return await self.circuit_breaker.call(
-                self._match_resumes,
-                job_description,
-                user_resumes,
-                top_k
+            response = await self.client.post(
+                f"{self.base_url}/rag/query",
+                headers={
+                    "Content-Type": "application/json",
+                    "X-RAG-API-Key": self.api_key
+                },
+                json={
+                    "session_id": session_id,
+                    "query": job_description,
+                    "top_k": top_k,
+                    "include_metadata": include_metadata
+                },
+                timeout=self.timeout
             )
+            
+            response.raise_for_status()
+            result = response.json()
+            
+            selected = result.get('selected_resume', 'resume_generic')
+            confidence = result.get('confidence_score', 0.0)
+            
+            logger.info(
+                f"RAG selected '{selected}' with {confidence:.2%} confidence "
+                f"for session {session_id}"
+            )
+            
+            return result
+            
+        except httpx.HTTPStatusError as e:
+            logger.error(
+                f"RAG API HTTP error {e.response.status_code}: {e.response.text}"
+            )
+            raise Exception(
+                f"RAG API error: {e.response.status_code} - {e.response.text}"
+            )
+            
+        except httpx.RequestError as e:
+            logger.error(f"RAG connection failed: {str(e)}")
+            raise Exception(
+                "Failed to connect to RAG system. "
+                "Ensure RAG server is running at localhost:8090"
+            )
+            
         except Exception as e:
-            logger.error(f"RAG matching failed: {e}")
-            # Return fallback result
-            return [{
-                "resume_id": "default",
-                "resume_name": "resume.pdf",
-                "match_score": 0.5,
-                "matching_skills": [],
-                "missing_skills": [],
-                "recommendation": "RAG system unavailable - using default resume"
-            }]
-
-    async def _match_resumes(
+            logger.error(f"RAG query error: {str(e)}")
+            raise
+    
+    async def compare_resumes(
         self,
         job_description: str,
-        user_resumes: List[Dict[str, Any]],
-        top_k: int
-    ) -> List[Dict[str, Any]]:
+        resume_names: List[str],
+        session_id: str
+    ) -> Dict[str, Any]:
         """
-        Internal resume matching logic.
-
-        TODO: Implement actual RAG pipeline:
-        1. Extract requirements from job description (LLM)
-        2. Generate embeddings for job description
-        3. Generate embeddings for each resume section
-        4. Compute cosine similarity
-        5. Extract matching/missing skills
-        6. Rank and return top matches
-        """
-
-        # Simulate processing delay
-        await asyncio.sleep(0.1)
-
-        # STUB: Return mock results
-        if not user_resumes:
-            return []
-
-        results = []
-        for i, resume in enumerate(user_resumes[:top_k]):
-            results.append({
-                "resume_id": resume.get("id", f"resume_{i}"),
-                "resume_name": resume.get("name", f"resume_{i}.pdf"),
-                "match_score": 0.85 - (i * 0.1),  # Mock decreasing scores
-                "matching_skills": ["Python", "FastAPI", "REST APIs"],
-                "missing_skills": ["GraphQL", "Kubernetes"],
-                "recommendation": f"Good match - rank {i+1}"
-            })
-
-        return results
-
-    async def embed_text(self, text: str) -> List[float]:
-        """
-        Generate embedding vector for text.
-
-        TODO: Implement with actual embedding model
-        """
-        # STUB: Return mock embedding
-        return [0.1] * 384  # MiniLM dimension
-
-    async def index_resume(
-        self,
-        resume_id: str,
-        resume_text: str,
-        metadata: Dict[str, Any]
-    ) -> bool:
-        """
-        Index resume in vector database.
-
+        Compare multiple resumes against job description
+        
         Args:
-            resume_id: Unique resume identifier
-            resume_text: Full resume text
-            metadata: Resume metadata (name, user_id, etc.)
-
+            job_description: Job posting text
+            resume_names: List of resume names to compare
+            session_id: Session identifier
+            
         Returns:
-            True if successful
-
-        TODO: Implement vector DB indexing
+            Comparison results with scores for each resume
         """
-        logger.info(f"Indexing resume {resume_id}")
+        try:
+            response = await self.client.post(
+                f"{self.base_url}/rag/compare",
+                headers={
+                    "Content-Type": "application/json",
+                    "X-RAG-API-Key": self.api_key
+                },
+                json={
+                    "session_id": session_id,
+                    "query": job_description,
+                    "resume_names": resume_names
+                }
+            )
+            
+            response.raise_for_status()
+            return response.json()
+            
+        except Exception as e:
+            logger.error(f"Resume comparison error: {str(e)}")
+            raise
+    
+    async def health_check(self) -> bool:
+        """
+        Check RAG system health and availability
+        
+        Returns:
+            True if RAG system is responsive, False otherwise
+        """
+        try:
+            response = await self.client.get(
+                f"{self.base_url}/health",
+                timeout=5
+            )
+            is_healthy = response.status_code == 200
+            
+            if is_healthy:
+                logger.info("✅ RAG system health check passed")
+            else:
+                logger.warning(f"⚠️ RAG health check failed: {response.status_code}")
+                
+            return is_healthy
+            
+        except Exception as e:
+            logger.warning(f"⚠️ RAG health check failed: {str(e)}")
+            return False
+    
+    async def get_available_resumes(self) -> List[str]:
+        """
+        Get list of available resume types from RAG system
+        
+        Returns:
+            List of resume names available in the system
+        """
+        try:
+            response = await self.client.get(
+                f"{self.base_url}/resumes",
+                headers={"X-RAG-API-Key": self.api_key}
+            )
+            
+            if response.status_code == 200:
+                return response.json().get('resumes', self.resume_types)
+            else:
+                return self.resume_types
+                
+        except Exception as e:
+            logger.warning(f"Could not fetch resumes: {str(e)}")
+            return self.resume_types
+    
+    async def close(self):
+        """Close HTTP client connection pool"""
+        await self.client.aclose()
+        logger.info("RAG client connection closed")
 
-        # STUB: Simulate success
-        await asyncio.sleep(0.05)
-        return True
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -834,8 +907,9 @@ class ScraperClient:
 def get_rag_client() -> RagClient:
     """Factory function to get RagClient instance."""
     return RagClient(
-        embedding_model=os.getenv("EMBEDDING_MODEL", "all-MiniLM-L6-v2"),
-        vector_db_url=os.getenv("VECTOR_DB_URL")
+        base_url=os.getenv("RAG_BASE_URL", "http://localhost:8090"),
+        api_key=os.getenv("RAG_API_KEY", "dev-666a3ac3d47d42161b8ae35f93b9cbd1"),
+        timeout=int(os.getenv("RAG_TIMEOUT", "30"))
     )
 
 
