@@ -8,6 +8,8 @@ Changes from prior:
 - Auto-creates CHROMA_DIR if missing
 - Retry logic on add/query/delete
 - Clear logging for production
+- Fixed empty where={} handling for ChromaDB v1.x
+- Added query_anchor() method for resume-level embeddings
 """
 
 from __future__ import annotations
@@ -29,12 +31,14 @@ except Exception:  # pragma: no cover - env dependent
     PersistentClient = None  # type: ignore
     CHROMADB_AVAILABLE = False
 
+
 @dataclass
 class ChromaStoreConfig:
     persist_dir: str = field(default_factory=lambda: os.getenv("CHROMA_DIR", "./.chroma"))
     collection_name: str = field(default_factory=lambda: os.getenv("CHROMA_COLLECTION", "resumes"))
     retry_attempts: int = 3
     retry_delay_seconds: float = 0.5
+
 
 class ChromaStore:
     """
@@ -215,13 +219,38 @@ class ChromaStore:
         n_results: int = 8,
         where: Optional[Dict[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
-        where = where or {}
-
+        """
+        Query ChromaDB with optional metadata filters.
+        
+        Args:
+            query_embeddings: List of query vectors
+            n_results: Number of results to return
+            where: Optional metadata filter dict (must have content or be None)
+        
+        Returns:
+            List of matching documents with metadata and distances
+        """
+        # ChromaDB v1.x doesn't accept empty where={}, must be None
+        if where is not None and len(where) == 0:
+            where = None
+        
         if CHROMADB_AVAILABLE and self._collection is not None:
             attempts = 0
             while True:
                 try:
-                    resp = self._collection.query(query_embeddings=query_embeddings, n_results=n_results, where=where)
+                    # Only pass where if it has values
+                    if where:
+                        resp = self._collection.query(
+                            query_embeddings=query_embeddings, 
+                            n_results=n_results, 
+                            where=where
+                        )
+                    else:
+                        resp = self._collection.query(
+                            query_embeddings=query_embeddings, 
+                            n_results=n_results
+                        )
+                    
                     hits: List[Dict[str, Any]] = []
                     if resp and "ids" in resp and resp["ids"]:
                         ids = resp["ids"][0]
@@ -229,8 +258,14 @@ class ChromaStore:
                         metas = resp["metadatas"][0]
                         docs = resp["documents"][0]
                         for idx, _id in enumerate(ids):
-                            hits.append({"id": _id, "distance": dists[idx], "metadata": metas[idx], "document": docs[idx]})
+                            hits.append({
+                                "id": _id, 
+                                "distance": dists[idx], 
+                                "metadata": metas[idx], 
+                                "document": docs[idx]
+                            })
                     return hits
+                    
                 except Exception as e:
                     attempts += 1
                     logger.exception("Chroma query failed (attempt %d): %s", attempts, e)
@@ -245,7 +280,13 @@ class ChromaStore:
                 emb = rec["embedding"]
                 sim = self._cosine_sim(q, emb)
                 distance = 1.0 - sim
-                hits.append({"id": _id, "distance": distance, "metadata": rec["metadata"], "document": rec["document"]})
+                hits.append({
+                    "id": _id, 
+                    "distance": distance, 
+                    "metadata": rec["metadata"], 
+                    "document": rec["document"]
+                })
+            
             # apply where filter (equality for keys)
             if where:
                 def match(m: Dict[str, Any], where: Dict[str, Any]) -> bool:
@@ -254,11 +295,27 @@ class ChromaStore:
                             return False
                     return True
                 hits = [h for h in hits if match(h["metadata"], where)]
+            
             hits.sort(key=lambda x: x["distance"])
             return hits[:n_results]
 
     def query_anchor(self, query_embedding: List[float], n_results: int = 7) -> List[Dict[str, Any]]:
-        return self.query(query_embeddings=[query_embedding], n_results=n_results, where={"anchor": True})
+        """
+        Query for anchor vectors (resume-level embeddings).
+        Anchors have metadata key 'anchor'=True
+        
+        Args:
+            query_embedding: Single query vector
+            n_results: Number of anchor results to return
+            
+        Returns:
+            List of anchor matches with metadata
+        """
+        return self.query(
+            query_embeddings=[query_embedding], 
+            n_results=n_results, 
+            where={"anchor": True}
+        )
 
     # -------------------------
     # Resume-level utilities

@@ -86,7 +86,7 @@ class ResumeEngine:
         if embedder:
             self.embedder = embedder
         else:
-            if os.getenv("GEMINI_API_KEY"):
+            if os.getenv("GEMINI_API_KEY_RAG"):
                 self.embedder = GeminiEmbedder()
             else:
                 self.embedder = LocalDeterministicEmbedder()
