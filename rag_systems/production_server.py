@@ -34,14 +34,16 @@ Date: January 19, 2026
 
 from __future__ import annotations
 
+from fastapi import FastAPI, Depends, Header, HTTPException, Request, Response, status
+from pydantic import BaseModel, Field, field_validator, model_validator
+from typing import Optional, Dict, Any, List, Set, Callable
 import os
 import sys
 import json
 import time
 import asyncio
 import logging
-import hashlib
-import traceback
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional, Set, Callable
 from dataclasses import dataclass, field, asdict
@@ -50,32 +52,40 @@ from threading import Lock, RLock
 from functools import wraps
 from enum import Enum
 from contextlib import asynccontextmanager
+from datetime import datetime
+
+
+import json
+import time
+import asyncio
+import hashlib
+import traceback
+
+# Add rag_systems to path for module imports
+from pathlib import Path
+import sys
+sys.path.insert(0, str(Path(__file__).parent))
 
 # ═══════════════════════════════════════════════════════════════════════════
 # STANDARD LIBRARY & THIRD-PARTY IMPORTS
 # ═══════════════════════════════════════════════════════════════════════════
 
 try:
-    from fastapi import FastAPI, HTTPException, Header, Request, Response, Depends, status
     from fastapi.responses import JSONResponse, PlainTextResponse
     from fastapi.middleware.cors import CORSMiddleware
     from fastapi.middleware.gzip import GZipMiddleware
     from fastapi.middleware.trustedhost import TrustedHostMiddleware
-    from pydantic import BaseModel, Field, validator, root_validator
     import uvicorn
 except ImportError:
     print("ERROR: FastAPI dependencies missing. Install: pip install fastapi uvicorn pydantic")
     sys.exit(1)
-
-from dotenv import load_dotenv
-load_dotenv()
 
 # ═══════════════════════════════════════════════════════════════════════════
 # LOCAL IMPORTS (from existing rag_systems files)
 # ═══════════════════════════════════════════════════════════════════════════
 
 try:
-    from .rag_api import (
+    from rag_api import (
         select_resume,
         get_resume_pdf_path,
         get_rag_context,
@@ -83,7 +93,7 @@ try:
         list_resumes,
         healthcheck,
     )
-    from .resume_engine import get_default_engine
+    from resume_engine import get_default_engine
 except ImportError:
     print("ERROR: Cannot import from rag_systems. Ensure rag_api.py and resume_engine.py exist.")
     sys.exit(1)
@@ -92,12 +102,19 @@ except ImportError:
 # LOGGING CONFIGURATION
 # ═══════════════════════════════════════════════════════════════════════════
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s | %(levelname)-8s | %(name)-20s | %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S'
+logger = logging.getLogger("production_server")
+logger.setLevel(logging.INFO)
+
+console_handler = logging.StreamHandler()
+console_handler.setLevel(logging.INFO)
+
+formatter = logging.Formatter(
+    "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
-logger = logging.getLogger(__name__)
+console_handler.setFormatter(formatter)
+
+logger.addHandler(console_handler)
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # CONFIGURATION & CONSTANTS
@@ -111,15 +128,32 @@ class ServerConfig:
     PORT: int = int(os.getenv("RAG_SERVER_PORT", "8090"))
     RELOAD: bool = os.getenv("RAG_SERVER_RELOAD", "false").lower() == "true"
     WORKERS: int = int(os.getenv("RAG_SERVER_WORKERS", "1"))
-    
+
     # API Keys
-    API_KEYS: Set[str] = set(os.getenv("RAG_API_KEYS", "dev-key-123,prod-key-456").split(","))
-    MASTER_API_KEY: str = os.getenv("RAG_MASTER_API_KEY", "master-key-789")
+    API_KEY_CHROME: str = os.getenv("RAG_KEY_CHROME", "")
+    API_KEY_MCP: str = os.getenv("RAG_KEY_MCP", "")
+    API_KEY_DEV: str = os.getenv("RAG_KEY_DEV", "")
+    API_KEY_AUTOMATION: str = os.getenv("RAG_KEY_AUTOMATION", "")
+    MASTER_API_KEY: str = os.getenv("RAG_KEY_MASTER", "")
+    
+    # Collect all valid client keys
+    API_KEYS: Set[str] = {
+        key for key in [API_KEY_CHROME, API_KEY_MCP, API_KEY_DEV, API_KEY_AUTOMATION]
+        if key
+    }
+    
+    # Mapping for logging/tracking
+    API_KEY_NAMES: Dict[str, str] = {
+        API_KEY_CHROME: "chrome_extension",
+        API_KEY_MCP: "mcp_server",
+        API_KEY_DEV: "development",
+        API_KEY_AUTOMATION: "automation_service"
+    }
     
     # Session Management
     SESSION_TIMEOUT_MINUTES: int = int(os.getenv("SESSION_TIMEOUT_MINUTES", "30"))
     SESSION_MAX_HISTORY: int = int(os.getenv("SESSION_MAX_HISTORY", "50"))
-    SESSION_CLEANUP_INTERVAL: int = int(os.getenv("SESSION_CLEANUP_INTERVAL", "300"))  # 5 min
+    SESSION_CLEANUP_INTERVAL: int = int(os.getenv("SESSION_CLEANUP_INTERVAL", "300"))
     
     # Rate Limiting
     RATE_LIMIT_REQUESTS: int = int(os.getenv("RATE_LIMIT_REQUESTS", "100"))
@@ -153,27 +187,50 @@ class ServerConfig:
 # PYDANTIC MODELS (Request/Response Validation)
 # ═══════════════════════════════════════════════════════════════════════════
 
+class RAGRequest(BaseModel):
+    """Request model for RAG endpoints"""
+    session_id: str = Field(..., min_length=1, max_length=128, description="Session identifier")
+    job_text: Optional[str] = Field("", description="Job description text")
+    query: Optional[str] = Field(None, description="Query text for RAG")
+    top_k: int = Field(5, ge=1, le=20, description="Number of results to return")
+    
+    @field_validator('session_id')
+    def validate_session_id(cls, v):
+        if not v or not v.strip():
+            raise ValueError("session_id cannot be empty")
+        return v.strip()
+
+
 class RAGQueryRequest(BaseModel):
     """Request model for /rag/query endpoint"""
     session_id: str = Field(..., min_length=1, max_length=128, description="Unique session identifier")
-    query: str = Field(..., min_length=1, max_length=10000, description="User query or job description")
+    query: Optional[str] = Field(None, description="User query or job description")
+    job_text: Optional[str] = Field(None, description="Alternative to query field")
     filters: Optional[Dict[str, Any]] = Field(default=None, description="Optional filters for resume selection")
     top_k: Optional[int] = Field(default=10, ge=1, le=100, description="Number of chunks to retrieve")
     include_metadata: Optional[bool] = Field(default=True, description="Include metadata in response")
     use_cache: Optional[bool] = Field(default=True, description="Use cached results if available")
     
-    @validator('session_id')
+    @field_validator('session_id')
+    @classmethod
     def validate_session_id(cls, v):
         if not v.strip():
             raise ValueError("session_id cannot be empty or whitespace")
         return v.strip()
     
-    @validator('query')
-    def validate_query(cls, v):
-        cleaned = v.strip()
-        if len(cleaned) < 10:
-            raise ValueError("query must be at least 10 characters")
-        return cleaned
+    @model_validator(mode='after')
+    def validate_query_or_job_text(self):
+        """Validate that either query or job_text is provided"""
+        # Use job_text if query is empty
+        if not self.query and self.job_text:
+            self.query = self.job_text
+        
+        # Validate that we have at least one
+        if not self.query or len(self.query.strip()) < 10:
+            raise ValueError("query or job_text must be at least 10 characters")
+        
+        self.query = self.query.strip()
+        return self
     
     class Config:
         json_schema_extra = {
@@ -189,34 +246,17 @@ class RAGQueryRequest(BaseModel):
 
 class RAGQueryResponse(BaseModel):
     """Response model for /rag/query endpoint"""
-    success: bool = Field(..., description="Whether request was successful")
+    success: bool = Field(True, description="Whether request was successful")
     session_id: str = Field(..., description="Session identifier")
-    answer: str = Field(..., description="Generated answer or resume recommendation")
+    answer: Optional[str] = Field(None, description="Generated answer or resume recommendation")
     selected_resume_id: Optional[str] = Field(None, description="ID of selected resume")
     selected_resume_path: Optional[str] = Field(None, description="Path to selected resume PDF")
     confidence_score: Optional[float] = Field(None, ge=0.0, le=1.0, description="Confidence score")
     chunks: Optional[List[Dict[str, Any]]] = Field(None, description="Retrieved chunks")
     metadata: Optional[Dict[str, Any]] = Field(None, description="Additional metadata")
-    processing_time_ms: float = Field(..., description="Processing time in milliseconds")
+    processing_time_ms: float = Field(0.0, description="Processing time in milliseconds")
     timestamp: str = Field(..., description="Response timestamp")
     cached: bool = Field(False, description="Whether response was from cache")
-    
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "success": True,
-                "session_id": "user-123-session-abc",
-                "answer": "Best resume: Aarjun_AIML.pdf (confidence: 0.92)",
-                "selected_resume_id": "resume_ai_ml",
-                "selected_resume_path": "/Users/apple/TechStack/Resume/Aarjun_AIML.pdf",
-                "confidence_score": 0.92,
-                "chunks": [],
-                "metadata": {"candidates_evaluated": 8},
-                "processing_time_ms": 245.3,
-                "timestamp": "2026-01-19T18:01:00Z",
-                "cached": False
-            }
-        }
 
 
 class ResumeSelectionRequest(BaseModel):
@@ -225,7 +265,7 @@ class ResumeSelectionRequest(BaseModel):
     top_k_anchors: Optional[int] = Field(default=7, ge=1, le=20)
     top_k_chunks: Optional[int] = Field(default=3, ge=1, le=10)
     
-    @validator('job_text')
+    @field_validator('job_text')
     def validate_job_text(cls, v):
         cleaned = v.strip()
         if len(cleaned) < 10:
@@ -439,9 +479,9 @@ class RateLimiter:
 
 class CircuitState(Enum):
     """Circuit breaker states"""
-    CLOSED = "closed"      # Normal operation
-    OPEN = "open"          # Failing, reject requests
-    HALF_OPEN = "half_open"  # Testing if recovered
+    CLOSED = "closed"
+    OPEN = "open"
+    HALF_OPEN = "half_open"
 
 
 class CircuitBreaker:
@@ -460,7 +500,6 @@ class CircuitBreaker:
         """Execute function with circuit breaker protection"""
         with self.lock:
             if self.state == CircuitState.OPEN:
-                # Check if timeout elapsed
                 if time.time() - self.last_failure_time >= self.timeout:
                     logger.info("Circuit breaker entering HALF_OPEN state")
                     self.state = CircuitState.HALF_OPEN
@@ -489,7 +528,7 @@ class CircuitBreaker:
                 if self.failure_count >= self.threshold:
                     logger.error(f"Circuit breaker OPENED after {self.failure_count} failures")
                     self.state = CircuitState.OPEN
-                
+            
             raise e
     
     def get_state(self) -> Dict[str, Any]:
@@ -570,7 +609,6 @@ class ResponseCache:
         ttl = ttl or self.default_ttl
         
         with self.lock:
-            # Evict oldest if at capacity
             if len(self.cache) >= self.max_size and key not in self.cache:
                 oldest_key = self.access_order.popleft()
                 del self.cache[oldest_key]
@@ -583,7 +621,6 @@ class ResponseCache:
             )
             self.cache[key] = entry
             
-            # Update access order
             try:
                 self.access_order.remove(key)
             except ValueError:
@@ -594,14 +631,10 @@ class ResponseCache:
         """Invalidate cache entries"""
         with self.lock:
             if pattern is None:
-                # Clear all
                 count = len(self.cache)
                 self.cache.clear()
                 self.access_order.clear()
                 logger.info(f"Cache cleared: {count} entries")
-            else:
-                # Pattern-based invalidation (future enhancement)
-                pass
     
     def get_stats(self) -> Dict[str, Any]:
         """Get cache statistics"""
@@ -822,9 +855,34 @@ async def verify_api_key(
     x_rag_api_key: str = Header(..., alias="X-RAG-API-Key")
 ) -> str:
     """Verify API key from header"""
-    if x_rag_api_key in ServerConfig.API_KEYS or x_rag_api_key == ServerConfig.MASTER_API_KEY:
+    
+    # Collect all valid keys from environment, filtering out None/empty
+    valid_keys = {
+        key for key in [
+            os.getenv("RAG_KEY_CHROME"),
+            os.getenv("RAG_KEY_MCP"),
+            os.getenv("RAG_KEY_DEV"),
+            os.getenv("RAG_KEY_AUTOMATION"),
+            os.getenv("RAG_KEY_MASTER"),
+            # Fallback to old variable names for backwards compatibility
+            os.getenv("RAG_API_KEY"),
+            os.getenv("CHROME_EXT_API_KEY"),
+            os.getenv("MCP_API_KEY")
+        ] if key and key.strip()
+    }
+    
+    # Also check ServerConfig.API_KEYS
+    valid_keys.update(ServerConfig.API_KEYS)
+    
+    # Add master key
+    if ServerConfig.MASTER_API_KEY:
+        valid_keys.add(ServerConfig.MASTER_API_KEY)
+    
+    if x_rag_api_key in valid_keys:
+        logger.debug(f"API key validated: {x_rag_api_key[:10]}...")
         return x_rag_api_key
     
+    logger.warning(f"Invalid API key attempted: {x_rag_api_key[:10]}...")
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Invalid API key",
@@ -832,29 +890,14 @@ async def verify_api_key(
     )
 
 
-async def check_rate_limit(
-    request: Request,
-    api_key: str = Depends(verify_api_key)
-) -> str:
-    """Check rate limit for client"""
-    client_id = f"{api_key}:{request.client.host}"
-    
-    if not rate_limiter.is_allowed(client_id):
-        remaining = rate_limiter.get_remaining(client_id)
-        reset_time = rate_limiter.get_reset_time(client_id)
-        
+def check_rate_limit(api_key: str = Depends(verify_api_key)):
+    """Check rate limit for API key"""
+    if not rate_limiter.is_allowed(api_key):
+        remaining_wait = rate_limiter.get_reset_time(api_key)
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail=f"Rate limit exceeded. Try again in {reset_time:.0f}s",
-            headers={
-                "X-RateLimit-Remaining": "0",
-                "X-RateLimit-Reset": str(int(time.time() + reset_time))
-            }
+            detail=f"Rate limit exceeded. Try again in {remaining_wait:.1f}s"
         )
-    
-    remaining = rate_limiter.get_remaining(client_id)
-    request.state.rate_limit_remaining = remaining
-    
     return api_key
 
 
@@ -870,16 +913,10 @@ async def root():
 
 @app.get("/health", response_model=HealthCheckResponse)
 async def health_check():
-    """
-    Comprehensive health check endpoint
-    
-    Returns system health status and metrics
-    """
+    """Comprehensive health check endpoint"""
     try:
-        # Check RAG engine
         engine_health = healthcheck()
         
-        # Get component status
         components = {
             "rag_engine": engine_health.get("status", "unknown"),
             "chromadb": "ok" if engine_health.get("chroma_dir") else "error",
@@ -894,7 +931,6 @@ async def health_check():
         has_error = any(status == "error" for status in components.values())
         overall_status = "error" if has_error else "ok"
         
-        # Get metrics
         system_metrics = metrics_collector.get_metrics()
         session_stats = session_manager.get_stats()
         cache_stats = response_cache.get_stats()
@@ -930,114 +966,190 @@ async def rag_query(
     request: RAGQueryRequest,
     api_key: str = Depends(check_rate_limit)
 ):
-    """
-    Main RAG query endpoint with session management
+    """Select best resume for job description"""
+    try:
+        job_payload = {"job_text": request.job_text}
+        result = select_resume(job_payload)
     
-    This endpoint:
-    1. Validates request
-    2. Checks cache for previous response
-    3. Gets or creates session
-    4. Selects best resume using RAG
-    5. Maintains conversation history
-    6. Returns structured response
-    """
+        return {
+    "selected_resume": result.get("top_resume_id"),
+    "selected_resume_path": result.get("selected_resume_path", ""),
+    "confidence_score": result.get("top_score", 0.0),
+    "matching_skills": result.get("matching_skills", []),
+    "chunks_retrieved": result.get("chunks_retrieved", []),
+    "session_id": request.session_id,
+    "timestamp": datetime.utcnow().isoformat() + "Z"  # ADD THIS LINE
+}
+
+    except Exception as e:
+        logger.error(f"Error in /rag/select: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to select resume: {str(e)}")
+
+
+@app.post("/rag/query", response_model=RAGQueryResponse, tags=["RAG"])
+async def rag_query(
+    request: RAGQueryRequest,
+    api_key: str = Depends(check_rate_limit)
+):
+    """Main RAG query endpoint with session management"""
+    import traceback
     start_time = time.time()
     
     try:
-        # Check cache first
-        cache_key = {
-            "query": request.query,
-            "filters": request.filters,
-            "top_k": request.top_k
-        }
-        
-        if request.use_cache:
-            cached_response = response_cache.get(cache_key)
-            if cached_response:
-                logger.info(f"Cache HIT for session {request.session_id}")
-                cached_response["cached"] = True
-                cached_response["session_id"] = request.session_id
-                return RAGQueryResponse(**cached_response)
-        
         # Get or create session
         session = session_manager.get_or_create(request.session_id)
         
-        # Build job payload
+        # Build job payload (CORRECT FORMAT)
         job_payload = {
-            "job_text": request.query,
-            "filters": request.filters or {}
+            "job_text": request.query
         }
         
-        # Use circuit breaker for resume selection
-        def select_resume_safe():
-            return select_resume(job_payload)
+        # Call select_resume with CORRECT argument
+        result = select_resume(job_payload)  # <-- NOT job_description!
         
-        result = circuit_breaker.call(select_resume_safe)
+        # Handle both dict and object responses
+        if isinstance(result, dict):
+            top_resume_id = result.get("top_resume_id")
+            top_score = result.get("top_score", 0.0)
+            candidates = result.get("candidates", [])
+        else:
+            top_resume_id = getattr(result, "top_resume_id", None)
+            top_score = getattr(result, "top_score", 0.0)
+            candidates = getattr(result, "candidates", [])
         
-        # Get selected resume path
-        resume_path = get_resume_pdf_path(result["top_resume_id"])
+        if not top_resume_id:
+            raise ValueError("No resume selected by RAG system")
+        
+        # Get resume path
+        resume_path = get_resume_pdf_path(top_resume_id)
         
         # Build answer
-        answer = (
-            f"Best matching resume: {result['top_resume_id']} "
-            f"(confidence: {result['top_score']:.2f})"
-        )
+        answer = f"Best matching resume: {top_resume_id} (confidence: {top_score:.2f})"
         
         # Update session
         session.add_to_history(request.query, answer)
-        session.metadata["last_resume_selected"] = result["top_resume_id"]
+        session.metadata["last_resume_selected"] = top_resume_id
         
-        # Get additional context if requested
+        # Get chunks if requested
         chunks = None
         if request.include_metadata:
-            context = get_rag_context(job_payload, top_k_chunks=request.top_k)
-            chunks = context.get("top_chunks", [])
-            session.retrieved_context = chunks
+            try:
+                context_result = get_rag_context(job_payload, top_k_chunks=request.top_k)
+                if isinstance(context_result, dict):
+                    chunks = context_result.get("top_chunks", [])
+                else:
+                    chunks = getattr(context_result, "top_chunks", [])
+                session.retrieved_context = chunks or []
+            except Exception as e:
+                logger.warning(f"Failed to get RAG context: {e}")
+                chunks = []
         
-        # Calculate processing time
+        # Processing time
         processing_time_ms = (time.time() - start_time) * 1000
         
         # Build response
+        # Build proper response matching RAGQueryResponse model
         response_data = {
-            "success": True,
-            "session_id": request.session_id,
-            "answer": answer,
-            "selected_resume_id": result["top_resume_id"],
-            "selected_resume_path": resume_path,
-            "confidence_score": result["top_score"],
-            "chunks": chunks,
-            "metadata": {
-                "candidates_evaluated": len(result.get("candidates", [])),
-                "session_request_count": session.request_count,
-                "conversation_history_size": len(session.conversation_history)
-            },
-            "processing_time_ms": round(processing_time_ms, 2),
-            "timestamp": datetime.utcnow().isoformat() + "Z",
-            "cached": False
-        }
-        
-        # Cache response
-        if request.use_cache:
-            response_cache.set(cache_key, response_data)
-        
+    "success": True,
+    "session_id": request.session_id,
+    "answer": f"Best matching resume: {result.get('top_resume_id', 'unknown')} (confidence: {result.get('top_score', 0.0):.2f})",
+    "selected_resume_id": result.get("top_resume_id", "unknown"),
+    "selected_resume_path": result.get("selected_resume_path", ""),
+    "confidence_score": result.get("top_score", 0.0),
+    "chunks": [],  # or populate from get_rag_context()
+    "metadata": {
+        "candidates_evaluated": len(result.get("candidates", [])),
+        "session_request_count": 1
+    },
+    "processing_time_ms": round((time.time() - start_time) * 1000, 2),
+    "timestamp": datetime.utcnow().isoformat() + "Z",
+    "cached": False
+}
+
         return RAGQueryResponse(**response_data)
+
         
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"RAG query error: {e}\n{traceback.format_exc()}")
+        logger.error(f"RAG query error: {e}")
+        traceback.print_exc()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=ErrorResponse(
-                error=str(e),
-                error_code="RAG_QUERY_ERROR",
-                error_type=type(e).__name__,
-                timestamp=datetime.utcnow().isoformat() + "Z"
-            ).dict()
+            detail={
+                "success": False,
+                "error": str(e),
+                "error_code": "RAG_QUERY_ERROR",
+                "timestamp": datetime.utcnow().isoformat() + "Z"
+            }
+        )
+    
+@app.post("/rag/select", tags=["RAG"])
+def rag_select_resume(
+    request: RAGRequest,
+    api_key: str = Depends(verify_api_key)
+):
+    """Select best resume for job description using RAG."""
+    try:
+        # Validate job_text
+        if not request.job_text or not request.job_text.strip():
+            raise HTTPException(
+                status_code=400,
+                detail="job_text is required and cannot be empty"
+            )
+        
+        result = select_resume(
+            job_description=request.job_text,
+            session_id=request.session_id,
+            top_k=request.top_k
+        )
+        
+        if isinstance(result, dict):
+            return {
+                "selected_resume": result.get("selected_resume"),
+                "selected_resume_path": result.get("selected_resume_path"),
+                "confidence_score": result.get("confidence_score", 0.0),
+                "matching_skills": result.get("matching_skills", []),
+                "chunks_retrieved": result.get("chunks_retrieved", 0),
+                "session_id": request.session_id
+            }
+        else:
+            return {
+                "selected_resume": getattr(result, "selected_resume", None),
+                "selected_resume_path": getattr(result, "selected_resume_path", None),
+                "confidence_score": getattr(result, "confidence_score", 0.0),
+                "matching_skills": getattr(result, "matching_skills", []),
+                "chunks_retrieved": getattr(result, "chunks_retrieved", 0),
+                "session_id": request.session_id
+            }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in /rag/select: {e}")
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Resume selection failed: {str(e)}"
         )
 
 
-@app.post("/resumes/select", response_model=ResumeSelectionResponse)
+@app.get("/resumes", tags=["RAG"])
+def list_resumes_endpoint(
+    _: str = Depends(verify_api_key)
+):
+    """List all available resumes"""
+    try:
+        resumes = list_resumes()
+        return {
+            "resumes": resumes,
+            "count": len(resumes)
+        }
+    except Exception as e:
+        logger.error(f"Error in /resumes: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to list resumes: {str(e)}")
+
+
+@app.post("/resumes/select", response_model=ResumeSelectionResponse, tags=["RAG"])
 async def select_best_resume(
     request: ResumeSelectionRequest,
     api_key: str = Depends(check_rate_limit)
@@ -1047,6 +1159,7 @@ async def select_best_resume(
     
     Direct resume selection without session management
     """
+    import traceback
     start_time = time.time()
     
     try:
@@ -1060,46 +1173,85 @@ async def select_best_resume(
         
         result = circuit_breaker.call(select_safe)
         
+        # Handle both dict and object responses
+        if isinstance(result, dict):
+            top_resume_id = result.get("top_resume_id")
+            top_score = result.get("top_score", 0.0)
+            candidates = result.get("candidates", [])
+        else:
+            top_resume_id = getattr(result, "top_resume_id", None)
+            top_score = getattr(result, "top_score", 0.0)
+            candidates = getattr(result, "candidates", [])
+        
+        if not top_resume_id:
+            raise ValueError("No resume selected")
+        
         # Get resume path
-        resume_path = get_resume_pdf_path(result["top_resume_id"])
-        result["selected_resume_path"] = resume_path
+        resume_path = get_resume_pdf_path(top_resume_id)
         
         processing_time_ms = (time.time() - start_time) * 1000
-        result["processing_time_ms"] = round(processing_time_ms, 2)
-        result["timestamp"] = datetime.utcnow().isoformat() + "Z"
-        result["success"] = True
         
-        return ResumeSelectionResponse(**result)
+        response_data = {
+            "success": True,
+            "top_resume_id": top_resume_id,
+            "top_score": top_score,
+            "selected_resume_path": resume_path,
+            "candidates": candidates if candidates else [],
+            "processing_time_ms": round(processing_time_ms, 2),
+            "timestamp": datetime.utcnow().isoformat() + "Z"
+        }
+        
+        return ResumeSelectionResponse(**response_data)
         
     except Exception as e:
         logger.error(f"Resume selection error: {e}")
+        traceback.print_exc()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=str(e)
         )
 
 
-@app.get("/resumes/list")
+@app.get("/resumes/list", tags=["RAG"])
 async def list_all_resumes(api_key: str = Depends(check_rate_limit)):
     """List all available resumes"""
+    import traceback
+    
     try:
-        resumes = list_resumes()
+        result = list_resumes()
+        
+        # Handle three cases: list, dict with 'resumes' key, or other
+        if isinstance(result, list):
+            resumes_list = result
+        elif isinstance(result, dict):
+            resumes_list = result.get("resumes", [])
+        else:
+            # Try to get resumes attribute from object
+            resumes_list = getattr(result, "resumes", [])
+        
+        # Ensure it's a list
+        if not isinstance(resumes_list, list):
+            logger.warning(f"list_resumes() returned unexpected type: {type(result)}")
+            resumes_list = []
+        
         return {
             "success": True,
-            "count": len(resumes),
-            "resumes": resumes,
+            "count": len(resumes_list),
+            "resumes": resumes_list,
             "timestamp": datetime.utcnow().isoformat() + "Z"
         }
+        
     except Exception as e:
         logger.error(f"List resumes error: {e}")
+        traceback.print_exc()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=str(e)
         )
 
 
-@app.post("/resumes/reindex/{resume_id}")
-async def reindex_resume_endpoint(
+@app.post("/resumes/reindex/{resume_id}", tags=["RAG"])
+def reindex_resume_endpoint(
     resume_id: str,
     api_key: str = Depends(check_rate_limit)
 ):
@@ -1120,8 +1272,8 @@ async def reindex_resume_endpoint(
         )
 
 
-@app.get("/sessions/{session_id}")
-async def get_session_info(
+@app.get("/sessions/{session_id}", tags=["Sessions"])
+def get_session_info(
     session_id: str,
     api_key: str = Depends(check_rate_limit)
 ):
@@ -1141,8 +1293,8 @@ async def get_session_info(
     }
 
 
-@app.delete("/sessions/{session_id}")
-async def delete_session(
+@app.delete("/sessions/{session_id}", tags=["Sessions"])
+def delete_session(
     session_id: str,
     api_key: str = Depends(check_rate_limit)
 ):
@@ -1162,9 +1314,9 @@ async def delete_session(
     }
 
 
-@app.post("/cache/invalidate")
-async def invalidate_cache(
-    api_key: str = Depends(verify_api_key)  # Master key required
+@app.post("/cache/invalidate", tags=["Admin"])
+def invalidate_cache(
+    api_key: str = Depends(verify_api_key)
 ):
     """Invalidate response cache (requires master API key)"""
     if api_key != ServerConfig.MASTER_API_KEY:
@@ -1182,9 +1334,9 @@ async def invalidate_cache(
     }
 
 
-@app.get("/metrics")
-async def get_metrics(api_key: str = Depends(verify_api_key)):
-    """Get system metrics (Prometheus-compatible)"""
+@app.get("/metrics", tags=["Admin"])
+def get_metrics(api_key: str = Depends(verify_api_key)):
+    """Get system metrics"""
     metrics = metrics_collector.get_metrics()
     session_stats = session_manager.get_stats()
     cache_stats = response_cache.get_stats()
@@ -1248,19 +1400,32 @@ def main():
     logger.info("=" * 80)
     logger.info(f"Host: {ServerConfig.HOST}")
     logger.info(f"Port: {ServerConfig.PORT}")
-    logger.info(f"Workers: {ServerConfig.WORKERS}")
-    logger.info(f"API Keys: {len(ServerConfig.API_KEYS)} configured")
+    logger.info(f"Workers: 1 (production mode)")
+    
+    logger.info("API Keys configured:")
+    for key_var, client_name in [
+        ("RAG_KEY_CHROME", "Chrome Extension"),
+        ("RAG_KEY_MCP", "MCP Server"),
+        ("RAG_KEY_DEV", "Development"),
+        ("RAG_KEY_AUTOMATION", "Automation Service"),
+        ("RAG_KEY_MASTER", "Master Admin")
+    ]:
+        key_value = os.getenv(key_var)
+        if key_value:
+            logger.info(f"  ✓ {client_name}: {key_value[:15]}...")
+    
     logger.info(f"Rate Limit: {ServerConfig.RATE_LIMIT_REQUESTS} req/{ServerConfig.RATE_LIMIT_WINDOW_SECONDS}s")
     logger.info(f"Cache: {'Enabled' if ServerConfig.CACHE_ENABLED else 'Disabled'}")
     logger.info(f"Session Timeout: {ServerConfig.SESSION_TIMEOUT_MINUTES} minutes")
     logger.info("=" * 80)
     
+    # Run server with direct app reference (prevents asyncio loop issues)
     uvicorn.run(
-        "rag_systems.production_server:app",
+        app,
         host=ServerConfig.HOST,
         port=ServerConfig.PORT,
-        reload=ServerConfig.RELOAD,
-        workers=ServerConfig.WORKERS,
+        reload=False,
+        workers=1,
         log_level=ServerConfig.LOG_LEVEL.lower(),
         access_log=ServerConfig.LOG_REQUESTS
     )
@@ -1268,3 +1433,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

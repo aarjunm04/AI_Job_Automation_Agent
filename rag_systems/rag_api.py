@@ -23,8 +23,8 @@ from __future__ import annotations
 from typing import Dict, Any, List
 import logging
 
-from .resume_engine import get_default_engine
-from .rag_pipeline import RAGPipeline
+from resume_engine import get_default_engine
+from rag_pipeline import RAGPipeline
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)

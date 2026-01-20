@@ -906,9 +906,12 @@ class ScraperClient:
 
 def get_rag_client() -> RagClient:
     """Factory function to get RagClient instance."""
+    # Read RAG_KEY_MCP directly from environment
+    rag_key = os.getenv("RAG_KEY_MCP", "mcp-default-key")
+    
     return RagClient(
         base_url=os.getenv("RAG_BASE_URL", "http://localhost:8090"),
-        api_key=os.getenv("RAG_API_KEY", "dev-666a3ac3d47d42161b8ae35f93b9cbd1"),
+        api_key=rag_key,  # Use MCP-specific key
         timeout=int(os.getenv("RAG_TIMEOUT", "30"))
     )
 

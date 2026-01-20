@@ -1,4 +1,3 @@
-
 # ═════════════════════════════════════════════════════════════════════════════════
 #Enterprise-grade context management service for job automation AI agents.
 
@@ -65,8 +64,13 @@ import httpx
 from rich.logging import RichHandler
 
 # RAG Client integration
-from integrations import get_rag_client
+import sys
+from pathlib import Path
 
+mcp_dir = Path(__file__).parent
+sys.path.insert(0, str(mcp_dir))
+
+from integrations import get_rag_client
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # SECTION 2: CONFIGURATION
@@ -90,7 +94,7 @@ class Settings(BaseSettings):
     
     # Database
     database_url: str = Field(
-        default="sqlite+aiosqlite:///mcp/mcp_context.db",
+        default="sqlite+aiosqlite:////app/data/mcp_context.db",
         alias="DATABASE_URL"
     )
     db_pool_size: int = Field(default=20, alias="DB_POOL_SIZE")
@@ -126,14 +130,13 @@ class Settings(BaseSettings):
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
 
     # RAG Configuration
-    RAG_BASE_URL: str = "http://localhost:8090"
-    RAG_API_KEY: str = "dev-dd3471442e4d2f6e86101a7d4874053d"
+    RAG_BASE_URL: str = Field(default="http://localhost:8090")
+    RAG_API_KEY: str = Field(default="mcp-default", alias="RAG_KEY_MCP") 
 
     
     class Config:
         env_file = ".env"
         case_sensitive = False
-
 
 # Initialize settings
 settings = Settings()
@@ -1206,6 +1209,18 @@ class MCPService:
                 pass
         
         logger.info("✅ MCPService shutdown complete")
+    
+    def get_metrics(self):
+        """Return current metrics snapshot."""
+        return {
+            "sessions_created": self.metrics["sessions_created"],
+            "items_appended": self.metrics["items_appended"],
+            "snapshots_created": self.metrics["snapshots_created"],
+            "webhooks_received": self.metrics["webhooks_received"],
+            "auth_failures": self.metrics["auth_failures"],
+            "cache_hits": self.metrics["cache_hits"],
+            "cache_misses": self.metrics["cache_misses"],
+        }
 
 
 # Initialize service
@@ -1605,27 +1620,12 @@ async def suggest_resume(
     session_id: str,
     job_description: str
 ):
-    """
-    Trigger RAG system for resume suggestion.
-    
-    Analyzes job description and returns optimal resume match
-    based on vector similarity and skill matching.
-    
-    Args:
-        session_id: Session ID for tracking
-        job_description: Full job posting text
-        
-    Returns:
-        Selected resume with confidence score and analysis
-    """
+    """RAG-powered resume suggestion"""
     if not rag_client:
-        raise HTTPException(
-            status_code=503,
-            detail="RAG system not available. Ensure RAG server is running at localhost:8090"
-        )
+        raise HTTPException(status_code=503, detail="RAG system not available")
     
     try:
-        # Call RAG client to select best resume
+        # Call RAG
         rag_result = await rag_client.select_best_resume(
             job_description=job_description,
             session_id=session_id,
@@ -1633,7 +1633,7 @@ async def suggest_resume(
             include_metadata=True
         )
         
-        # Store result in MCP context
+        # Store in MCP context
         metadata = MetadataSchema(
             source="rag",
             confidence=rag_result.get("confidence_score", 0.0),
@@ -1643,11 +1643,10 @@ async def suggest_resume(
         item = ContextItemCreateSchema(
             role="assistant",
             content=json.dumps({
-                "selected_resume": rag_result.get("selected_resume"),
+                "selected_resume": rag_result.get("selected_resume_id"),  # ← Fix: use selected_resume_id
                 "resume_path": rag_result.get("selected_resume_path"),
                 "confidence_score": rag_result.get("confidence_score"),
-                "matching_skills": rag_result.get("matching_skills", []),
-                "analysis": rag_result.get("answer")
+                "answer": rag_result.get("answer")
             }),
             metadata=metadata,
             trusted=True
@@ -1655,30 +1654,19 @@ async def suggest_resume(
         
         await mcp_service.append_context_item(session_id, item)
         
-        logger.info(
-            f"RAG suggested '{rag_result.get('selected_resume')}' "
-            f"with {rag_result.get('confidence_score', 0):.2%} confidence "
-            f"for session {session_id}"
-        )
-        
         return {
             "status": "success",
-            "selected_resume": rag_result.get("selected_resume"),
+            "selected_resume": rag_result.get("selected_resume_id"),  # ← Fix here too
             "resume_path": rag_result.get("selected_resume_path"),
             "confidence_score": rag_result.get("confidence_score", 0.0),
-            "matching_skills": rag_result.get("matching_skills", []),
-            "analysis": rag_result.get("answer"),
-            "chunks_retrieved": rag_result.get("chunks_retrieved", 0),
+            "answer": rag_result.get("answer"),
+            "chunks_count": len(rag_result.get("chunks", [])),
             "session_id": session_id
         }
         
     except Exception as e:
         logger.error(f"Resume suggestion failed: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"RAG resume suggestion failed: {str(e)}"
-        )
-
+        raise HTTPException(status_code=500, detail=f"RAG error: {str(e)}")
 
 @app.post("/llm/complete", tags=["Integrations"])
 async def llm_complete(
@@ -1884,6 +1872,14 @@ async def metrics():
         headers={"Content-Type": "application/json"}
     )
 
+@app.get("/v1/relevant/{session_id}", dependencies=[Depends(auth_and_rate_limit)])
+async def api_rag(session_id: str, top_k: int = 10):
+    """Get relevant RAG context for session"""
+    out = await mcp_service.get_relevant_context_for_rag(
+        session_id=session_id,
+        top_k=top_k
+    )
+    return {"items": out}
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # SECTION 16: STARTUP & SHUTDOWN HOOKS
