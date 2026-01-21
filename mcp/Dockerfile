@@ -1,99 +1,73 @@
-# ═══════════════════════════════════════════════════════════════════════════════
-# Job Automation MCP - Production Dockerfile
-# ═══════════════════════════════════════════════════════════════════════════════
-#
-# Multi-stage build for optimized production image
-# Base image: Python 3.11 slim
-# Final size: ~200-300MB (vs ~1GB for full Python image)
-#
-# Build:
-#   docker build -t job-automation-mcp:latest .
-#
-# Run:
-#   docker run -p 8080:8080 --env-file .env job-automation-mcp:latest
-#
-# ═══════════════════════════════════════════════════════════════════════════════
+# =============================================================================
+# MCP Server - Multi-stage Dockerfile for Model Context Protocol FastAPI
+# =============================================================================
+# Purpose: Build optimized container for MCP Server with minimal attack surface
+# Base: python:3.11-slim (secure, small footprint)
+# Features:
+#  - Multi-stage: builder stage installs deps, runtime stage keeps image small
+#  - Non-root user: app (UID 1000) for security
+#  - Health check endpoint: GET /health
+#  - Startup: uvicorn on port 3001
+# =============================================================================
 
-# ───────────────────────────────────────────────────────────────────────────────
-# Stage 1: Builder - Install dependencies
-# ───────────────────────────────────────────────────────────────────────────────
 FROM python:3.11-slim as builder
 
-# Set working directory
-WORKDIR /build
+# Set working directory for build stage
+WORKDIR /tmp
 
-# Install system dependencies for building Python packages
+# Install build dependencies (temporary, removed in runtime stage)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     g++ \
-    make \
-    libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements file
 COPY requirements.txt .
 
-# Create virtual environment and install dependencies
-RUN python -m venv /opt/venv
-ENV PATH="/opt/venv/bin:$PATH"
+# Install Python dependencies with cache optimization
+RUN pip install --no-cache-dir --user -r requirements.txt
 
-# Install Python dependencies
-RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
-    pip install --no-cache-dir -r requirements.txt
 
-# ───────────────────────────────────────────────────────────────────────────────
-# Stage 2: Runtime - Create minimal production image
-# ───────────────────────────────────────────────────────────────────────────────
+# =============================================================================
+# Runtime Stage - Minimal production image
+# =============================================================================
 FROM python:3.11-slim
 
-# Metadata
-LABEL maintainer="Job Automation Team"
-LABEL description="Job Automation MCP - Context Management Service"
-LABEL version="2.0"
+LABEL maintainer="AI Job Automation Team"
+LABEL description="MCP Server - Model Context Protocol FastAPI service"
+LABEL version="1.0"
 
-# Set environment variables
-ENV PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1 \
-    PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    PATH="/opt/venv/bin:$PATH" \
-    MCP_DEV_MODE=false
-
-# Install runtime dependencies only
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    libpq5 \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
-
-# Create non-root user for security
-RUN groupadd -r mcp && useradd -r -g mcp -u 1000 mcp
-
-# Set working directory
 WORKDIR /app
 
-# Copy virtual environment from builder
-COPY --from=builder /opt/venv /opt/venv
+# Install curl for healthcheck
+RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
+
+# Create non-root user FIRST
+RUN useradd -m -u 1000 -s /sbin/nologin app
+
+# Copy dependencies to app user's home directory
+COPY --from=builder --chown=app:app /root/.local /home/app/.local
 
 # Copy application code
-COPY service/ /app/service/
-COPY server.py /app/
-COPY security.py /app/
-COPY integrations.py /app/
-COPY cache.py /app/
+COPY --chown=app:app mcp /app/mcp
+COPY --chown=app:app config /app/config
 
-# Create data directory with proper permissions
-RUN mkdir -p /app/mcp /app/logs && \
-    chown -R mcp:mcp /app
+# Create directories with proper ownership
+RUN mkdir -p /app/.mcp_cache /app/logs && chown -R app:app /app
 
-# Switch to non-root user
-USER mcp
+# Configure environment for app user
+ENV PATH=/home/app/.local/bin:$PATH \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONPATH=/app
 
-# Expose port
-EXPOSE 8080
+USER app
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD curl -f http://localhost:8080/health || exit 1
+EXPOSE 3001
 
-# Default command
-CMD ["python", "server.py"]
+HEALTHCHECK --interval=15s --timeout=5s --retries=5 --start-period=20s \
+    CMD curl -f http://localhost:3001/health || exit 1
+
+CMD ["uvicorn", "mcp.server:app", "--host", "0.0.0.0", "--port", "3001"]
+
+

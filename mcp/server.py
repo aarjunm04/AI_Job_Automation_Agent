@@ -48,7 +48,7 @@ from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 # Data validation and settings
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator
 from pydantic_settings import BaseSettings
 
 # Database
@@ -146,7 +146,7 @@ settings = Settings()
 # ═══════════════════════════════════════════════════════════════════════════════
 
 logging.basicConfig(
-    level=settings.log_level,
+    level=getattr(logging, settings.log_level.upper()),
     format="%(message)s",
     datefmt="[%X]",
     handlers=[RichHandler(rich_tracebacks=True)]
@@ -329,14 +329,14 @@ class ContextItemCreateSchema(BaseModel):
     metadata: Optional[MetadataSchema] = None
     trusted: Optional[bool] = Field(False, description="Mark as trusted content")
     
-    @validator("role")
+    @field_validator("role")
     def validate_role(cls, v):
         allowed_roles = ["system", "user", "assistant", "tool"]
         if v not in allowed_roles:
             raise ValueError(f"role must be one of: {', '.join(allowed_roles)}")
         return v
     
-    @validator("content")
+    @field_validator("content")
     def validate_content(cls, v):
         """Basic content validation (enhanced by security.py)."""
         if not v or not v.strip():
@@ -986,6 +986,48 @@ class MCPService:
         
         return True
     
+    async def get_relevant_context_for_rag(self, session_id: str, top_k: int = 10) -> List[dict]:
+        """
+        Get relevant context for RAG system.
+        Returns most recent context items for a session.
+        """
+        async with AsyncSessionLocal() as db:
+        # Get session
+           res = await db.execute(
+            select(SessionModel).where(SessionModel.session_id == session_id)
+        )
+        session = res.scalar_one_or_none()
+        
+        if not session:
+            return []
+        
+        # Get recent context items
+        query = (
+            select(ContextItemModel)
+            .where(
+                ContextItemModel.session_id == session_id,
+                ContextItemModel.deprecated == False
+            )
+            .order_by(ContextItemModel.sequence.desc())
+            .limit(top_k)
+        )
+        
+        res = await db.execute(query)
+        items = res.scalars().all()
+        
+        # Convert to dict format
+        out = []
+        for item in reversed(items):  # Reverse to get chronological order
+            out.append({
+                "id": item.item_id,
+                "text": item.content,
+                "metadata": safe_json_load(item.meta_json),
+                "created_at": item.created_at.isoformat(),
+                "vector_id": item.vector_id
+            })
+        
+        return out
+    
     async def mark_item_deprecated(self, item_id: str, deprecated: bool = True) -> bool:
         """Soft delete context item."""
         async with AsyncSessionLocal() as db:
@@ -1448,9 +1490,17 @@ async def api_attach_evidence(
     ev: EvidenceCreateSchema,
     user: dict = Depends(get_current_user)
 ):
-    """Attach evidence to session."""
+    
+    """Attach evidence/metadata to session."""
+@app.get("/v1/relevant/{session_id}", dependencies=[Depends(auth_and_rate_limit)])
+async def api_rag(session_id: str, top_k: int = 10):
+    out = await mcp_service.get_relevant_context_for_rag(session_id=session_id, top_k=top_k)
+    return {"items": out}
+
     res = await mcp_service.attach_evidence(session_id, ev)
     return res
+
+
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
