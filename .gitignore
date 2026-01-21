@@ -334,3 +334,31 @@ config/local_*
 
 # Redis persistence
 dump.rdb
+# mcp/.dockerignore
+
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg
+*.egg-info
+dist
+build
+.env
+.venv
+venv/
+*.db
+*.sqlite
+*.sqlite3
+mcp_context.db
+.git
+.gitignore
+.pytest_cache
+.coverage
+htmlcov/
+*.log
+.DS_Store
+
+mcp_context.db
