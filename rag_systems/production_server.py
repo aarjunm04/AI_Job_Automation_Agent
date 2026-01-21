@@ -961,37 +961,12 @@ async def health_check():
         )
 
 
-@app.post("/rag/query", response_model=RAGQueryResponse)
-async def rag_query(
-    request: RAGQueryRequest,
-    api_key: str = Depends(check_rate_limit)
+@app.post("/rag/query", tags=["RAG"])
+def rag_query_context(
+    request: RAGRequest,
+    api_key: str = Depends(verify_api_key)
 ):
-    """Select best resume for job description"""
-    try:
-        job_payload = {"job_text": request.job_text}
-        result = select_resume(job_payload)
-    
-        return {
-    "selected_resume": result.get("top_resume_id"),
-    "selected_resume_path": result.get("selected_resume_path", ""),
-    "confidence_score": result.get("top_score", 0.0),
-    "matching_skills": result.get("matching_skills", []),
-    "chunks_retrieved": result.get("chunks_retrieved", []),
-    "session_id": request.session_id,
-    "timestamp": datetime.utcnow().isoformat() + "Z"  # ADD THIS LINE
-}
-
-    except Exception as e:
-        logger.error(f"Error in /rag/select: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to select resume: {str(e)}")
-
-
-@app.post("/rag/query", response_model=RAGQueryResponse, tags=["RAG"])
-async def rag_query(
-    request: RAGQueryRequest,
-    api_key: str = Depends(check_rate_limit)
-):
-    """Main RAG query endpoint with session management"""
+    """Query RAG system for relevant resume context."""
     import traceback
     start_time = time.time()
     
@@ -999,90 +974,59 @@ async def rag_query(
         # Get or create session
         session = session_manager.get_or_create(request.session_id)
         
-        # Build job payload (CORRECT FORMAT)
-        job_payload = {
-            "job_text": request.query
-        }
+        # Validate input - get query from either query or job_text field
+        query_text = request.query or request.job_text
         
-        # Call select_resume with CORRECT argument
-        result = select_resume(job_payload)  # <-- NOT job_description!
+        if not query_text or not query_text.strip():
+            raise HTTPException(
+                status_code=400,
+                detail="Either 'query' or 'job_text' must be provided and cannot be empty"
+            )
         
-        # Handle both dict and object responses
+        # Build job_payload for get_rag_context
+        job_payload = {"job_text": query_text.strip()}
+        
+        # Call get_rag_context (NOT select_resume!)
+        result = get_rag_context(
+            job_payload=job_payload,
+            top_k_chunks=request.top_k
+        )
+        
+        # Extract chunks from result
         if isinstance(result, dict):
-            top_resume_id = result.get("top_resume_id")
-            top_score = result.get("top_score", 0.0)
-            candidates = result.get("candidates", [])
+            chunks = result.get("chunks", []) or result.get("top_chunks", [])
+            metadata = result.get("metadata", {})
         else:
-            top_resume_id = getattr(result, "top_resume_id", None)
-            top_score = getattr(result, "top_score", 0.0)
-            candidates = getattr(result, "candidates", [])
+            chunks = getattr(result, "chunks", []) or getattr(result, "top_chunks", [])
+            metadata = getattr(result, "metadata", {})
         
-        if not top_resume_id:
-            raise ValueError("No resume selected by RAG system")
+        # Update session history
+        session.add_to_history(query_text, f"Retrieved {len(chunks)} chunks")
+        session.retrieved_context = chunks
         
-        # Get resume path
-        resume_path = get_resume_pdf_path(top_resume_id)
-        
-        # Build answer
-        answer = f"Best matching resume: {top_resume_id} (confidence: {top_score:.2f})"
-        
-        # Update session
-        session.add_to_history(request.query, answer)
-        session.metadata["last_resume_selected"] = top_resume_id
-        
-        # Get chunks if requested
-        chunks = None
-        if request.include_metadata:
-            try:
-                context_result = get_rag_context(job_payload, top_k_chunks=request.top_k)
-                if isinstance(context_result, dict):
-                    chunks = context_result.get("top_chunks", [])
-                else:
-                    chunks = getattr(context_result, "top_chunks", [])
-                session.retrieved_context = chunks or []
-            except Exception as e:
-                logger.warning(f"Failed to get RAG context: {e}")
-                chunks = []
-        
-        # Processing time
+        # Calculate processing time
         processing_time_ms = (time.time() - start_time) * 1000
         
-        # Build response
-        # Build proper response matching RAGQueryResponse model
-        response_data = {
-    "success": True,
-    "session_id": request.session_id,
-    "answer": f"Best matching resume: {result.get('top_resume_id', 'unknown')} (confidence: {result.get('top_score', 0.0):.2f})",
-    "selected_resume_id": result.get("top_resume_id", "unknown"),
-    "selected_resume_path": result.get("selected_resume_path", ""),
-    "confidence_score": result.get("top_score", 0.0),
-    "chunks": [],  # or populate from get_rag_context()
-    "metadata": {
-        "candidates_evaluated": len(result.get("candidates", [])),
-        "session_request_count": 1
-    },
-    "processing_time_ms": round((time.time() - start_time) * 1000, 2),
-    "timestamp": datetime.utcnow().isoformat() + "Z",
-    "cached": False
-}
-
-        return RAGQueryResponse(**response_data)
-
-        
+        # Return response
+        return {
+            "success": True,
+            "session_id": request.session_id,
+            "chunks": chunks,
+            "metadata": metadata,
+            "processing_time_ms": round(processing_time_ms, 2),
+            "timestamp": datetime.utcnow().isoformat() + "Z"
+        }
+            
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"RAG query error: {e}")
+        logger.error(f"Error in /rag/query: {e}")
         traceback.print_exc()
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail={
-                "success": False,
-                "error": str(e),
-                "error_code": "RAG_QUERY_ERROR",
-                "timestamp": datetime.utcnow().isoformat() + "Z"
-            }
+            status_code=500,
+            detail=f"RAG query failed: {str(e)}"
         )
+
     
 @app.post("/rag/select", tags=["RAG"])
 def rag_select_resume(
