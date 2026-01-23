@@ -362,3 +362,7 @@ htmlcov/
 .DS_Store
 
 mcp_context.db
+# Runtime DBs / vector stores
+*.db
+.chroma/
+rag_systems/.chroma/

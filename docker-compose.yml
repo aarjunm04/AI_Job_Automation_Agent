@@ -1,56 +1,191 @@
+# =============================================================================
+# AI Job Automation Agent - Production Docker Compose Setup
+# =============================================================================
+# Version: 3.8
+# Purpose: Orchestrate MCP Server, RAG Server, PostgreSQL, and Redis
+#
+# CRITICAL NOTES:
+# - n8n runs SEPARATELY as standalone infrastructure (not included)
+# - All services use env_file pointing to ~/narad.env (secrets management)
+# - Services communicate via internal docker network (service names as hostnames)
+# - Chrome extension & n8n reach services via localhost on host
+# - Data persistence: ./postgres_data/, ./dump.rdb, ./.chroma/, ./logs/
+# =============================================================================
+
+version: '3.8'
+
+networks:
+  ai_job_network:
+    driver: bridge
+    name: ai_job_network
+
+volumes:
+  # Named volume for ChromaDB vector store
+  chromadb_data:
+    driver: local
+
 services:
+  # =============================================================================
+  # PostgreSQL 15 - Primary database for MCP Server and system state
+  # =============================================================================
   postgres:
-    image: postgres:15
+    image: postgres:15-alpine
+    container_name: ai_postgres
     restart: unless-stopped
+    
     env_file:
-      - .env
+      - ~/narad.env
+    
     environment:
-      POSTGRES_DB: ${POSTGRES_DB}
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+      PGDATA: /var/lib/postgresql/data/pgdata
+    
+    # Direct bind mount to existing postgres_data directory
     volumes:
       - ./postgres_data:/var/lib/postgresql/data
+    
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB} || exit 1"]
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-ai_user} -d $${POSTGRES_DB:-ai_job_db} || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 6
+      start_period: 15s
+    
     networks:
-      - n8n-net
+      - ai_job_network
 
-  n8n:
-    image: n8nio/n8n:latest
+  # =============================================================================
+  # Redis 7 - In-memory cache and session store for MCP/RAG servers
+  # =============================================================================
+  redis:
+    image: redis:7-alpine
+    container_name: ai_redis
     restart: unless-stopped
-    env_file:
-      - .env
-    ports:
-      - "5678:5678"
-    environment:
-      - DB_TYPE=postgresdb
-      - DB_POSTGRESDB_HOST=postgres
-      - DB_POSTGRESDB_PORT=5432
-      - DB_POSTGRESDB_DATABASE=${POSTGRES_DB}
-      - DB_POSTGRESDB_USER=${POSTGRES_USER}
-      - DB_POSTGRESDB_PASSWORD=${POSTGRES_PASSWORD}
-      - N8N_BASIC_AUTH_ACTIVE=${N8N_BASIC_AUTH_ACTIVE}
-      - N8N_BASIC_AUTH_USER=${N8N_BASIC_AUTH_USER}
-      - N8N_BASIC_AUTH_PASSWORD=${N8N_BASIC_AUTH_PASSWORD}
-      - N8N_USER_MANAGEMENT_ENABLED=${N8N_USER_MANAGEMENT_ENABLED}
-      - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}
-      - GENERIC_TIMEZONE=${GENERIC_TIMEZONE}
-      - N8N_HOST=${N8N_HOST}
-      - WEBHOOK_URL=${WEBHOOK_URL}
+    
+    # Redis persistence configuration
+    command: redis-server --appendonly no --save 900 1 --save 300 10 --save 60 10000 --dir /data
+    
+    # Mount project root as /data so Redis writes dump.rdb to host
     volumes:
-      - ./n8n_data:/home/node/.n8n
+      - ./redis_data:/data
+    
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping | grep PONG || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+    
+    networks:
+      - ai_job_network
+
+  # =============================================================================
+  # MCP Server - FastAPI service for model context protocol operations
+  # =============================================================================
+  mcp-server:
+    build:
+      context: .
+      dockerfile: mcp/Dockerfile
+    
+    container_name: ai_mcp_server
+    restart: unless-stopped
+    
+    env_file:
+      - ~/narad.env
+    
+    environment:
+      # Service-specific overrides
+      DEBUG: "false"
+      LOG_LEVEL: "info"
+      # Ensure MCP uses containerized database
+      DATABASE_URL: "postgresql://$${POSTGRES_USER:-ai_user}:$${POSTGRES_PASSWORD}@postgres:5432/$${POSTGRES_DB:-ai_job_db}"
+      REDIS_URL: "redis://redis:6379/0"
+    
+    ports:
+      - "3001:3001"
+    
     depends_on:
       postgres:
         condition: service_healthy
+      redis:
+        condition: service_healthy
+    
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3001/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    
+    # Mount logs for debugging
+    volumes:
+      - ./logs:/app/logs
+    
     networks:
-      - n8n-net
+      - ai_job_network
+    
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+        reservations:
+          cpus: '1'
+          memory: 1G
 
-networks:
-  n8n-net:
-    driver: bridge
+  # =============================================================================
+  # RAG Server - FastAPI service for retrieval-augmented generation
+  # =============================================================================
+  rag-server:
+    build:
+      context: .
+      dockerfile: rag_systems/Dockerfile
+    
+    container_name: ai_rag_server
+    restart: unless-stopped
+    
+    env_file:
+      - ~/narad.env
+    
+    environment:
+      DEBUG: "false"
+      LOG_LEVEL: "info"
+      # ChromaDB is in project root .chroma directory
+      CHROMA_DIR: "/app/.chroma"
+      REDIS_URL: "redis://redis:6379/0"
+    
+    ports:
+      - "8090:8090"
+    
+    depends_on:
+      redis:
+        condition: service_healthy
+    
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8090/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    
+    # Mount ChromaDB directory from project root and logs
+    volumes:
+      - ./.chroma:/app/.chroma
+      - ./logs:/app/logs
+    
+    networks:
+      - ai_job_network
+    
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+        reservations:
+          cpus: '1'
+          memory: 1G
+
+
 
 
 
