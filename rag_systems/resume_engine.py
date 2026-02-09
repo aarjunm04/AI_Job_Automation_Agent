@@ -187,9 +187,12 @@ class ResumeEngine:
         # 3. UPSERT CHUNKS
         self.chroma.upsert_resume(resume_id, chunks, chunk_embeddings)
 
-        # 4. ANCHOR VECTOR
-        anchor_text = self._anchor_text(raw_text)
+        # 4. ANCHOR VECTOR (blend PDF + config keywords)
+        pdf_anchor = self._anchor_text(raw_text)
+        config_keywords = entry.role_focus  # Rich keywords from config
+        anchor_text = f"{config_keywords}\n\n{pdf_anchor}"  # Config first, then PDF
         anchor_embedding = self.embedder.embed_text(anchor_text)
+
 
         self.chroma.add_anchor(
             anchor_id=entry.vector_anchor_id,

@@ -1,68 +1,164 @@
 {
   "resumes": [
     {
-      "resume_id": "resume_ai_automation",
-      "label": "Aarjun_AIAutomation.pdf",
-      "role_focus": "ai_automation",
-      "languages": ["en"],
-      "local_path": "/Users/apple/TechStack/Resume/Aarjun_AIAutomation.pdf",
-      "embedding_version": "v1-text-embedding-3-small"
+      "resume_id": "resume_rag_engineer",
+      "label": "RAG Engineer",
+      "role_focus": "Retrieval-Augmented Generation specialist, FAISS vector store implementation, Pinecone vector database, ChromaDB operations, Weaviate integration, semantic search algorithms, document chunking strategies, embedding optimization techniques, LangChain retrieval chains, hybrid search dense sparse fusion, query expansion algorithms, reranking models, MMR diversification, semantic caching mechanisms, hallucination reduction techniques, context retrieval pipelines, similarity search optimization, document embedding generation, contextual matching systems, retrieval quality metrics",
+      "local_path": "/Users/apple/TechStack/Resume/Aarjun_RAGEngineer.pdf",
+      "embedding_version": "v2",
+      "languages": ["en"]
     },
     {
-      "resume_id": "resume_ai_ml",
-      "label": "Aarjun_AIML.pdf",
-      "role_focus": "ai_ml_generalist",
-      "languages": ["en"],
-      "local_path": "/Users/apple/TechStack/Resume/Aarjun_AIML.pdf",
-      "embedding_version": "v1-text-embedding-3-small"
+      "resume_id": "resume_prompt_engineer",
+      "label": "Prompt Engineer",
+      "role_focus": "Advanced prompt engineering specialist, chain-of-thought reasoning design, few-shot learning techniques, zero-shot prompting strategies, GPT-4 prompt optimization, Claude prompt crafting, instruction tuning methods, dynamic prompt template generation, role-based instruction architecture, multi-turn conversation design, prompt debugging methodologies, temperature control strategies, token optimization techniques, system prompt engineering, user prompt refinement, prompt evaluation metrics, context window optimization, prompt versioning systems, A/B testing prompts",
+      "local_path": "/Users/apple/TechStack/Resume/Aarjun_PromptEngineer.pdf",
+      "embedding_version": "v2",
+      "languages": ["en"]
     },
     {
-      "resume_id": "resume_data_engineering",
-      "label": "Aarjun_DataEngineering.pdf",
-      "role_focus": "data_engineering",
-      "languages": ["en"],
-      "local_path": "/Users/apple/TechStack/Resume/Aarjun_DataEngineering.pdf",
-      "embedding_version": "v1-text-embedding-3-small"
-    },
-    {
-      "resume_id": "resume_data_science",
-      "label": "Aarjun_DataScience.pdf",
-      "role_focus": "data_science",
-      "languages": ["en"],
-      "local_path": "/Users/apple/TechStack/Resume/Aarjun_DataScience.pdf",
-      "embedding_version": "v1-text-embedding-3-small"
-    },
-    {
-      "resume_id": "resume_generic",
-      "label": "Aarjun_Gen.pdf",
-      "role_focus": "general_ai_ml",
-      "languages": ["en"],
-      "local_path": "/Users/apple/TechStack/Resume/Aarjun_Gen.pdf",
-      "embedding_version": "v1-text-embedding-3-small"
+      "resume_id": "resume_llm_finetuning",
+      "label": "LLM Fine-tuning Specialist",
+      "role_focus": "LLM fine-tuning expert, LoRA Low-Rank Adaptation, QLoRA quantized adaptation, PEFT parameter-efficient fine-tuning, adapter-based tuning, layer freezing strategies, progressive layer unfreezing, gradient checkpointing optimization, mixed-precision training FP16, vocabulary expansion techniques, custom tokenization strategies, learning rate scheduling, layer-wise learning rates, domain adaptation methods, transfer learning optimization, model compression techniques, knowledge distillation, supervised fine-tuning SFT, RLHF reinforcement learning human feedback",
+      "local_path": "/Users/apple/TechStack/Resume/Aarjun_LLMFineTuning.pdf",
+      "embedding_version": "v2",
+      "languages": ["en"]
     },
     {
       "resume_id": "resume_llm_genai",
-      "label": "Aarjun_LLMGenAI.pdf",
-      "role_focus": "llm_genai",
-      "languages": ["en"],
+      "label": "GenAI Developer",
+      "role_focus": "Generative AI application developer, large language model integration, GPT-4 API applications, Claude API integration, autonomous multi-agent systems orchestration, LangChain framework expertise, CrewAI agent coordination, transformer architecture implementation, BERT model applications, text generation systems, creative AI solutions, conversational AI chatbots, intelligent assistant development, generative workflow automation, LLM-powered tools, model inference optimization, API rate limiting strategies, context management, LLM evaluation metrics",
       "local_path": "/Users/apple/TechStack/Resume/Aarjun_LLMGenAI.pdf",
-      "embedding_version": "v1-text-embedding-3-small"
+      "embedding_version": "v2",
+      "languages": ["en"]
+    },
+    {
+      "resume_id": "resume_computer_vision",
+      "label": "Computer Vision Engineer",
+      "role_focus": "Computer vision systems engineer, image processing algorithms, pattern recognition systems, object detection models YOLO, image segmentation techniques, visual pattern matching, spatial feature extraction, CNN convolutional neural networks, ResNet VGG architectures, OpenCV library expertise, video analysis pipelines, geospatial analysis, trajectory tracking systems, movement pattern recognition, optical flow estimation, image classification models, visual anomaly detection, keypoint detection, edge detection algorithms, feature matching techniques",
+      "local_path": "/Users/apple/TechStack/Resume/Aarjun_ComputerVision.pdf",
+      "embedding_version": "v2",
+      "languages": ["en"]
     },
     {
       "resume_id": "resume_mlops",
-      "label": "Aarjun_MLOps.pdf",
-      "role_focus": "mlops",
-      "languages": ["en"],
+      "label": "MLOps Engineer",
+      "role_focus": "MLOps infrastructure engineer, Kubernetes cluster orchestration, Docker containerization expertise, CI/CD pipeline automation GitHub Actions, model deployment automation, MLflow experiment tracking, Kubeflow pipeline orchestration, model versioning systems, A/B testing frameworks, Prometheus monitoring setup, Grafana dashboard creation, DVC data version control, automated model retraining, model registry management, production ML serving, infrastructure as code Terraform, deployment rollback strategies, canary deployments, blue-green deployments, model drift detection",
       "local_path": "/Users/apple/TechStack/Resume/Aarjun_MLOps.pdf",
-      "embedding_version": "v1-text-embedding-3-small"
+      "embedding_version": "v2",
+      "languages": ["en"]
+    },
+    {
+      "resume_id": "resume_data_engineering",
+      "label": "Data Engineer",
+      "role_focus": "Data engineering pipeline architect, Apache Airflow DAG orchestration, PySpark distributed processing, batch data processing, ETL pipeline design, data warehousing solutions, star schema dimensional modeling, Snowflake data warehouse, Amazon Redshift optimization, Apache Kafka data streaming, incremental loading strategies, data quality validation, SQL query optimization, database indexing strategies, data transformation logic, DBT data build tool, Talend integration, data governance policies, data lineage tracking",
+      "local_path": "/Users/apple/TechStack/Resume/Aarjun_DataEngineering.pdf",
+      "embedding_version": "v2",
+      "languages": ["en"]
+    },
+    {
+      "resume_id": "resume_data_science",
+      "label": "Data Scientist",
+      "role_focus": "Data science analytics specialist, statistical hypothesis testing, A/B testing design, exploratory data analysis EDA, business intelligence reporting, Tableau dashboard creation, Power BI visualization, predictive analytics modeling, time-series forecasting ARIMA, statistical significance testing, correlation analysis techniques, regression modeling, pandas data manipulation, SciPy statistical computing, Matplotlib Seaborn plotting, KPI metric definition, business insights generation, data storytelling, cohort analysis, customer segmentation",
+      "local_path": "/Users/apple/TechStack/Resume/Aarjun_DataScience.pdf",
+      "embedding_version": "v2",
+      "languages": ["en"]
+    },
+    {
+      "resume_id": "resume_applied_ml",
+      "label": "Applied ML Engineer",
+      "role_focus": "Applied machine learning practitioner, production model deployment, end-to-end ML system design, real-world business impact, XGBoost gradient boosting, scikit-learn model implementation, feature engineering pipelines, model serving APIs FastAPI, inference latency optimization, batch prediction systems, real-time prediction endpoints, model monitoring dashboards, performance tracking metrics, deployment automation scripts, model evaluation ROC AUC, confusion matrix analysis, precision recall tradeoffs, business metric alignment, stakeholder communication",
+      "local_path": "/Users/apple/TechStack/Resume/Aarjun_AppliedML.pdf",
+      "embedding_version": "v2",
+      "languages": ["en"]
+    },
+    {
+      "resume_id": "resume_ml_platform",
+      "label": "ML Platform Engineer",
+      "role_focus": "ML platform infrastructure builder, n8n workflow automation, containerized ML workflows, CI/CD for ML models, GitHub Actions automation, platform reliability engineering, feature store implementation Feast, model registry Artifactory, ML infrastructure scaling, resource allocation optimization, automated ML pipelines, horizontal scaling strategies, load balancing, platform monitoring observability, infrastructure cost optimization, multi-tenant platform design, self-service ML tools, platform SLA guarantees, developer experience tooling",
+      "local_path": "/Users/apple/TechStack/Resume/Aarjun_MLPlatform.pdf",
+      "embedding_version": "v2",
+      "languages": ["en"]
+    },
+    {
+      "resume_id": "resume_feature_engineering",
+      "label": "Feature Engineering Specialist",
+      "role_focus": "Feature engineering expert, feature extraction techniques, TF-IDF vectorization, embedding-based features, temporal feature creation, lag variables generation, rolling window statistics, aggregation features, ratio features calculation, interaction features, polynomial features, feature scaling normalization, categorical encoding one-hot, feature selection methods RFE, SMOTE synthetic oversampling, feature importance analysis SHAP, automated feature engineering Featuretools, domain-specific feature design, feature validation techniques",
+      "local_path": "/Users/apple/TechStack/Resume/Aarjun_FeatureEngineering.pdf",
+      "embedding_version": "v2",
+      "languages": ["en"]
+    },
+    {
+      "resume_id": "resume_ml_data_engineer",
+      "label": "ML Data Engineer",
+      "role_focus": "ML-focused data pipeline engineer, training data preparation, feature pipeline automation, ML data infrastructure, data versioning DVC, training dataset curation, feature serving systems, data augmentation pipelines synthetic data, ML data orchestration Airflow, data quality validation Great Expectations, preprocessing automation, feature store architecture, model training data management, data labeling workflows, annotation quality control, dataset splitting strategies, cross-validation data prep",
+      "local_path": "/Users/apple/TechStack/Resume/Aarjun_MLDataEngineer.pdf",
+      "embedding_version": "v2",
+      "languages": ["en"]
+    },
+    {
+      "resume_id": "resume_multilingual_nlp",
+      "label": "Multilingual NLP Engineer",
+      "role_focus": "Multilingual NLP specialist, cross-lingual model development, multilingual BERT mBERT, XLM-R cross-lingual models, language-agnostic processing, multilingual embeddings LASER, zero-shot cross-lingual transfer, language detection algorithms, multilingual tokenization, language-independent feature extraction, translation models, multilingual text classification, named entity recognition multilingual, code-switching handling, low-resource language adaptation, multilingual semantic similarity, cross-lingual information retrieval",
+      "local_path": "/Users/apple/TechStack/Resume/Aarjun_MultilingualNLP.pdf",
+      "embedding_version": "v2",
+      "languages": ["en"]
+    },
+    {
+      "resume_id": "resume_realtime_data_engineer",
+      "label": "Real-Time Data Engineer",
+      "role_focus": "Real-time streaming specialist, Apache Kafka producer consumer, Apache Flink stream processing, event-driven architecture design, sub-second latency systems, streaming analytics pipelines, continuous data ingestion, real-time ETL, streaming feature engineering, online learning systems, real-time model inference, event sourcing patterns, message queue optimization, backpressure handling, exactly-once semantics, windowing operations tumbling sliding, stateful stream processing, real-time aggregations, live dashboard feeds",
+      "local_path": "/Users/apple/TechStack/Resume/Aarjun_RealtimeDataEngineer.pdf",
+      "embedding_version": "v2",
+      "languages": ["en"]
+    },
+    {
+      "resume_id": "resume_ai_solutions_architect",
+      "label": "AI Solutions Architect",
+      "role_focus": "Enterprise AI architect, scalable system design, microservices architecture, distributed AI systems, cloud architecture AWS Azure GCP, API gateway design, service mesh implementation, multi-agent system architecture, fault-tolerant design patterns, high availability systems, load balancer configuration, caching strategies Redis, message broker design, database sharding strategies, CDN integration, security architecture OAuth, disaster recovery planning, technical documentation architecture diagrams",
+      "local_path": "/Users/apple/TechStack/Resume/Aarjun_AISolutionsArchitect.pdf",
+      "embedding_version": "v2",
+      "languages": ["en"]
+    },
+    {
+      "resume_id": "resume_ai_product_manager",
+      "label": "AI Product Manager",
+      "role_focus": "AI product management, product strategy roadmap, feature prioritization frameworks, stakeholder communication, cross-functional team leadership, agile scrum methodologies, product requirements documentation PRD, user story creation JIRA, success metrics OKR definition, product launch coordination, go-to-market strategy, user research interviews, competitive analysis, product-market fit validation, A/B testing strategy, data-driven decision making, product analytics Mixpanel, customer feedback analysis, product vision alignment",
+      "local_path": "/Users/apple/TechStack/Resume/Aarjun_AIProductManager.pdf",
+      "embedding_version": "v2",
+      "languages": ["en"]
+    },
+    {
+      "resume_id": "resume_ai_automation",
+      "label": "AI Automation Engineer",
+      "role_focus": "AI-powered automation specialist, n8n workflow builder, LangChain agent orchestration, CrewAI multi-agent coordination, AutoGen framework, autonomous system design, RPA robotic process automation, Playwright browser automation, Selenium web scraping, Make.com Zapier integrations, API automation REST GraphQL, webhook integration, intelligent workflow orchestration, zero-touch automation, event-driven triggers, scheduled task automation, error handling retry logic, workflow monitoring alerting",
+      "local_path": "/Users/apple/TechStack/Resume/Aarjun_AIAutomation.pdf",
+      "embedding_version": "v2",
+      "languages": ["en"]
     },
     {
       "resume_id": "resume_original",
-      "label": "Aarjun_OG.pdf",
-      "role_focus": "original_backup",
-      "languages": ["en"],
+      "label": "AI/ML Engineer",
+      "role_focus": "Full-stack machine learning engineer, ensemble model development XGBoost LightGBM, Random Forest classification, deep learning RNN LSTM GRU, neural network architecture design, end-to-end model development, hyperparameter tuning GridSearch Optuna, model evaluation cross-validation, scikit-learn pipelines, TensorFlow Keras, PyTorch neural nets, gradient descent optimization, backpropagation algorithms, overfitting regularization L1 L2 dropout, model interpretability LIME SHAP, complete ML lifecycle management",
       "local_path": "/Users/apple/TechStack/Resume/Aarjun_OG.pdf",
-      "embedding_version": "v1-text-embedding-3-small"
+      "embedding_version": "v2",
+      "languages": ["en"]
+    },
+    {
+      "resume_id": "resume_generic",
+      "label": "Versatile AI Engineer",
+      "role_focus": "Adaptable multi-domain AI engineer, flexible problem solver, full-stack AI development, diverse ML applications, cross-functional collaboration, rapid prototyping, MVP development, proof-of-concept implementation, generalist ML skills, NLP text processing, computer vision basics, recommendation systems, anomaly detection, time-series analysis, ensemble learning techniques, AutoML frameworks, model experimentation, Jupyter notebook analysis, integrated AI solutions, API development Flask",
+      "local_path": "/Users/apple/TechStack/Resume/Aarjun_Gen.pdf",
+      "embedding_version": "v2",
+      "languages": ["en"]
+    },
+    {
+      "resume_id": "resume_ai_ml",
+      "label": "AI/ML Algorithm Specialist",
+      "role_focus": "ML algorithm optimization expert, classification algorithm tuning, supervised learning logistic regression SVM, ensemble boosting bagging stacking, XGBoost CatBoost optimization, Random Forest hyperparameter tuning, gradient boosting machines GBM, decision tree pruning, feature importance Gini impurity, model selection cross-validation, imbalanced data handling SMOTE, algorithm complexity analysis big-O, convergence optimization, learning rate scheduling, early stopping callbacks, model calibration Platt scaling",
+      "local_path": "/Users/apple/TechStack/Resume/Aarjun_AIML.pdf",
+      "embedding_version": "v2",
+      "languages": ["en"]
     }
   ]
 }

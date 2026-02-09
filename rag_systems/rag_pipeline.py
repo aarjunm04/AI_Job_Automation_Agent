@@ -33,11 +33,11 @@ class EmbeddingProvider:
 @dataclass
 class GeminiEmbedder(EmbeddingProvider):
     """
-    Gemini embedding provider using text-embedding-004
+    Gemini embedding provider using Gemini embeddings API.
     Supports 768, 1536, or 3072 dimensions with MRL
     """
     api_key: str = field(default_factory=lambda: os.getenv("GEMINI_API_KEY_RAG", ""))
-    model: str = "models/text-embedding-004"
+    model: str = field(default_factory=lambda: os.getenv("GEMINI_EMBEDDING_MODEL", "models/gemini-embedding-001"))
     output_dimensionality: int = 768  # Recommended for storage efficiency
     task_type: str = "RETRIEVAL_DOCUMENT"  # For resume indexing
     timeout_seconds: float = 30
@@ -96,6 +96,13 @@ class GeminiEmbedder(EmbeddingProvider):
 
         except httpx.HTTPStatusError as e:
             logger.error(f"Gemini API HTTP error: {e.response.status_code} - {e.response.text}")
+            if e.response.status_code == 404:
+                raise RuntimeError(
+                    "Gemini embedding endpoint/model not found (404). "
+                    f"Configured model='{self.model}'. "
+                    "Set GEMINI_EMBEDDING_MODEL=models/gemini-embedding-001 "
+                    "or verify model access for your API key."
+                ) from e
             raise RuntimeError(f"Gemini API request failed: {e}") from e
         except httpx.RequestError as e:
             logger.error(f"Gemini API connection error: {e}")
@@ -165,8 +172,8 @@ def _sentence_split(text: str) -> List[str]:
 
 def chunk_text(
     text: str, 
-    max_tokens: int = 450, 
-    overlap: int = 80
+    max_tokens: int = 200, 
+    overlap: int = 50
 ) -> List[Dict[str, Any]]:
     """
     Split text into overlapping chunks for better retrieval
@@ -356,11 +363,10 @@ def create_default_pipeline(
         logger.warning("Using LocalDeterministicEmbedder (no API key found)")
         embedder = LocalDeterministicEmbedder(dim=768)
     else:
-        logger.info("Using GeminiEmbedder with text-embedding-004")
+        logger.info("Using GeminiEmbedder with model=%s", os.getenv("GEMINI_EMBEDDING_MODEL", "models/gemini-embedding-001"))
         embedder = GeminiEmbedder(
             output_dimensionality=768,
             task_type="RETRIEVAL_DOCUMENT"
         )
     
     return RAGPipeline(store=chroma_store, embedder=embedder)
-
