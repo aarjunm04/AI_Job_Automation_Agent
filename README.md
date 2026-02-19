@@ -533,23 +533,6 @@ AI_Job_Automation_Agent/
 │   ├── migrate_db.py               # Run Postgres schema migrations
 │   ├── embed_resumes.py            # Embed all 15 resume variants into ChromaDB
 │   └── health_check.py             # System-wide health verification
-│
-└── resumes/                        # Resume variants — git-ignored
-    ├── Aarjun_Gen.pdf              # General
-    ├── Aarjun_OG.pdf               # Original / Base
-    ├── Aarjun_AIAutomation.pdf
-    ├── Aarjun_AIML.pdf
-    ├── Aarjun_AISolutionsArchitect.pdf
-    ├── Aarjun_AppliedML.pdf
-    ├── Aarjun_DataEngineering.pdf
-    ├── Aarjun_DataScience.pdf
-    ├── Aarjun_FeatureEngineering.pdf
-    ├── Aarjun_LLMFineTuning.pdf
-    ├── Aarjun_LLMGenAI.pdf
-    ├── Aarjun_MLDataEngineer.pdf
-    ├── Aarjun_MLOps.pdf
-    ├── Aarjun_PromptEngineer.pdf
-    └── Aarjun_RAGEngineer.pdf
 ```
 
 ---
