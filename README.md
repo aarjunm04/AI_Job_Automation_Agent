@@ -1,880 +1,589 @@
-# 🤖 AI Job Automation Agent - Agentic AI Job Application Ecosystem
+# 🤖 AI Job Automation Agent
 
 <div align="center">
 
-[![Python Version](https://img.shields.io/badge/Python-3.9+-blue?style=flat-square&logo=python)](https://www.python.org/)
+**A fully autonomous, multi-agent job application ecosystem — discover, score, and apply to hundreds of remote jobs with minimal human intervention.**
+
+[![Python](https://img.shields.io/badge/Python-3.11+-blue?style=flat-square&logo=python)](https://www.python.org/)
+[![CrewAI](https://img.shields.io/badge/Framework-CrewAI-orange?style=flat-square)](https://crewai.com)
 [![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)](LICENSE)
-┌─────────────────────────────────────────────────────────────────────────────┐ │ AI JOB AUTOMATION AGENT ECOSYSTEM │ └─────────────────────────────────────────────────────────────────────────────┘
+[![Schedule](https://img.shields.io/badge/Schedule-Mon%2FThu%2FSat%2012%3A00%20IST-purple?style=flat-square)]()
+[![Budget](https://img.shields.io/badge/Budget-%2410%2Fmonth-red?style=flat-square)]()
+[![Status](https://img.shields.io/badge/Status-In%20Development-yellow?style=flat-square)]()
 
-Code
-                      ┌──────────────────────┐
-                      │  Master Orchestrator │
-                      │   (master_run.py)    │
-                      └──────────┬───────────┘
-                                 ��
-              ┌──────────────────┼──────────────────┐
-              │                  │                  │
-    ┌─────────▼────────┐  ┌──────▼──────┐  ┌──────▼──────────┐
-    │  Job Discovery   │  │ Job Analysis│  │ Automation      │
-    │  Workflow        │  │ Workflow    │  │ Workflow        │
-    └─────────┬────────┘  └──────┬──────┘  └──────┬──────────┘
-              │                  │                  │
-    ┌─────────▼────────────────────────────────────▼────┐
-    │         CORE SYSTEM ENGINES (Modular)             │
-    ├────────────────────────────────────────────────────┤
-    │                                                    │
-    │  ┌──────────────┐  ┌──────────────┐               │
-    │  │ Scraper Eng. │  │  AI Engine   │               │
-    │  └──────────────┘  └──────────────┘               │
-    │                                                    │
-    │  ┌──────────────┐  ┌──────────────┐               │
-    │  │ Resume Eng.  │  │Notion Eng.   │               │
-    │  └──────────────┘  └──────────────┘               │
-    │                                                    │
-    │  ┌──────────────┐  ┌──────────────┐               │
-    │  │Automation Eng│  │MCP Client    │               │
-    │  └──────────────┘  └──────────────┘               │
-    │                                                    │
-    └────────────────────────────────────────────────────┘
-                        │
-    ┌───────────────────┼───────────────────┐
-    │                   │                   │
-┌───▼────────┐  ┌──────▼──────┐  ┌────────▼───┐
-│ Notion DBs │  │ External    │  │ N8N WF     │
-│ (Job Data) │  │ Integrations│  │ Automation │
-└────────────┘  └─────────────┘  └────────────┘
-Code
+</div>
 
-### **Module Organization**
+---
 
-aarjunm04/AI_Job_Automation_Agent/ ├── master_run.py ← Main Entry Point (Orchestrator) ├── requirements.txt ← Python Dependencies ├── docker-compose.yml ← Docker Configuration │ ├── core/ ← Core Engine Implementations │ ├── ai_engine.py ← AI & Analysis Engine │ ├── scraper_engine.py ← Web Scraping Engine │ ├── resume_engine.py ← Resume Generation Engine │ ├── notion_engine.py ← Notion Database Engine │ ├── automation_engine.py ← Form Automation Engine │ └── init.py │ ├── agents/ ← AI Agent Implementations │ ├── discovery_agent.py ← Job Discovery Agent │ ├── analysis_agent.py ← Job Analysis Agent │ ├── application_agent.py ← Application Submission Agent │ └── coordinator_agent.py ← Multi-Agent Coordinator │ ├── scrapers/ ← Platform-Specific Scrapers │ ├── linkedin_scraper.py │ ├── indeed_scraper.py │ ├── glassdoor_scraper.py │ └── multi_platform_scraper.py │ ├── integrations/ ← External Service Integrations │ ├── notion_integration.py │ ├── openai_integration.py │ ├── anthropic_integration.py │ └── gmail_integration.py │ ├── mcp/ ← Model Context Protocol │ ├── mcp_client.py │ └── mcp_server.py │ ├── automation/ ← Automation Utilities │ ├── playwright_actions.py │ ├── form_filler.py │ └── browser_automation.py │ ├── rag_systems/ ← Retrieval Augmented Generation │ ├── job_rag_system.py │ ├── company_rag_system.py │ └── embeddings.py │ ├── config/ ← Configuration Management │ ├── settings.py │ ├── database_config.py │ └── prompts.yaml │ ├── chrome_extension/ ← Browser Extension (Frontend) │ ├── manifest.json │ ├── popup.html / popup.js │ └── content.js │ ├── n8n/ ← N8N Workflow Automation │ ├── discovery_workflow.json │ ├── analysis_workflow.json │ └── application_workflow.json │ ├── scripts/ ← Utility Scripts │ ├── setup_env.sh │ ├── migrate_data.py │ └── health_check.py │ └── assets/ ← Documentation Assets ├── diagrams/ ├── screenshots/ └── templates/
+## 📋 Table of Contents
 
-Code
+- [Overview](#-overview)
+- [How It Works](#-how-it-works)
+- [Agent System](#-agent-system)
+- [Platform Coverage](#-platform-coverage)
+- [Tech Stack](#-tech-stack)
+- [Scoring & Routing](#-scoring--routing)
+- [RAG Resume System](#-rag-resume-system)
+- [Infrastructure](#-infrastructure)
+- [Setup & Installation](#-setup--installation)
+- [Environment Variables](#-environment-variables)
+- [Project Roadmap](#-project-roadmap)
+- [Repository Structure](#-repository-structure)
+- [Budget](#-budget)
+- [License](#-license)
+
+---
+
+## 🎯 Overview
+
+The **AI Job Automation Agent** is a fully autonomous agentic job application system engineered to run **3 scheduled batch sessions per week** — Monday, Thursday, and Saturday at **12:00 PM IST** — and handle the complete end-to-end job application pipeline with minimal human intervention.
+
+| Metric | Target |
+|--------|--------|
+| Runs per week | 3 — Mon / Thu / Sat @ 12:00 PM IST |
+| Jobs discovered per run | ~150 (min 100 before safety-net activates) |
+| Auto-apply rate | 50–70% of eligible jobs per run |
+| Manual queue rate | 30–50% of eligible jobs per run |
+| Monthly applications | ~300+ across ~13 runs |
+| Total API budget | **$10/month hard cap** |
+| xAI spend cap per run | **$0.38 — enforced in code** |
+
+**The system executes two parallel application paths:**
+
+- **Automated Path (50–70%)** — Playwright browser automation handles form filling and submission end-to-end with zero user action needed.
+- **Manual Queue Path (30–50%)** — High-stakes, high-scoring (>0.90 fit), form-complex, or low-confidence jobs are queued in Notion with full metadata, resume recommendations, and match reasoning, surfaced via Chrome Extension for focused human review.
+
+> ⚠️ **Critical design rule:** Auto-apply routing is determined by **form complexity + platform compliance ONLY**. Fit score is used for ranking and prioritisation — never for routing decisions.
+
+---
+
+## ⚙️ How It Works
+
+Every run follows this exact sequence, orchestrated by **CrewAI in hierarchical mode** with the Master Agent as crew manager:
+
+```
+GitHub Actions Cron  →  0 6 * * 1,4,6  (UTC = 12:00 PM IST)
+         │
+         ▼
+┌──────────────────────────────────────────┐
+│            Master Agent                  │
+│  (CrewAI Crew Manager)                   │
+│  Groq llama-3.3-70b-versatile            │
+│  → Session boot · budget enforcement     │
+│  → Delegates sequentially to all workers │
+└────────────────┬─────────────────────────┘
+                 │
+                 ▼
+┌──────────────────────────────────────────┐
+│            Scraper Agent                 │
+│  Perplexity sonar                        │
+│  → JobSpy (LinkedIn + Indeed)            │
+│  → Playwright (8 platforms)              │
+│  → REST APIs (RemoteOK + Himalayas)      │
+│  → SerpAPI (Google Jobs supplementary)  │
+│  → Normalise · deduplicate · fill gaps  │
+│  WRITES → Postgres jobs table            │
+└────────────────┬─────────────────────────┘
+                 │
+                 ▼
+┌──────────────────────────────────────────┐
+│           Analyser Agent                 │
+│  xAI grok-4-fast-reasoning               │
+│  → Eligibility filter                    │
+│  → Fit scoring (0.0 – 1.0)              │
+│  → RAG resume match (ChromaDB)           │
+│  → Routing decision (form complexity)    │
+│  WRITES → jobs table · applications      │
+│           table · Notion Applications DB │
+└────────────────┬─────────────────────────┘
+                 │
+                 ▼
+┌──────────────────────────────────────────┐
+│            Apply Agent                   │
+│  xAI grok-4-1-fast-reasoning             │
+│  → Platform-specific Playwright scripts  │
+│  → LLM form reasoning for complex fields │
+│  → Multi-layer submission proof capture  │
+│  → Retry ×2 on CAPTCHA / crash           │
+│  WRITES → applications table             │
+└────────────────┬─────────────────────────┘
+                 │
+                 ▼
+┌──────────────────────────────────────────┐
+│           Tracker Agent                  │
+│  Groq llama-3.3-70b-versatile            │
+│  → Postgres audit logging                │
+│  → Notion Job Tracker DB sync            │
+│  → AgentOps run summary report           │
+│  → run_session marked complete           │
+└──────────────────────────────────────────┘
+```
+
+All agent handoffs persist state exclusively to **Postgres tables** — making every step fully traceable, restartable from checkpoint, and independently debuggable without re-running the full pipeline.
+
+### Manual Apply Path (Chrome Extension)
+
+Triggered independently by the user outside the automated pipeline:
+
+1. User reviews queued jobs in Notion Applications DB
+2. Opens job URL in Chrome — Extension detects the application form
+3. Extension calls **FastAPI → ChromaDB RAG** → returns best resume + match reasoning + autofill data
+4. Extension autofills all detectable fields — user handles custom questions manually
+5. On submission: Extension calls FastAPI → logs to Postgres `applications` (status: `applied_manual`) → triggers Notion sync
+
+---
+
+## 🤖 Agent System
+
+The system uses **CrewAI** (open-source, free) as the agent orchestration framework. All agents run in a single Python process per session. Every agent capability — Postgres reads/writes, Playwright calls, RAG queries, Notion sync — is implemented as a `@tool` decorated Python function registered to its agent.
+
+| Agent | Role | Primary LLM | Fallback 1 | Fallback 2 | Phase |
+|-------|------|-------------|------------|------------|-------|
+| **Master Agent** | Crew Manager — Orchestrator | Groq `llama-3.3-70b-versatile` | Cerebras `llama-3.3-70b` | — | 1 + 2 |
+| **Scraper Agent** | Job Discovery Specialist | Perplexity `sonar` | *(no fallback — web search irreplaceable)* | — | 1 + 2 |
+| **Analyser Agent** | Evaluation & Scoring Specialist | xAI `grok-4-fast-reasoning` | SambaNova `Llama-3.1-70B` | Cerebras `llama-3.3-70b` | 1 + 2 |
+| **Apply Agent** | Application Submission Specialist | xAI `grok-4-1-fast-reasoning` | SambaNova `Llama-3.1-70B` | Cerebras `llama-3.3-70b` | 1 + 2 |
+| **Tracker Agent** | Record Keeper & Data Persistence | Groq `llama-3.3-70b-versatile` | Cerebras `llama-3.3-70b` | — | 1 + 2 |
+| **Developer Agent** | System Improvement Analyst | xAI `grok-3-mini-latest` | Perplexity `sonar` | — | **Phase 2 only** |
+
+**Fallback behaviour:**
+- **Master / Tracker:** 1-level fallback (Cerebras). Failure in these agents degrades logging — does not kill the run.
+- **Analyser / Apply:** 2-level fallback chain (SambaNova → Cerebras). These agents are run-critical; chain exhaustion routes remaining jobs to manual queue and continues.
+- **Scraper:** No fallback. Perplexity `sonar`'s web-grounded search + normalisation cannot be replicated by a pure inference LLM. Retries ×3, then continues with raw platform data.
+- **Developer Agent (Phase 2):** Runs outside the main pipeline. Analyses AgentOps traces across sessions and writes structured improvement suggestions to `developer_notes` Postgres table. Suggestion-only — never autonomously modifies production.
+
+---
+
+## 🌐 Platform Coverage
+
+### Primary Platforms (10) — Phase 1 + 2
+
+| Platform | Discovery Method | Category |
+|----------|-----------------|----------|
+| LinkedIn | JobSpy | Professional Network |
+| Indeed | JobSpy | General Job Board |
+| Wellfound | Playwright + GraphQL | Startup Jobs |
+| RemoteOK | REST API (JSON) | Remote Job Board |
+| WeWorkRemotely | Playwright | Remote-First Jobs |
+| YC / Work at a Startup | Playwright | YC Startup Jobs |
+| Himalayas | REST API (public) | Remote Aggregator |
+| Turing | Playwright | Premium Talent |
+| Crossover | Playwright | Premium Remote |
+| Arc.dev | Playwright + GraphQL | Developer Marketplace |
+
+### Safety-Net Platforms (2) — auto-activate when run < 100 jobs
+
+| Platform | Discovery Method |
+|----------|-----------------|
+| Nodesk | Playwright |
+| Toptal | Playwright |
+
+### Phase 2 Platforms (2)
+
+| Platform | Discovery Method |
+|----------|-----------------|
+| Remotive | REST API |
+| Jooble | REST API (API key required) |
+
+### Supplementary Discovery
+
+**SerpAPI** — Google Jobs search results API (NOT an LLM).
+4 accounts × 250 credits = **1,000 credits/month** available.
+
+### Proxy Configuration
+
+**Webshare static proxies** — 20 total (2 accounts × 10 proxies), 1 GB bandwidth/account/month, round-robin rotation. Budget is separate from the $10/month LLM cap.
 
 ---
 
 ## 🛠️ Tech Stack
 
-### **Language Composition**
-- **Python** 69.2% - Core automation engine, AI, and logic
-- **JavaScript** 17.8% - Chrome extension, frontend interactions
-- **CSS** 5.4% - Styling for UI components
-- **HTML** 4.3% - Extension and web templates
-- **Shell** 3.3% - Deployment and setup scripts
+| Layer | Technology | Purpose | Tier |
+|-------|-----------|---------|------|
+| Language | Python 3.11+ | All agents · orchestration · services | Free |
+| Agent Framework | CrewAI (OSS) | Agent roles · task definitions · hierarchical crew execution · `@tool` functions | Free |
+| Job Scraping | JobSpy | LinkedIn + Indeed structured discovery | Free |
+| Browser Automation | Playwright (Chromium) | 8-platform scraping + form filling + auto-apply | Free |
+| Job APIs | requests | RemoteOK + Himalayas REST calls | Free |
+| Supplementary Discovery | SerpAPI | Google Jobs search results (4 accounts · 1K credits/month) | Free tier |
+| Primary DB (Prod) | PostgreSQL via Supabase | System of record — jobs · applications · run_sessions · audit_logs | Free tier |
+| Primary DB (Dev) | PostgreSQL (local Docker) | Dev mirror — switched via `ACTIVE_DB` env var | Free |
+| Vector Store | ChromaDB (local) | Resume + job embeddings for RAG matching | Free |
+| Primary Embeddings | NVIDIA NIM `nv-embedqa-e5-v5` | 1024-dim embeddings | Free tier |
+| Fallback Embeddings | Gemini `text-embedding-004` | 768-dim fallback if NVIDIA NIM unavailable | Free tier |
+| Cache / Queue | Redis (local Docker) | Phase 1: response caching · Phase 2: full job queue | Free |
+| User Tracking UI | Notion API v1 | Applications DB + Job Tracker DB (UI only — not source of truth) | Free tier |
+| API Layer | FastAPI (slim) | Chrome Extension HTTP bridge · RAG proxy · manual apply logging | Free |
+| Manual Assist | Chrome Extension v1 | Autofill · match analysis · resume suggestion · tracking | Free |
+| Containerisation | Docker + Docker Compose | Full local dev stack | Free |
+| CI/CD + Cron Scheduler | GitHub Actions | `0 6 * * 1,4,6` UTC · CI/CD pipelines | Free tier |
+| Observability | AgentOps | Agent traces · LLM cost tracking · error patterns | Free tier |
+| Secrets Management | `~/narad.env` | Single git-ignored env file — passed to Docker via `--env-file` | Free |
 
-### **Key Technologies**
+### LLM Provider Summary
 
-| Category | Technologies |
-|----------|--------------|
-| **AI & LLMs** | Anthropic Claude, OpenAI, Perplexity AI |
-| **Web Scraping** | Scrapy, Selenium, Playwright, BeautifulSoup4, Splash |
-| **Automation** | Playwright, Undetected-ChromeDriver |
-| **Database** | Notion API, PostgreSQL, MongoDB, Redis |
-| **Web Framework** | FastAPI, Flask, Starlette |
-| **Data Processing** | Pandas, NumPy, Scikit-learn |
-| **Document Processing** | PyPDF2, pdfplumber, PyLaTeX, ReportLab |
-| **Vision/OCR** | EasyOCR, OpenCV, Pytesseract |
-| **Protocol** | Model Context Protocol (MCP) |
-| **Async** | asyncio, aiohttp, asyncpg |
-| **Task Queue** | Celery |
-| **DevOps** | Docker, Docker Compose |
+| Provider | Models Used | Tier | Monthly Budget |
+|----------|------------|------|----------------|
+| **xAI** | `grok-4-fast-reasoning` (Analyser) · `grok-4-1-fast-reasoning` (Apply) · `grok-3-mini-latest` (Dev Agent P2) | Paid | **$5/month** |
+| **Perplexity** | `sonar` (Scraper) · `sonar` fallback (Dev Agent P2) | Paid | **$5/month** |
+| **Groq** | `llama-3.3-70b-versatile` (Master + Tracker) | Free tier | — |
+| **Cerebras** | `llama-3.3-70b` (All agent fallbacks) | Free tier | — |
+| **SambaNova** | `Llama-3.1-70B` (Analyser + Apply fallback 1) | Free tier | — |
+| **NVIDIA NIM** | `nv-embedqa-e5-v5` (Primary embeddings) | Free tier | — |
+| **Google Gemini** | `text-embedding-004` (Fallback embeddings) | Free tier | — |
 
-### **Python Dependencies Highlights**
-Core: anthropic, openai, perplexityai Scraping: scrapy, selenium, playwright, beautifulsoup4, lxml, selectolax Automation: undetected-chromedriver, playwright Data: pandas, numpy, scikit-learn, sentence-transformers AI/ML: tiktoken, nltk, spacy, textblob APIs: notion-client, google-api-python-client, requests Web: fastapi, flask, flask-cors, starlette, uvicorn Database: sqlalchemy, asyncpg, redis Document: PyPDF2, pdfplumber, pylatex, reportlab, pillow Testing: pytest, pytest-asyncio, pytest-cov, pytest-mock
-
-Code
+> **Hard cap: $10/month total LLM spend · $0.38/run xAI cap — both enforced in code. Run aborts gracefully if cap is hit.**
 
 ---
 
-## 📦 Installation
+## 📊 Scoring & Routing
 
-### **Prerequisites**
-- Python 3.9 or higher
-- Docker & Docker Compose (optional but recommended)
+Every eligible job is scored on a **0.0 – 1.0 fit scale** by the Analyser Agent using skills match, experience alignment, role relevance, and seniority fit. Routing is a separate decision based solely on form complexity and platform compliance.
+
+| Fit Score | Action |
+|-----------|--------|
+| `< 0.40` | ❌ Skip entirely — no Notion entry · no Postgres record |
+| `0.40 – 0.49` | 📋 Manual queue only — low confidence, never auto-applied |
+| `0.50 – 0.74` | ⚖️ Route by form complexity — auto-apply or manual |
+| `≥ 0.75` | ✅ Route by form complexity — auto-apply or manual |
+| `> 0.90` | 📋 **Force manual queue** — high match = high stakes, always manual |
+
+> **Routing rule: Form complexity + platform compliance ONLY. Fit score is used for ranking and prioritisation — never for auto-apply routing decisions.**
+
+---
+
+## 🧠 RAG Resume System
+
+The RAG system matches every scored job to the optimal resume variant using a local ChromaDB vector search against all 15 resume embeddings.
+
+| Config | Detail |
+|--------|--------|
+| Vector Store | ChromaDB (fully local, persistent on disk) |
+| Primary Embeddings | NVIDIA NIM `nv-embedqa-e5-v5` — 1024 dimensions |
+| Fallback Embeddings | Gemini `text-embedding-004` — 768 dimensions |
+| Total Resume Variants | **15** |
+| RAG Failure Fallback | `Aarjun_Gen.pdf` assigned as default if ChromaDB query fails |
+
+### Resume Variants
+
+| # | File | Type |
+|---|------|------|
+| 1 | `Aarjun_Gen.pdf` | General |
+| 2 | `Aarjun_OG.pdf` | Original / Base |
+| 3 | `Aarjun_AIAutomation.pdf` | Domain-specific |
+| 4 | `Aarjun_AIML.pdf` | Domain-specific |
+| 5 | `Aarjun_AISolutionsArchitect.pdf` | Domain-specific |
+| 6 | `Aarjun_AppliedML.pdf` | Domain-specific |
+| 7 | `Aarjun_DataEngineering.pdf` | Domain-specific |
+| 8 | `Aarjun_DataScience.pdf` | Domain-specific |
+| 9 | `Aarjun_FeatureEngineering.pdf` | Domain-specific |
+| 10 | `Aarjun_LLMFineTuning.pdf` | Domain-specific |
+| 11 | `Aarjun_LLMGenAI.pdf` | Domain-specific |
+| 12 | `Aarjun_MLDataEngineer.pdf` | Domain-specific |
+| 13 | `Aarjun_MLOps.pdf` | Domain-specific |
+| 14 | `Aarjun_PromptEngineer.pdf` | Domain-specific |
+| 15 | `Aarjun_RAGEngineer.pdf` | Domain-specific |
+
+---
+
+## ⚙️ Infrastructure
+
+### Data Layer
+
+| Store | Technology | Role |
+|-------|-----------|------|
+| System of Record | PostgreSQL — Supabase (prod) / local Docker (dev) | `jobs` · `applications` · `run_sessions` · `audit_logs` |
+| Vector Store | ChromaDB (local) | Resume + job embeddings — RAG only |
+| Cache / Queue | Redis (local Docker) | Phase 1: response caching · Phase 2: full queue + inter-service cache |
+| User UI | Notion API v1 | Applications DB · Job Tracker DB — read/write UI surface only |
+
+Switch between prod and dev database via `ACTIVE_DB` environment variable (`supabase` or `local`).
+
+### Notion Databases
+
+**Applications DB** — manual queue jobs awaiting user review:
+`Job Title` · `Company` · `Job URL` · `Application Deadline` · `Platform` · `Status` · `Fit Score` · `Resume Suggested` · `Match Reasoning` · `CTC` · `Priority` · `Run ID`
+
+**Job Tracker DB** — applied jobs pipeline:
+`Job Title` · `Company` · `Job URL` · `Stage` · `Date Applied` · `Platform` · `Applied Via` · `CTC` · `Notes` · `Run ID`
+
+### Cron Schedule
+
+```
+GitHub Actions Cron:  0 6 * * 1,4,6
+Timezone:             UTC → 12:00 PM IST
+Days:                 Monday (1) · Thursday (4) · Saturday (6)
+Approx runs/month:    ~13
+```
+
+### Secrets Management
+
+All secrets live in `~/narad.env` — a single, **git-ignored** file that is the source of truth for all API keys, DB URLs, and config values. Auto-loaded by the shell and passed to all Docker containers via `--env-file ~/narad.env`.
+
+---
+
+## 🔧 Setup & Installation
+
+### Prerequisites
+
+- Python 3.11+
+- Docker + Docker Compose
 - Git
-- PostgreSQL (optional, for advanced features)
-- Modern web browser (Chrome/Chromium for extensions)
+- Chrome / Chromium (for extension)
 
-### **Step 1: Clone Repository**
-bash
+### Step 1 — Clone Repository
+
+```bash
 git clone https://github.com/aarjunm04/AI_Job_Automation_Agent.git
 cd AI_Job_Automation_Agent
-Step 2: Set Up Python Environment
-bash
-# Create virtual environment
-python -m venv venv
+```
 
-# Activate virtual environment
-# On Linux/Mac:
-source venv/bin/activate
-# On Windows:
-venv\Scripts\activate
-Step 3: Install Dependencies
-bash
-pip install --upgrade pip
-pip install -r requirements.txt
+### Step 2 — Configure Environment
 
-# Optional: Install development dependencies
-pip install pytest pytest-cov pytest-asyncio
-Step 4: Configure Environment Variables
-bash
-# Copy example environment file
-cp .env.example .env
+```bash
+# Create the global env file (single source of truth — git-ignored)
+touch ~/narad.env
+nano ~/narad.env   # Add all required variables — see Environment Variables section below
+```
 
-# Edit configuration with your API keys and credentials
-nano .env  # or use your preferred editor
-Required Environment Variables:
+### Step 3 — Boot Full Stack
 
-bash
-# AI APIs
-ANTHROPIC_API_KEY=your_anthropic_key
-OPENAI_API_KEY=your_openai_key
-PERPLEXITY_API_KEY=your_perplexity_key
+```bash
+# Start all services: Postgres, Redis, FastAPI
+docker-compose --env-file ~/narad.env up -d
 
-# Job Platforms
-LINKEDIN_EMAIL=your_email@example.com
-LINKEDIN_PASSWORD=your_password
-INDEED_API_KEY=your_indeed_key
-
-# Database
-NOTION_API_KEY=your_notion_token
-DATABASE_URL=postgresql://user:password@localhost/db_name
-
-# Integrations
-GMAIL_CLIENT_ID=your_gmail_client_id
-GMAIL_CLIENT_SECRET=your_gmail_client_secret
-OVERLEAF_API_KEY=your_overleaf_key
-
-# System
-TIMEZONE=Asia/Kolkata
-DAILY_RUN_TIME=09:00
-Step 5: (Optional) Using Docker
-bash
-# Build and start services
-docker-compose up -d
-
-# Initialize database
-docker exec ai_job_automation python scripts/migrate_data.py
-
-# Check container status
+# Verify all containers are healthy
 docker-compose ps
-Step 6: Verify Installation
-bash
-# Run health check
-python master_run.py --mode health-check
+```
 
-# You should see output like:
-# ✅ System Health Check: All components healthy
-🚀 Quick Start
-Basic Usage - Discover Jobs
-bash
-# Discover new jobs from all platforms
-python master_run.py --mode discover
+### Step 4 — Install Python Dependencies
 
-# Discover with custom limit
-python master_run.py --mode discover --limit 100
-Analyze Discovered Jobs
-bash
-# Analyze jobs for matching
-python master_run.py --mode analyze
-
-# Analyze with limit
-python master_run.py --mode analyze --limit 20
-Submit Applications
-bash
-# Apply to high-priority jobs
-python master_run.py --mode apply
-
-# Apply with limit
-python master_run.py --mode apply --limit 5
-Complete End-to-End Automation
-bash
-# Full automation: Discover → Analyze → Apply
-python master_run.py --mode full-automation
-Health Check
-bash
-# Verify all systems are operational
-python master_run.py --mode health-check
-Debug Mode
-bash
-# Run with detailed logging
-python master_run.py --mode discover --debug
-📊 Workflow Diagrams
-1. Job Discovery Workflow
-Code
-┌─────────────────────────────────────────────────────────────────────┐
-│  JOB DISCOVERY WORKFLOW - SCRAPE & COLLECT                          │
-└─────────────────────────────────────────────────────────────────────┘
-
-┌──────────────────┐
-│  Start Discovery │
-└────────┬─────────┘
-         │
-         ▼
-    ┌─────────────────────────┐
-    │ Load Search Criteria     │
-    │ - Job Titles            │
-    │ - Locations             │
-    │ - Salary Range          │
-    └────────────┬────────────┘
-                 │
-    ┌────────────▼────────────────────────────────────────┐
-    │ Multi-Platform Scraping (Parallel)                 │
-    ├────────────────────────────────────────────────────┤
-    │ ┌─────────────┐  ┌──────────────┐  ┌────────────┐ │
-    │ │  LinkedIn   │  │     Indeed   │  │ Glassdoor  │ │
-    │ └──────┬──────┘  └───────┬──────┘  └─────┬──────┘ │
-    │        │                 │                │        │
-    │ ┌──────▼──────┐  ┌──────▼──────┐  ┌─────▼──────┐ │
-    │ │ AngelList   │  │   Dice      │  │  ZipRecruit│ │
-    │ └──────┬──────┘  └───────┬──────┘  └─────┬──────┘ │
-    │        └──────────────┬──────────────────┘        │
-    └──────────────────┬───────────────────────────────┘
-                       │
-                       ▼
-            ┌──────────────────────────┐
-            │ Deduplication & Cleaning │
-            │ - Remove Duplicates      │
-            │ - Normalize Data         │
-            │ - Extract Metadata       │
-            └────────────┬─────────────┘
-                         │
-                         ▼
-            ┌──────────────────────────┐
-            │ Convert to Standard      │
-            │ JobApplication Format    │
-            └────────────┬─────────────┘
-                         │
-                         ▼
-            ┌──────────────────────────┐
-            │ Save to Notion DB        │
-            │ (Applications Database)  │
-            └────────────┬─────────────┘
-                         │
-                         ▼
-            ┌──────────────────────────┐
-            │ Return Discovery Summary │
-            │ - Jobs Found: X          │
-            │ - Duplicates: Y          │
-            │ - Stored: Z              │
-            └──────────────────────────┘
-2. Job Analysis & Matching Workflow
-Code
-┌─────────────────────────────────────────────────────────────────────┐
-│  JOB ANALYSIS WORKFLOW - AI-POWERED MATCHING                        │
-└─────────────────────────────────────────────────────────────────────┘
-
-┌───────��──────────┐
-│ Start Analysis   │
-└────────┬─────────┘
-         │
-         ▼
-  ┌─────────────────────────┐
-  │ Load Jobs from Notion   │
-  │ Filter: DISCOVERED      │
-  │ Status                  │
-  └────────────┬────────────┘
-               │
-               ▼
-       ┌──────────────────┐
-       │ Load User Profile│
-       │ - Skills         │
-       │ - Experience     │
-       │ - Preferences    │
-       └────────┬─────────┘
-                │
-                ▼
-    ┌───────────────────────────┐
-    │ AI Analysis Loop (Per Job)│
-    ├───────────────────────────┤
-    │                           │
-    │  ┌─────────────────────┐  │
-    │  │ Extract Job Details │  │
-    │  │ - Title, Company    │  │
-    │  │ - Description       │  │
-    │  │ - Requirements      │  │
-    │  └──────────┬──────────┘  │
-    │             │             │
-    │  ┌──────────▼──────────┐  │
-    │  │ Semantic Matching   │  │
-    │  │ - Compare Skills    │  │
-    │  │ - Experience Level  │  │
-    │  │ - Requirements      │  │
-    │  └──────────┬──────────┘  │
-    │             │             │
-    │  ┌──────────▼──────────┐  │
-    │  │ Calculate Match     │  │
-    │  │ Score (0-100%)      │  │
-    │  └──────────┬──────────┘  │
-    │             │             │
-    │  ┌──────────▼──────────┐  │
-    │  │ Determine Status    │  │
-    │  │ ≥85% → AUTO_APPLY   │  │
-    │  │ 70-85% → REVIEW     │  │
-    │  │ <70% → REJECT       │  │
-    │  └──────────┬──────────┘  │
-    │             │             │
-    │  ┌──────────▼──────────┐  │
-    │  │ Generate Strategy   │  │
-    │  │ - Key Skills        │  │
-    │  │ - Cover Letter Tips │  │
-    │  └──────────┬──────────┘  │
-    │             │             │
-    │  ┌──────────▼──────────┐  │
-    │  │ Update in Notion    │  │
-    │  │ - Match Score       │  │
-    │  │ - Status            │  │
-    │  │ - Analysis          │  │
-    │  └────────────────────┘  │
-    │           │              │
-    └───────────┼──────────────┘
-                │
-                ▼ (Next Job)
-            ┌────────────┐
-            │ More Jobs? │
-            └──┬──────┬──┘
-           Yes│      │No
-              │      └────────────────────┐
-              │                           │
-              ▼                           ▼
-        (Repeat Loop)         ┌──────────────────────┐
-                              │ Return Analysis      │
-                              │ Summary              │
-                              │ - Analyzed: X        │
-                              │ - High Priority: Y   │
-                              │ - Ready to Apply: Z  │
-                              └──────────────────────┘
-3. Automated Application Submission Workflow
-Code
-┌──────────────────────────────��───────────────────────────────────────┐
-│  AUTOMATED APPLICATION WORKFLOW - SUBMIT APPLICATIONS                │
-└──────────────────────────────────────────────────────────────────────┘
-
-┌──────────────────┐
-│ Start Apply Mode │
-└────────┬─────────┘
-         │
-         ▼
-    ┌──────────────────────────┐
-    │ Get High-Priority Jobs   │
-    │ Filter: STAGED_FOR_APPLY │
-    │ Sort: Match Score DESC   │
-    └────────────┬─────────────┘
-                 │
-                 ▼
-    ┌───────────────────────────────────┐
-    │ Application Processing Loop       │
-    ├───────────────────────────────────┤
-    │                                   │
-    │  ┌────────────────────────────┐   │
-    │  │ Load Job & User Profile    │   │
-    │  └────────────┬───────────────┘   │
-    │               │                   │
-    │  ┌────────────▼───────────────┐   │
-    │  │ Generate Optimized Resume  │   │
-    │  │ - Parse Job Description    │   │
-    │  │ - Extract Keywords         │   │
-    │  │ - Prioritize Skills        │   │
-    │  │ - Generate ATS-Friendly    │   │
-    │  │ - Calculate ATS Score      │   │
-    │  │ - Export PDF               │   │
-    │  └────────────┬───────────────┘   │
-    │               │                   │
-    │  ┌────────────▼───────────────┐   │
-    │  │ Company Intelligence       │   │
-    │  │ Research                   │   │
-    │  │ - Company Overview         │   │
-    │  │ - Culture Insights         │   │
-    │  │ - Recent News              │   │
-    │  └────────────┬───────────────┘   │
-    │               │                   │
-    │  ┌────────────▼───────────────┐   │
-    │  │ Generate Cover Letter      │   │
-    │  │ - AI-Personalized Content  │   │
-    │  │ - Company-Specific         │   │
-    │  │ - Role-Aligned             │   │
-    │  └────────────┬───────────────┘   │
-    │               │                   │
-    │  ┌────────────▼───────────────┐   │
-    │  │ Prepare Application Job    │   │
-    │  │ Package Data               │   │
-    │  └────────────┬───────────────┘   │
-    │               │                   │
-    │  ┌────────────▼───────────────┐   │
-    │  │ Automated Form Submission  │   │
-    │  │ - Open Application URL     │   │
-    │  │ - Detect Form Fields       │   │
-    │  │ - Fill with Parsed Data    │   │
-    │  │ - Handle CAPTCHA           │   │
-    │  │ - Submit Application       │   │
-    │  └────────────┬───────────────┘   │
-    │               │                   │
-    │  ┌────────────▼───────────────┐   │
-    │  │ Handle Result              │   │
-    │  │ - Success: Move to Tracker │   │
-    │  │ - Failure: Log & Notify    │   │
-    │  └────────────┬───────────────┘   │
-    │               │                   │
-    │  ┌────────────▼───────────────┐   │
-    │  │ Rate Limiting              │   │
-    │  │ Wait 60 seconds             │   │
-    │  └────────────┬────────���──────┘   │
-    │               │                   │
-    └───────────────┼───────────────────┘
-                    │
-                    ▼ (Next Job)
-                ┌────────────┐
-                │ More Jobs? │
-                └──┬──────┬──┘
-               Yes│      │No
-                  │      └─────────────────────────┐
-                  │                                │
-                  ▼                                ▼
-            (Repeat Loop)            ┌──────────────────────┐
-                                     │ Return Summary       │
-                                     │ - Attempted: X       │
-                                     │ - Successful: Y      │
-                                     │ - Success Rate: Z%   │
-                                     └──────────────────────┘
-4. End-to-End Automation Workflow
-Code
-┌─────────────────────────────────────────────────────────────────────┐
-│  FULL AUTOMATION WORKFLOW - COMPLETE PIPELINE                       │
-└─────────────────────────────────────────────────────────────────────┘
-
-                    ┌──────────────────────┐
-                    │ START FULL AUTOMATION │
-                    └──────────┬───────────┘
-                               │
-                    ┌──────────▼──────────┐
-                    │  PHASE 1: DISCOVER  │
-                    ├──────────────────────┤
-                    │ • Scrape Jobs       │
-                    │ • Deduplicate       │
-                    │ • Store in DB       │
-                    └──────────┬──────────┘
-                               │
-                        ⏳ Wait 30s
-                               │
-                    ┌──────────▼──────────┐
-                    │  PHASE 2: ANALYZE   │
-                    ├──────────────────────┤
-                    │ • Load Jobs         │
-                    │ • AI Matching       │
-                    │ • Score & Rank      │
-                    │ • Update Status     │
-                    └──────────┬──────────┘
-                               │
-                        ⏳ Wait 30s
-                               │
-                    ┌──────────▼──────────┐
-                    │  PHASE 3: APPLY     │
-                    ├──────────────────────┤
-                    │ • Get High Priority │
-                    │ • Generate Resumes  │
-                    │ • Create CL         │
-                    │ • Submit Apps       │
-                    └──────────┬──────────┘
-                               │
-                    ┌──────────▼──────────┐
-                    │ CONSOLIDATE RESULTS │
-                    │ - Discovered: X     │
-                    │ - Analyzed: Y       │
-                    │ - Applied: Z        │
-                    │ - Success Rate: W%  │
-                    └──────────┬──────────┘
-                               │
-                    ┌──────────▼──────────┐
-                    │ END FULL AUTOMATION  │
-                    └──────────────────────┘
-🔧 Components Documentation
-1. Master Orchestrator (master_run.py)
-The central command center that coordinates all system components.
-
-Key Class: MasterOrchestrator
-
-Main Methods:
-
-initialize_system() - Boot all engines and verify health
-run_job_discovery(max_jobs_per_platform=50) - Discover jobs
-run_job_analysis(limit=20) - Analyze discovered jobs
-run_automated_applications(max_applications=10) - Submit apps
-run_full_automation() - Complete end-to-end workflow
-run_system_health_check() - Verify system integrity
-Usage:
-
-bash
-python master_run.py --mode discover --limit 50
-python master_run.py --mode analyze --limit 20
-python master_run.py --mode apply --limit 10
-python master_run.py --mode full-automation
-python master_run.py --mode health-check --debug
-Output: JSON summary with execution statistics
-
-2. Core Engine: Scraper Engine
-Responsible for discovering and extracting job listings from multiple platforms.
-
-Module: core/scraper_engine.py
-
-Key Features:
-
-Multi-platform scraping (20+ platforms)
-Duplicate detection and removal
-Data normalization
-Real-time progress tracking
-Configurable retry logic
-Rate limiting and throttling
-Supported Platforms:
-
-LinkedIn Jobs
-Indeed
-Glassdoor
-AngelList
-Dice
-ZipRecruiter
-Monster
-CareerBuilder
-And 12+ more
-Key Methods:
-
-Python
-async scrape_all_platforms(
-    search_terms: List[str],
-    max_jobs_per_platform: int = 50
-) -> List[ScrapingResult]
-
-convert_to_job_applications(jobs: List) -> List[JobApplication]
-3. Core Engine: AI Engine
-Provides AI-powered job analysis, matching, and content generation.
-
-Module: core/ai_engine.py
-
-Key Features:
-
-Semantic job-to-profile matching
-Match scoring algorithm (0-100%)
-Company intelligence research
-Personalized cover letter generation
-Application strategy recommendations
-Multi-LLM support (Anthropic, OpenAI, Perplexity)
-Key Methods:
-
-Python
-async analyze_job_opportunity(
-    job_data: Dict,
-    user_profile: Dict,
-    session_id: str
-) -> JobAnalysis
-
-async research_company_intelligence(
-    company_name: str,
-    job_role: str
-) -> CompanyIntelligence
-
-async generate_personalized_cover_letter(
-    job_data: Dict,
-    company_intel: CompanyIntelligence,
-    user_profile: Dict,
-    resume_highlights: List[str]
-) -> CoverLetter
-4. Core Engine: Resume Engine
-Generates and optimizes resumes for each job application.
-
-Module: core/resume_engine.py
-
-Key Features:
-
-Job-specific resume generation
-ATS (Applicant Tracking System) optimization
-Skill prioritization based on job description
-Multiple export formats (PDF, DOCX, HTML)
-Overleaf integration for advanced resumes
-Performance scoring and recommendations
-Key Methods:
-
-Python
-async generate_optimized_resume(
-    request: ResumeGenerationRequest
-) -> ResumeResult
-
-async optimize_for_ats(resume_data: Dict) -> OptimizationResult
-5. Core Engine: Notion Engine
-Manages all database operations with Notion.
-
-Module: core/notion_engine.py
-
-Key Features:
-
-Job application tracking database
-Status management (Discovered, Staged, Applied, Rejected)
-Batch operations for efficiency
-Real-time updates and synchronization
-Filtering and sorting capabilities
-Database Schema:
-
-Applications DB: Stores discovered jobs with metadata
-Job Tracker DB: Tracks application status and results
-Key Methods:
-
-Python
-async batch_create_job_applications(
-    applications: List[JobApplication]
-) -> List[str]
-
-async get_jobs_by_status(status: ApplicationStatus) -> List[Dict]
-
-async update_job_application(
-    page_id: str,
-    updates: Dict
-) -> bool
-6. Core Engine: Automation Engine
-Handles browser automation and form filling for job applications.
-
-Module: core/automation_engine.py
-
-Key Features:
-
-Playwright-based browser automation
-Intelligent form field detection
-Captcha handling and detection
-Smart field mapping
-Error handling and recovery
-Screenshot capture on failure
-Key Methods:
-
-Python
-async apply_to_job(
-    application_job: ApplicationJob
-) -> ApplicationAttempt
-
-async fill_application_form(
-    url: str,
-    form_data: Dict
-) -> bool
-7. Supporting Systems
-A. Configuration System (config/settings.py)
-Centralized configuration management
-Environment variable integration
-Type-safe settings with Pydantic
-Multiple configuration profiles
-B. RAG Systems (rag_systems/)
-Retrieval Augmented Generation for job analysis
-Company knowledge base
-Embeddings-based semantic search
-Context-aware information retrieval
-C. MCP Integration (mcp/)
-Model Context Protocol support
-Extended AI capabilities
-Standardized tool interfaces
-Integration with Claude and other AI models
-D. N8N Workflows (n8n/)
-Visual workflow automation
-Complex multi-step automation
-Conditional logic and branching
-Integration with external services
-E. Chrome Extension (chrome_extension/)
-Browser-based user interface
-Real-time job discovery notifications
-One-click job application
-Quick access to automation features
-📘 Usage Guide
-Scenario 1: Automated Daily Job Applications
-bash
-# Run every morning at 9 AM
-0 9 * * * cd /path/to/AI_Job_Automation_Agent && python master_run.py --mode full-automation
-Scenario 2: Manual Review Before Applying
-bash
-# Step 1: Discover new jobs
-python master_run.py --mode discover --limit 100
-
-# Step 2: Analyze and review in Notion (manual review)
-python master_run.py --mode analyze
-
-# Step 3: Submit high-confidence applications only
-python master_run.py --mode apply --limit 5
-Scenario 3: Targeted Job Search
-bash
-# Configure in .env or settings.yaml
-SEARCH_CRITERIA={
-  "job_titles": ["ML Engineer", "AI Engineer", "Data Scientist"],
-  "locations": ["Remote", "San Francisco", "NYC"],
-  "salary_min": 120000,
-  "experience_level": ["Senior", "Lead"]
-}
-
-# Run discovery
-python master_run.py --mode discover --limit 50
-Scenario 4: Monitoring and Health Checks
-bash
-# Check system health
-python master_run.py --mode health-check
-
-# Get detailed logs
-python master_run.py --mode discover --debug
-
-# Monitor running process
-tail -f automation.log
-⚙️ Configuration
-Environment Variables
-Create a .env file in the project root:
-
-bash
-# ===== AI/LLM Configuration =====
-ANTHROPIC_API_KEY=sk-ant-xxx
-OPENAI_API_KEY=sk-xxx
-PERPLEXITY_API_KEY=ppl-xxx
-
-# ===== Job Platform Credentials =====
-LINKEDIN_EMAIL=your.email@example.com
-LINKEDIN_PASSWORD=your_secure_password
-INDEED_API_KEY=indeed_key_xxx
-GLASSDOOR_API_KEY=glassdoor_key_xxx
-
-# ===== Database Configuration =====
-NOTION_API_KEY=notion_token_xxx
-NOTION_DATABASE_ID_APPLICATIONS=xxx
-NOTION_DATABASE_ID_TRACKER=xxx
-
-# ===== External Services =====
-GMAIL_CLIENT_ID=client_id
-GMAIL_CLIENT_SECRET=client_secret
-OVERLEAF_API_KEY=overleaf_key
-
-# ===== System Configuration =====
-TIMEZONE=Asia/Kolkata
-DAILY_RUN_TIME=09:00
-MAX_APPLICATIONS_PER_DAY=15
-SCRAPING_DELAY_MIN=2
-SCRAPING_DELAY_MAX=5
-PLAYWRIGHT_HEADLESS=true
-Advanced Configuration
-Edit config/settings.py for advanced settings:
-
-Python
-# Search criteria
-SEARCH_CRITERIA = {
-    'job_titles': ['ML Engineer', 'Data Scientist', 'AI Engineer'],
-    'locations': ['Remote', 'San Francisco'],
-    'salary_range': {'min': 100000, 'max': 200000},
-    'experience_level': ['Mid', 'Senior', 'Lead']
-}
-
-# Automation settings
-AUTOMATION = {
-    'max_retries': 3,
-    'timeout': 30,
-    'headless': True,
-    'rate_limit': 60  # seconds between applications
-}
-
-# AI/Analysis settings
-AI_ANALYSIS = {
-    'min_match_score_for_apply': 85,
-    'min_match_score_for_review': 70,
-    'use_multi_llm': True,
-    'llm_models': ['claude-3-opus', 'gpt-4']
-}
-👥 Contributing
-We welcome contributions! Here's how to get involved:
-
-Development Setup
-bash
-# Clone and setup
-git clone https://github.com/aarjunm04/AI_Job_Automation_Agent.git
-cd AI_Job_Automation_Agent
+```bash
 python -m venv venv
-source venv/bin/activate
+source venv/bin/activate   # Windows: venv\Scripts\activate
 pip install -r requirements.txt
+playwright install chromium
+```
 
-# Install dev dependencies
-pip install pytest pytest-cov black flake8 mypy
+### Step 5 — Initialise Database & RAG
 
-# Run tests
-pytest tests/ -v --cov
+```bash
+# Run Postgres schema migrations
+python scripts/migrate_db.py
 
-# Format code
-black . --line-length 100
+# Embed all 15 resume variants into local ChromaDB
+python scripts/embed_resumes.py
+```
 
-# Type checking
-mypy .
-Contributing Guidelines
-Fork the Repository
-Create a Feature Branch: git checkout -b feature/amazing-feature
-Make Changes: Follow PEP 8 style guide
-Write Tests: Ensure new functionality is tested
-Run Quality Checks:
-bash
-pytest tests/
-black .
-flake8 .
-mypy .
-Commit Changes: git commit -m 'Add amazing feature'
-Push to Branch: git push origin feature/amazing-feature
-Create Pull Request: Describe changes clearly
-Areas for Contribution
- Additional job platform scrapers
- Improved AI matching algorithms
- Enhanced form filling accuracy
- Better CAPTCHA handling
- Additional language support
- Performance optimizations
- Documentation improvements
- Bug fixes and issue resolution
-📄 License
-This project is licensed under the MIT License - see the LICENSE file for details.
+### Step 6 — Verify Setup
 
-In simple terms:
+```bash
+python main.py --health-check
+# Expected: ✅ All systems healthy
+```
 
-✅ You can use this project for personal and commercial purposes
-✅ You can modify and distribute the code
-✅ You must include the license and copyright notice
-❌ The authors provide no warranty
-📞 Support & Contact
-Get Help
-📧 Email: aarjun.mahule@example.com
-🐛 Issues: GitHub Issues
-💬 Discussions: GitHub Discussions
-📖 Documentation: Wiki
-Troubleshooting
-Q: Application keeps failing A: Check automation.log for detailed error messages. Run health check:
+---
 
-bash
-python master_run.py --mode health-check
-Q: Notion API errors A: Verify your Notion API key and database permissions. Test with:
+## 🔐 Environment Variables
 
-bash
-python -c "from core.notion_engine import NotionEngine; print('✅ Connected')"
-Q: Resume not generating A: Check OpenAI/Anthropic API keys. Verify Overleaf integration if using LaTeX.
+All variables live in `~/narad.env`. This file is never committed to git and is auto-loaded by your shell and Docker via `--env-file`.
 
-Q: Jobs not being scraped A: Platform credentials may be invalid. Update credentials in .env and test individual scraper.
+```env
+# ── LLM APIs ───────────────────────────────────────────────────────────────
+XAI_API_KEY=                        # xAI — Analyser + Apply agents + Dev Agent (Phase 2)
+PERPLEXITY_API_KEY=                  # Perplexity — Scraper sonar + Dev Agent fallback (P2)
+GROQ_API_KEY=                        # Groq — Master + Tracker agents
+CEREBRAS_API_KEY=                    # Cerebras — all agent fallbacks
+SAMBANOVA_API_KEY=                   # SambaNova — Analyser + Apply fallback 1
+NVIDIA_NIM_API_KEY=                  # NVIDIA NIM — primary embeddings (nv-embedqa-e5-v5)
+GEMINI_API_KEY=                      # Google Gemini — fallback embeddings (text-embedding-004)
 
-🌟 Acknowledgments
-Built with ❤️ by the AI Job Automation Team
-Powered by cutting-edge AI/ML technologies
-Community contributions and feedback
-Open-source libraries and frameworks
-📈 Project Statistics
-Code
-┌─────────────────────────────────────────┐
-│ Language Composition                    │
-├─────────────────────────────────────────┤
-│ Python        ████████████████░░░  69.2%│
-│ JavaScript    ████░░░░░░░░░░░░░░░  17.8%│
-│ CSS           ██░░░░░░░░���░░░░░░░░   5.4%│
-│ HTML          ██░░░░░░░░░░░░░░░░░   4.3%│
-│ Shell         █░░░░░░░░░░░░░░░░░░   3.3%│
-└─────────────────────────────────────────┘
+# ── Database ───────────────────────────────────────────────────────────────
+ACTIVE_DB=supabase                   # supabase | local  (switches DB target)
+SUPABASE_URL=                        # Supabase project URL
+SUPABASE_KEY=                        # Supabase service/anon key
+LOCAL_POSTGRES_URL=                  # postgresql://user:pass@localhost:5432/dbname
 
-Key Metrics:
-- 20+ Supported Job Platforms
-- 100+ Python Dependencies
-- 5 Core Engine Modules
-- 3 Main Workflow Modes
-- Async/Await Architecture
-- Enterprise-Grade Reliability
+# ── Notion ─────────────────────────────────────────────────────────────────
+NOTION_API_KEY=                      # Notion integration token
+NOTION_APPLICATIONS_DB_ID=           # Applications DB — manual queue
+NOTION_JOB_TRACKER_DB_ID=            # Job Tracker DB — applied pipeline
+
+# ── Discovery ──────────────────────────────────────────────────────────────
+SERPAPI_KEY_1=                       # SerpAPI account 1 (250 credits/month)
+SERPAPI_KEY_2=                       # SerpAPI account 2 (250 credits/month)
+SERPAPI_KEY_3=                       # SerpAPI account 3 (250 credits/month)
+SERPAPI_KEY_4=                       # SerpAPI account 4 (250 credits/month)
+JOOBLE_API_KEY=                      # Jooble REST API key (Phase 2 only)
+
+# ── Proxies ────────────────────────────────────────────────────────────────
+WEBSHARE_PROXY_LIST=                 # Comma-separated list of 20 static proxy addresses
+
+# ── Platform Credentials ───────────────────────────────────────────────────
+LINKEDIN_EMAIL=
+LINKEDIN_PASSWORD=
+
+# ── Observability ──────────────────────────────────────────────────────────
+AGENTOPS_API_KEY=                    # AgentOps — traces + cost tracking
+
+# ── Budget Enforcement ─────────────────────────────────────────────────────
+XAI_BUDGET_CAP_PER_RUN=0.38          # Hard xAI spend cap per run (USD)
+XAI_MONTHLY_BUDGET=5.00              # xAI monthly budget (USD)
+PERPLEXITY_MONTHLY_BUDGET=5.00       # Perplexity monthly budget (USD)
+
+# ── System ─────────────────────────────────────────────────────────────────
+TIMEZONE=Asia/Kolkata
+```
+
+---
+
+## 🗺️ Project Roadmap
+
+### Phase 1 — Core System Build (4 Weeks)
+
+| Milestone | Target | Deliverable |
+|-----------|--------|-------------|
+| **M1** | Week 1 | Repo structure · Docker Compose · `narad.env` schema · Postgres schema + Supabase setup · ChromaDB init |
+| **M2** | Week 1–2 | RAG system live — all 15 resumes embedded · NVIDIA NIM primary + Gemini fallback |
+| **M3** | Week 2 | CrewAI framework setup · Master Agent · AgentOps integration |
+| **M4** | Week 2–3 | Scraper Agent — all 10 platforms + safety-net · SerpAPI · Perplexity `sonar` normalisation |
+| **M5** | Week 3 | Analyser Agent — eligibility filter · fit scoring · RAG match · routing decision |
+| **M6** | Week 3–4 | Apply Agent — all platform Playwright scripts · retry logic · submission proof capture |
+| **M7** | Week 4 | Tracker Agent · Notion sync · FastAPI slim server · Chrome Extension v1 |
+| **🚀 M8** | **End of Week 4** | **Phase 1 Launch — first live fully autonomous run** |
+
+### Phase 2 — Self-Improving System (8 Weeks)
+
+| Milestone | Target | Deliverable |
+|-----------|--------|-------------|
+| **M9** | Week 5–6 | Redis full queue + inter-service cache system |
+| **M10** | Week 6–7 | Developer Agent live — `grok-3-mini-latest` · AgentOps cross-session trace analysis |
+| **M11** | Week 7–8 | Remotive + Jooble platform integration · all-round resume variant |
+| **🏁 M12** | **End of Week 8** | **Phase 2 Complete — self-improving autonomous system** |
+
+---
+
+## 📁 Repository Structure
+
+```
+AI_Job_Automation_Agent/
+│
+├── main.py                         # Entry point — run session trigger
+├── requirements.txt                # Python dependencies
+├── docker-compose.yml              # Full local dev stack (Postgres · Redis · FastAPI)
+│
+├── .github/
+│   └── workflows/
+│       └── run_agent.yml           # GitHub Actions cron: 0 6 * * 1,4,6 (UTC = 12PM IST)
+│
+├── agents/                         # CrewAI Agent + Task definitions
+│   ├── master_agent.py             # Crew Manager — session boot · budget enforcement · orchestration
+│   ├── scraper_agent.py            # Discovery specialist — all platforms + normalisation
+│   ├── analyser_agent.py           # Scoring + routing specialist — RAG match · fit scoring
+│   ├── apply_agent.py              # Submission specialist — Playwright form filling
+│   ├── tracker_agent.py            # Record keeper — Postgres · Notion · AgentOps
+│   └── developer_agent.py          # Phase 2 — improvement analyst (runs outside pipeline)
+│
+├── tools/                          # @tool decorated functions registered to CrewAI agents
+│   ├── postgres_tools.py           # DB read/write tools
+│   ├── playwright_tools.py         # Browser automation tools
+│   ├── rag_tools.py                # ChromaDB vector search + resume selection tools
+│   ├── notion_tools.py             # Notion API read/write tools
+│   ├── scraper_tools.py            # JobSpy · REST API · SerpAPI tools
+│   └── agentops_tools.py           # Observability + cost tracking tools
+│
+├── scrapers/                       # Platform scraper implementations
+│   ├── jobspy_scraper.py           # LinkedIn + Indeed via JobSpy library
+│   ├── remoteok_api.py             # RemoteOK public JSON API
+│   ├── himalayas_api.py            # Himalayas public REST API
+│   └── playwright_scrapers/        # Per-platform Playwright scraper scripts
+│       ├── wellfound.py
+│       ├── weworkremotely.py
+│       ├── yc_startup.py
+│       ├── turing.py
+│       ├── crossover.py
+│       ├── arc_dev.py
+│       ├── nodesk.py               # Safety-net platform
+│       └── toptal.py               # Safety-net platform
+│
+├── rag/                            # RAG system
+│   ├── embedder.py                 # NVIDIA NIM + Gemini fallback embedding logic
+│   ├── chromadb_store.py           # ChromaDB vector store management
+│   └── resume_matcher.py           # Job-to-resume cosine matching + selection
+│
+├── db/                             # Database layer
+│   ├── schema.sql                  # Postgres table definitions (jobs · applications · run_sessions · audit_logs)
+│   ├── supabase_client.py          # Supabase connection + query interface
+│   └── local_postgres_client.py   # Local Postgres connection (dev)
+│
+├── api/                            # Slim FastAPI server
+│   └── server.py                   # 3 endpoints: /extension · /rag-proxy · /manual-log
+│
+├── chrome_extension/               # Chrome Extension v1
+│   ├── manifest.json
+│   ├── popup.html
+│   ├── popup.js
+│   └── content.js
+│
+├── config/                         # Static configuration files
+│   ├── platforms.json              # Per-platform scraping config (rate limits · selectors · compliance)
+│   └── search_params.json          # Job search parameters (titles · keywords · filters)
+│
+├── scripts/                        # Utility scripts
+│   ├── migrate_db.py               # Run Postgres schema migrations
+│   ├── embed_resumes.py            # Embed all 15 resume variants into ChromaDB
+│   └── health_check.py             # System-wide health verification
+│
+└── resumes/                        # Resume variants — git-ignored
+    ├── Aarjun_Gen.pdf              # General
+    ├── Aarjun_OG.pdf               # Original / Base
+    ├── Aarjun_AIAutomation.pdf
+    ├── Aarjun_AIML.pdf
+    ├── Aarjun_AISolutionsArchitect.pdf
+    ├── Aarjun_AppliedML.pdf
+    ├── Aarjun_DataEngineering.pdf
+    ├── Aarjun_DataScience.pdf
+    ├── Aarjun_FeatureEngineering.pdf
+    ├── Aarjun_LLMFineTuning.pdf
+    ├── Aarjun_LLMGenAI.pdf
+    ├── Aarjun_MLDataEngineer.pdf
+    ├── Aarjun_MLOps.pdf
+    ├── Aarjun_PromptEngineer.pdf
+    └── Aarjun_RAGEngineer.pdf
+```
+
+---
+
+## 💰 Budget
+
+| Service | Monthly Cost | Coverage |
+|---------|-------------|----------|
+| xAI | **$5.00** | `grok-4-fast-reasoning` (Analyser) · `grok-4-1-fast-reasoning` (Apply) · `grok-3-mini-latest` (Dev Agent Phase 2) |
+| Perplexity | **$5.00** | `sonar` (Scraper) · `sonar` Dev Agent fallback (Phase 2) |
+| Groq | Free tier | `llama-3.3-70b-versatile` — Master + Tracker agents |
+| Cerebras | Free tier | `llama-3.3-70b` — all agent fallbacks |
+| SambaNova | Free tier | `Llama-3.1-70B` — Analyser + Apply fallback 1 |
+| NVIDIA NIM | Free tier | `nv-embedqa-e5-v5` — primary embeddings |
+| Google Gemini | Free tier | `text-embedding-004` — fallback embeddings |
+| Supabase | Free tier | 500 MB DB / 2 GB bandwidth |
+| GitHub Actions | Free tier | ~13 runs/month — well within 2,000 min/month free limit |
+| AgentOps | Free tier | Observability + cost tracking |
+| Webshare Proxies | Separate budget | 20 static proxies — NOT included in $10 LLM cap |
+
+> **Total LLM hard cap: $10/month · Per-run xAI cap: $0.38 — both enforced in application code.**
+
+---
+
+## 📄 License
+
+This project is licensed under the [MIT License](LICENSE).
+
+---
+
 <div align="center">
-Made with ❤️ by Aarjun Mahule
 
-⬆ Back to Top
+Built by **Aarjun Mahule**
 
-</div> ```
+[⬆ Back to Top](#-ai-job-automation-agent)
+
+</div>
