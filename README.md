@@ -264,25 +264,22 @@ The RAG system matches every scored job to the optimal resume variant using a lo
 | Total Resume Variants | **15** |
 | RAG Failure Fallback | `Aarjun_Gen.pdf` assigned as default if ChromaDB query fails |
 
-### Resume Variants
 
-| # | File | Type |
-|---|------|------|
-| 1 | `Aarjun_Gen.pdf` | General |
-| 2 | `Aarjun_OG.pdf` | Original / Base |
-| 3 | `Aarjun_AIAutomation.pdf` | Domain-specific |
-| 4 | `Aarjun_AIML.pdf` | Domain-specific |
-| 5 | `Aarjun_AISolutionsArchitect.pdf` | Domain-specific |
-| 6 | `Aarjun_AppliedML.pdf` | Domain-specific |
-| 7 | `Aarjun_DataEngineering.pdf` | Domain-specific |
-| 8 | `Aarjun_DataScience.pdf` | Domain-specific |
-| 9 | `Aarjun_FeatureEngineering.pdf` | Domain-specific |
-| 10 | `Aarjun_LLMFineTuning.pdf` | Domain-specific |
-| 11 | `Aarjun_LLMGenAI.pdf` | Domain-specific |
-| 12 | `Aarjun_MLDataEngineer.pdf` | Domain-specific |
-| 13 | `Aarjun_MLOps.pdf` | Domain-specific |
-| 14 | `Aarjun_PromptEngineer.pdf` | Domain-specific |
-| 15 | `Aarjun_RAGEngineer.pdf` | Domain-specific |
+### Resume Variant Index (12 Variants for RAG Matching)
+| Variant | Filename | Specialization |
+|---------|----------|----------------|
+| General | Aarjun_Gen.pdf | Broad CS/ML |
+| Original | Aarjun_OG.pdf | Base general |
+| LLM Fine-Tuning | Aarjun_LLMFineTuning.pdf | Fine-tuning/PEFT |
+| Data Engineering | Aarjun_DataEngineering.pdf | ETL/Pipelines |
+| Applied ML | Aarjun_AppliedML.pdf | Production ML |
+| LLM & GenAI | Aarjun_LLMGenAI.pdf | Generative models |
+| RAG Engineer | Aarjun_RAGEngineer.pdf | Retrieval systems |
+| Prompt Engineer | Aarjun_PromptEngineer.pdf | Prompting/agents |
+| AI/ML | Aarjun_AIML.pdf | Core AI/ML |
+| ML Data Engineer | Aarjun_MLDataEngineer.pdf | MLOps/data |
+| Data Science | Aarjun_DataScience.pdf | Analysis/visuals |
+
 
 ---
 
