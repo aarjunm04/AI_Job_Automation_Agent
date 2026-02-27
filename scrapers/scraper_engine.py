@@ -1,23 +1,36 @@
 """
-core/scraper_engine.py
+scrapers/scraper_engine.py
 
 ENTERPRISE-GRADE JOB SCRAPER ENGINE
 ===================================
 
-Production-ready, deterministic job scraper engine for job discovery and
-pre-qualification.
+Purpose:
+    Scrape and normalize job listings from multiple platforms into the
+    unified job schema, returning them as plain Python dicts for AI agents
+    to consume.
+
+    This layer does NOT perform database writes and does NOT make auto-apply
+    vs. manual-review routing decisions. All routing is handled exclusively
+    by downstream agents.
 
 Supported Sources:
-- JobSpy (LinkedIn, Indeed, Glassdoor, ZipRecruiter)
-- Jooble Official API
-- Remotive Official API
-- Google Jobs via SerpAPI (optional)
-- Playwright-based scrapers (external modules) with optional proxy support
+
+  Phase 1 (active):
+  - JobSpy (LinkedIn, Indeed) — via scrapers/jobspy_adapter.py
+  - RemoteOK API
+  - Himalayas API
+  - Google Jobs via SerpAPI
+  - Playwright-based scrapers (managed in scraper_service.py) with optional
+    proxy support via WEBSHARE_PROXY_* env vars
+
+  Phase 2 (future / feature-flagged):
+  - Jooble Official API          (class JoobleAPIScraper — not wired by default)
+  - Remotive Official API        (class RemotiveAPIScraper — not wired by default)
 
 Key Features:
-- Comprehensive normalization to unified schema
+- Comprehensive normalization to unified job schema
 - Deterministic filtering based on job_filters.yaml
-- Rule-based relevance scoring (0-100) driven entirely from YAML
+- Rule-based static pre-filter scoring (0.0–1.0) driven entirely from YAML
 - Deduplication using title|company|url hash
 - Resource-aware scraping (SerpAPI credit tracking)
 - Multiple output formats (DataFrame, JSON, ingestion payload)
@@ -47,7 +60,7 @@ import requests
 import pandas as pd
 from dateutil import parser as date_parser
 
-from core.jobspy_adapter import JobSpyAdapter
+from .jobspy_adapter import JobSpyAdapter
 
 # ================================================================================
 # LOGGING
@@ -68,8 +81,8 @@ LOG.setLevel(logging.INFO)
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-# NOTE: job_filters.yaml lives in core/ in your project; adjust path accordingly.
-FILTERS_PATH = BASE_DIR / "core" / "job_filters.yaml"
+# job_filters.yaml lives alongside the scraper modules in scrapers/
+FILTERS_PATH = BASE_DIR / "scrapers" / "job_filters.yaml"
 
 OUTPUT_DIR = BASE_DIR / "logs"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -84,99 +97,189 @@ SERPAPI_USAGE_PATH = OUTPUT_DIR / "serpapi_usage.json"
 
 
 class ResourceManager:
-    """Manages SerpAPI credit tracking with monthly quota management."""
+    """
+    Manages SerpAPI credit tracking across up to 4 accounts with monthly quotas.
+
+    Supported env vars: SERPAPI_API_KEY_1 .. SERPAPI_API_KEY_4
+
+    usage_data structure:
+        {
+          "current_month": "YYYY-MM",
+          "accounts": {
+            "SERPAPI_API_KEY_1": {"credits_used": int, "credits_remaining": int},
+            ...
+          },
+          "total_credits_used": int,
+          "total_credits_remaining": int,
+          "last_reset": str,      # ISO-8601
+          "next_reset": str,      # ISO-8601
+          "runs_this_month": int
+        }
+    """
+
+    _ACCOUNT_KEYS = [
+        "SERPAPI_API_KEY_1",
+        "SERPAPI_API_KEY_2",
+        "SERPAPI_API_KEY_3",
+        "SERPAPI_API_KEY_4",
+    ]
 
     def __init__(self, monthly_quota: int = 250, usage_file: Path = SERPAPI_USAGE_PATH):
         self.monthly_quota = monthly_quota
         self.usage_file = usage_file
+        # Discover which keys are actually set
+        self.active_keys: List[str] = [
+            k for k in self._ACCOUNT_KEYS if os.getenv(k)
+        ]
         self.usage_data = self._load_usage()
         self._check_reset()
 
-    def _load_usage(self) -> Dict[str, Any]:
-        """Load usage data from file or initialize."""
-        if not self.usage_file.exists():
-            return {
-                "current_month": datetime.now(timezone.utc).strftime("%Y-%m"),
-                "credits_used": 0,
-                "credits_remaining": self.monthly_quota,
-                "last_reset": datetime.now(timezone.utc).isoformat(),
-                "next_reset": self._get_next_reset_date().isoformat(),
-                "runs_this_month": 0,
-            }
+        LOG.info(
+            "ResourceManager initialized | accounts=%d | quota_per_account=%d",
+            len(self.active_keys),
+            self.monthly_quota,
+        )
 
+    # ------------------------------------------------------------------ #
+    # PERSISTENCE
+    # ------------------------------------------------------------------ #
+
+    def _build_fresh_usage(self) -> Dict[str, Any]:
+        """Build a fresh usage structure for all active accounts."""
+        now = datetime.now(timezone.utc)
+        accounts = {
+            k: {"credits_used": 0, "credits_remaining": self.monthly_quota}
+            for k in self.active_keys
+        }
+        return {
+            "current_month": now.strftime("%Y-%m"),
+            "accounts": accounts,
+            "total_credits_used": 0,
+            "total_credits_remaining": self.monthly_quota * max(1, len(self.active_keys)),
+            "last_reset": now.isoformat(),
+            "next_reset": self._get_next_reset_date().isoformat(),
+            "runs_this_month": 0,
+        }
+
+    def _load_usage(self) -> Dict[str, Any]:
+        """Load usage data from file or initialize fresh."""
+        if not self.usage_file.exists():
+            return self._build_fresh_usage()
         try:
             with self.usage_file.open("r", encoding="utf-8") as f:
                 data = json.load(f)
+            # Ensure any newly-added account keys are present
+            if "accounts" not in data:
+                return self._build_fresh_usage()
+            for k in self.active_keys:
+                if k not in data["accounts"]:
+                    data["accounts"][k] = {
+                        "credits_used": 0,
+                        "credits_remaining": self.monthly_quota,
+                    }
+            self._recompute_totals(data)
             return data
-        except Exception as e:  # pragma: no cover - safety net
+        except Exception as e:  # pragma: no cover
             LOG.warning(
                 "Failed to load SerpAPI usage data: %s. Initializing fresh.", e
             )
-            return {
-                "current_month": datetime.now(timezone.utc).strftime("%Y-%m"),
-                "credits_used": 0,
-                "credits_remaining": self.monthly_quota,
-                "last_reset": datetime.now(timezone.utc).isoformat(),
-                "next_reset": self._get_next_reset_date().isoformat(),
-                "runs_this_month": 0,
-            }
+            return self._build_fresh_usage()
 
     def _get_next_reset_date(self) -> datetime:
-        """Get next reset date (1st of next month, UTC)."""
+        """Return the 1st of next month at midnight UTC."""
         now = datetime.now(timezone.utc)
         if now.month == 12:
-            next_month = datetime(now.year + 1, 1, 1, tzinfo=timezone.utc)
-        else:
-            next_month = datetime(now.year, now.month + 1, 1, tzinfo=timezone.utc)
-        return next_month
+            return datetime(now.year + 1, 1, 1, tzinfo=timezone.utc)
+        return datetime(now.year, now.month + 1, 1, tzinfo=timezone.utc)
+
+    def _recompute_totals(self, data: Dict[str, Any]) -> None:
+        """Recompute total_credits_used and total_credits_remaining from accounts."""
+        accounts = data.get("accounts", {})
+        data["total_credits_used"] = sum(
+            v.get("credits_used", 0) for v in accounts.values()
+        )
+        data["total_credits_remaining"] = sum(
+            v.get("credits_remaining", 0) for v in accounts.values()
+        )
 
     def _check_reset(self) -> None:
-        """Check if monthly reset is needed and perform reset."""
+        """Reset all account quotas at the start of a new month."""
         now = datetime.now(timezone.utc)
         current_month = now.strftime("%Y-%m")
         if self.usage_data.get("current_month") != current_month:
-            LOG.info("Monthly SerpAPI quota reset detected. Resetting usage.")
-            self.usage_data = {
-                "current_month": current_month,
-                "credits_used": 0,
-                "credits_remaining": self.monthly_quota,
-                "last_reset": now.isoformat(),
-                "next_reset": self._get_next_reset_date().isoformat(),
-                "runs_this_month": 0,
-            }
+            LOG.info("Monthly SerpAPI quota reset. Resetting all accounts.")
+            self.usage_data = self._build_fresh_usage()
             self._save_usage()
 
-    def can_use_credits(self, credits: int) -> bool:
-        """Check if credits can be used."""
-        return self.usage_data.get("credits_remaining", 0) >= credits
-
-    def use_credits(self, credits: int) -> bool:
-        """Use credits and update tracking."""
-        if not self.can_use_credits(credits):
-            return False
-        self.usage_data["credits_used"] = self.usage_data.get("credits_used", 0) + credits
-        self.usage_data["credits_remaining"] = self.monthly_quota - self.usage_data[
-            "credits_used"
-        ]
-        self.usage_data["runs_this_month"] = self.usage_data.get("runs_this_month", 0) + 1
-        self._save_usage()
-        return True
-
     def _save_usage(self) -> None:
-        """Save usage data to file."""
+        """Persist usage_data to file."""
         try:
             with self.usage_file.open("w", encoding="utf-8") as f:
                 json.dump(self.usage_data, f, indent=2)
         except Exception as e:  # pragma: no cover
             LOG.error("Failed to save SerpAPI usage data: %s", e)
 
+    # ------------------------------------------------------------------ #
+    # PUBLIC API
+    # ------------------------------------------------------------------ #
+
+    def select_account_for_request(self, required_credits: int = 1) -> Optional[str]:
+        """
+        Pick the env-var name of the account with the most remaining credits
+        that still has >= required_credits available.
+
+        Returns None if no account qualifies or no keys are configured.
+        """
+        if not self.active_keys:
+            return None
+        accounts = self.usage_data.get("accounts", {})
+        candidates = [
+            (k, accounts.get(k, {}).get("credits_remaining", 0))
+            for k in self.active_keys
+            if accounts.get(k, {}).get("credits_remaining", 0) >= required_credits
+        ]
+        if not candidates:
+            return None
+        # Pick the account with the most credits remaining (greedy)
+        candidates.sort(key=lambda x: x[1], reverse=True)
+        return candidates[0][0]
+
+    def use_credits(self, account_key: str, credits: int) -> bool:
+        """
+        Deduct credits from account_key, recompute totals, and persist.
+
+        Returns False if account_key is unknown or has insufficient credits.
+        """
+        accounts = self.usage_data.get("accounts", {})
+        if account_key not in accounts:
+            LOG.warning("use_credits: unknown account key '%s'", account_key)
+            return False
+        acct = accounts[account_key]
+        if acct.get("credits_remaining", 0) < credits:
+            return False
+        acct["credits_used"] = acct.get("credits_used", 0) + credits
+        acct["credits_remaining"] = acct.get("credits_remaining", 0) - credits
+        self.usage_data["runs_this_month"] = (
+            self.usage_data.get("runs_this_month", 0) + 1
+        )
+        self._recompute_totals(self.usage_data)
+        self._save_usage()
+        return True
+
+    # Legacy helpers — kept for callers that used the old single-account API
+    def can_use_credits(self, credits: int) -> bool:
+        """Return True if any account has at least `credits` remaining."""
+        return self.select_account_for_request(credits) is not None
+
     def get_status(self) -> Dict[str, Any]:
-        """Get current usage status."""
+        """Return current usage status (multi-account aware)."""
         return {
-            "credits_used": self.usage_data.get("credits_used", 0),
-            "credits_remaining": self.usage_data.get("credits_remaining", 0),
+            "total_credits_used": self.usage_data.get("total_credits_used", 0),
+            "total_credits_remaining": self.usage_data.get("total_credits_remaining", 0),
+            "accounts": self.usage_data.get("accounts", {}),
             "current_month": self.usage_data.get("current_month"),
             "next_reset": self.usage_data.get("next_reset"),
+            "runs_this_month": self.usage_data.get("runs_this_month", 0),
         }
 
 
@@ -305,6 +408,44 @@ class ScrapeMetrics:
 # ================================================================================
 # NORMALIZATION
 # ================================================================================
+#
+# UNIFIED NORMALIZED JOB SCHEMA
+# ==============================
+# Every job dict returned by ScraperEngine.run() MUST contain these keys.
+# Unknown / unavailable values should be None (or [] for list fields).
+#
+#   job_id            str   — SHA-256 hash of title|company|url
+#   title             str
+#   company           str
+#   location          str
+#   remote_type       str   — "remote" | "hybrid" | "onsite" | "unknown"
+#   job_url           str
+#   application_url   str
+#   source            str   — scraper name (e.g. "linkedin", "remoteok")
+#   platform          str   — defaults to source; may differ for aggregators
+#   description       str
+#   job_type          str   — e.g. "full-time", "contract"
+#   employment_type   str   — same as job_type (alias kept for compatibility)
+#   salary_min        float | None
+#   salary_max        float | None
+#   salary_currency   str | None
+#   experience_min    int | None
+#   experience_max    int | None
+#   experience_level  str | None — e.g. "entry", "mid", "senior"
+#   posted_date       str | None — ISO-8601
+#   scraped_at        str        — ISO-8601 UTC timestamp
+#   company_size      str | None
+#   company_url       str | None
+#   industry          str | None
+#   required_skills   list[str]
+#   preferred_skills  list[str]
+#   benefits          list[str]
+#   visa_sponsorship  bool | None
+#   education_required str | None
+#   application_method str | None
+#   normalisation_status str   — "ok" on successful normalization
+#   static_score      float   — pre-filter relevance score in [0.0, 1.0]
+#
 
 
 def _normalize_string(s: str) -> str:
@@ -460,7 +601,17 @@ class Normalizer:
             ).strip()
             source = raw.get("source", "unknown")
 
+            # Hard requirement: title and URL must be present
             if not title or not url:
+                return None
+
+            # Drop jobs with no meaningful description
+            if len(description) < 100:
+                LOG.debug(
+                    "Dropping job '%s' — description too short (%d chars)",
+                    title,
+                    len(description),
+                )
                 return None
 
             job_id = _generate_job_hash(title, company, url)
@@ -488,21 +639,33 @@ class Normalizer:
                 job_type = job_type.lower()
 
             required_skills = raw.get("required_skills") or raw.get("skills") or []
-            if isinstance(required_skills, str):
+            if not isinstance(required_skills, list):
                 required_skills = []
 
             preferred_skills = raw.get("preferred_skills") or []
+            if not isinstance(preferred_skills, list):
+                preferred_skills = []
+
+            benefits = raw.get("benefits") or []
+            if not isinstance(benefits, list):
+                benefits = []
 
             normalized = {
-                # Core fields
+                # Identity
                 "job_id": job_id,
                 "title": title[:200],
                 "company": company[:100],
                 "location": location[:100],
+                "remote_type": remote_type,
                 "job_url": url,
-                "description": description[:2500],
+                "application_url": raw.get("application_url") or url,
                 "source": source,
-                "scraped_at": datetime.now(timezone.utc).isoformat(),
+                "platform": raw.get("platform") or source,
+                # Content
+                "description": description[:2500],
+                # Job classification
+                "job_type": job_type,
+                "employment_type": job_type,
                 # Compensation
                 "salary_min": salary_min,
                 "salary_max": salary_max,
@@ -511,30 +674,24 @@ class Normalizer:
                 "experience_min": exp_min,
                 "experience_max": exp_max,
                 "experience_level": raw.get("experience_level"),
-                # Job details
-                "job_type": job_type,
+                # Dates
                 "posted_date": posted_date.isoformat() if posted_date else None,
-                "application_deadline": None,
-                "remote_type": remote_type,
-                "employment_type": job_type,
+                "scraped_at": datetime.now(timezone.utc).isoformat(),
                 # Company info
                 "company_size": raw.get("company_size"),
                 "company_url": raw.get("company_url"),
                 "industry": raw.get("industry"),
-                # Application
-                "application_url": raw.get("application_url") or url,
-                "application_method": raw.get("application_method"),
                 # Skills
-                "required_skills": required_skills
-                if isinstance(required_skills, list)
-                else [],
-                "preferred_skills": preferred_skills
-                if isinstance(preferred_skills, list)
-                else [],
-                "education_required": raw.get("education_required"),
+                "required_skills": required_skills,
+                "preferred_skills": preferred_skills,
                 # Additional
-                "benefits": raw.get("benefits") or [],
+                "benefits": benefits,
                 "visa_sponsorship": raw.get("visa_sponsorship"),
+                "education_required": raw.get("education_required"),
+                "application_method": raw.get("application_method"),
+                # Schema metadata
+                "normalisation_status": "ok",
+                "static_score": None,
             }
 
             return normalized
@@ -739,12 +896,6 @@ class ScoringEngine:
         self.min_application_score: float = float(
             ai_scoring.get("minimum_application_score", 60)
         )
-        self.auto_apply_threshold: float = float(
-            ai_scoring.get("auto_apply_threshold", 80)
-        )
-        self.manual_review_threshold: float = float(
-            ai_scoring.get("manual_review_threshold", 70)
-        )
 
         locations_cfg = filters_data.get("locations", {})
         self.preferred_locations: List[str] = [
@@ -774,9 +925,7 @@ class ScoringEngine:
         ]
 
         LOG.info(
-            "ScoringEngine initialized | auto_apply=%s | manual_review=%s | min_score=%s",
-            self.auto_apply_threshold,
-            self.manual_review_threshold,
+            "ScoringEngine initialized | min_score=%s",
             self.min_application_score,
         )
 
@@ -897,17 +1046,16 @@ class ScoringEngine:
 
     def classify_decision(self, score: float) -> str:
         """
-        Decide application action based on YAML thresholds.
+        Classify score into a tier string.
 
-        Returns: "auto_apply", "manual_review", or "reject".
+        NOTE: This method is retained for external callers but is NOT used
+        by ScraperEngine.run(). Routing decisions are made downstream.
+
+        Returns: "above_threshold" if score >= min_application_score, else "below_threshold".
         """
-        if score >= self.auto_apply_threshold:
-            return "auto_apply"
-        if score >= self.manual_review_threshold:
-            return "manual_review"
         if score >= self.min_application_score:
-            return "manual_review"
-        return "reject"
+            return "above_threshold"
+        return "below_threshold"
 
 
 # ================================================================================
@@ -1044,8 +1192,138 @@ class RemotiveAPIScraper(BaseAPIScraper):
         return results
 
 
+class RemoteOKAPIScraper(BaseAPIScraper):
+    """
+    RemoteOK public API scraper.
+
+    Endpoint: https://remoteok.com/api
+    Returns a JSON list where element 0 is a metadata object (no 'position'
+    or 'title' field) that must be skipped.
+    """
+
+    name = "remoteok"
+    endpoint = "https://remoteok.com/api"
+
+    def _run_sync(self) -> List[Dict[str, Any]]:
+        """Fetch jobs from the RemoteOK public API."""
+        try:
+            response = requests.get(
+                self.endpoint,
+                timeout=20,
+                headers={"User-Agent": "job-automation-agent/1.0"},
+            )
+            response.raise_for_status()
+            raw_list = response.json()
+        except requests.RequestException as e:
+            LOG.error("RemoteOK API request failed: %s", e)
+            return []
+        except Exception as e:  # pragma: no cover
+            LOG.error("RemoteOK API parse failed: %s", e)
+            return []
+
+        results: List[Dict[str, Any]] = []
+        for item in raw_list:
+            # Skip metadata entry (first element has no 'position' / 'title')
+            if not item.get("position") and not item.get("title"):
+                continue
+            title = str(item.get("position") or item.get("title") or "").strip()
+            company = str(item.get("company") or "").strip()
+            location = str(item.get("location") or "Remote").strip()
+            job_url = str(item.get("url") or "").strip()
+            description = str(item.get("description") or "").strip()
+            if not title or not job_url:
+                continue
+            results.append(
+                {
+                    "title": title,
+                    "company": company,
+                    "location": location,
+                    "job_url": job_url,
+                    "description": description,
+                    "source": self.name,
+                    "posted_date": item.get("date"),
+                    "job_type": item.get("job_type"),
+                    "salary": item.get("salary"),
+                    "required_skills": item.get("tags") or [],
+                }
+            )
+            if len(results) >= self.jobs_per_site:
+                break
+
+        LOG.info("RemoteOK returned %d jobs", len(results))
+        return results
+
+
+class HimalayasAPIScraper(BaseAPIScraper):
+    """
+    Himalayas remote jobs API scraper.
+
+    TODO: Verify the exact Himalayas API endpoint and any required query
+    parameters (auth token, category filters, etc.) before deploying.
+    The endpoint below is a best-effort placeholder based on the public
+    Himalayas developer docs — update it once confirmed.
+
+    Endpoint (placeholder): https://himalayas.app/jobs/api
+    """
+
+    name = "himalayas"
+    # TODO: Confirm exact endpoint from https://himalayas.app/developers
+    endpoint = "https://himalayas.app/jobs/api"
+
+    def _run_sync(self) -> List[Dict[str, Any]]:
+        """Fetch jobs from the Himalayas API."""
+        try:
+            params: Dict[str, Any] = {"limit": self.jobs_per_site}
+            response = requests.get(
+                self.endpoint,
+                params=params,
+                timeout=20,
+                headers={"User-Agent": "job-automation-agent/1.0"},
+            )
+            response.raise_for_status()
+            data = response.json()
+        except requests.RequestException as e:
+            LOG.error("Himalayas API request failed: %s", e)
+            return []
+        except Exception as e:  # pragma: no cover
+            LOG.error("Himalayas API parse failed: %s", e)
+            return []
+
+        # TODO: Adjust field names below after inspecting actual API response shape.
+        raw_jobs = data.get("jobs", []) if isinstance(data, dict) else []
+        results: List[Dict[str, Any]] = []
+        for j in raw_jobs[: self.jobs_per_site]:
+            title = str(j.get("title") or "").strip()
+            company = str(
+                j.get("company", {}).get("name") if isinstance(j.get("company"), dict)
+                else j.get("company") or ""
+            ).strip()
+            location = str(j.get("location") or "Remote").strip()
+            job_url = str(j.get("url") or j.get("applicationUrl") or "").strip()
+            description = str(j.get("description") or "").strip()
+            if not title or not job_url:
+                continue
+            results.append(
+                {
+                    "title": title,
+                    "company": company,
+                    "location": location,
+                    "job_url": job_url,
+                    "description": description,
+                    "source": self.name,
+                    "posted_date": j.get("createdAt") or j.get("postedAt"),
+                    "job_type": j.get("jobType"),
+                    "salary": j.get("salary"),
+                    "required_skills": j.get("skills") or [],
+                }
+            )
+
+        LOG.info("Himalayas returned %d jobs", len(results))
+        return results
+
+
 class SerpAPIGoogleJobsScraper(BaseAPIScraper):
-    """Google Jobs via SerpAPI scraper."""
+    """Google Jobs via SerpAPI scraper (multi-account aware)."""
 
     name = "google_jobs"
     endpoint = "https://serpapi.com/search.json"
@@ -1059,20 +1337,24 @@ class SerpAPIGoogleJobsScraper(BaseAPIScraper):
         ),
     ):
         super().__init__(jobs_per_site)
-        self.api_key = os.getenv("SERPAPI_API_KEY_1")
         self.query = query
         self.resource_manager = resource_manager
 
     def _run_sync(self) -> List[Dict[str, Any]]:
-        """Scrape jobs from Google Jobs via SerpAPI."""
-        if not self.api_key:
+        """Scrape jobs from Google Jobs via SerpAPI using multi-account key selection."""
+        account_key = self.resource_manager.select_account_for_request(1)
+        if account_key is None:
             LOG.warning(
-                "SerpAPI key missing (env SERPAPI_API_KEY_1). Skipping Google Jobs."
+                "SerpAPI quota exhausted across all accounts. Skipping Google Jobs."
             )
             return []
 
-        if not self.resource_manager.can_use_credits(1):
-            LOG.warning("SerpAPI quota exceeded. Skipping Google Jobs.")
+        api_key = os.getenv(account_key)
+        if not api_key:
+            LOG.warning(
+                "SerpAPI account key env var '%s' is not set. Skipping Google Jobs.",
+                account_key,
+            )
             return []
 
         params = {
@@ -1080,14 +1362,14 @@ class SerpAPIGoogleJobsScraper(BaseAPIScraper):
             "q": self.query,
             "hl": "en",
             "num": self.jobs_per_site,
-            "api_key": self.api_key,
+            "api_key": api_key,
         }
 
         try:
             response = requests.get(self.endpoint, params=params, timeout=25)
             response.raise_for_status()
             data = response.json()
-            self.resource_manager.use_credits(1)
+            self.resource_manager.use_credits(account_key, 1)
             jobs = data.get("jobs_results", [])[: self.jobs_per_site]
             results: List[Dict[str, Any]] = []
             for j in jobs:
@@ -1112,7 +1394,11 @@ class SerpAPIGoogleJobsScraper(BaseAPIScraper):
                         "job_type": j.get("schedule_type"),
                     }
                 )
-            LOG.info("SerpAPI Google Jobs returned %d jobs", len(results))
+            LOG.info(
+                "SerpAPI Google Jobs returned %d jobs (account=%s)",
+                len(results),
+                account_key,
+            )
             return results
         except requests.RequestException as e:
             LOG.error("SerpAPI Google Jobs failed: %s", e)
@@ -1130,8 +1416,16 @@ class SerpAPIGoogleJobsScraper(BaseAPIScraper):
 class ScraperEngine:
     """Master orchestrator for job scraping."""
 
-    def __init__(self, filters_path: Path = FILTERS_PATH):
-        load_dotenv("narad.env")
+    def __init__(
+        self,
+        filters_path: Path = FILTERS_PATH,
+        min_jobs_target: int = 100,
+        enable_safety_net: bool = True,
+    ):
+        load_dotenv(Path.home() / "narad.env")
+
+        self.min_jobs_target = min_jobs_target
+        self.enable_safety_net = enable_safety_net
 
         self.results: List[Dict[str, Any]] = []
         self.seen_job_ids: Set[str] = set()
@@ -1150,7 +1444,12 @@ class ScraperEngine:
         # Initialize scrapers
         self._init_scrapers()
 
-        LOG.info("ScraperEngine initialized with %d scrapers", len(self.scrapers))
+        LOG.info(
+            "ScraperEngine initialized | scrapers=%d | min_jobs_target=%d | safety_net=%s",
+            len(self.scrapers),
+            self.min_jobs_target,
+            self.enable_safety_net,
+        )
 
     # ------------------------------------------------------------------ #
     # SCRAPER REGISTRATION
@@ -1160,10 +1459,12 @@ class ScraperEngine:
         """Initialize all enabled scrapers."""
         scrapers: List[Any] = []
 
-        # Extract allowed countries from YAML to feed JobSpy for Glassdoor.
+        # Extract allowed countries from YAML to feed JobSpy.
         allowed_countries = self.filter_engine.allowed_countries
 
-        # JobSpy adapter (LinkedIn, Indeed, Glassdoor, ZipRecruiter)
+        # ---- Phase 1: always-on scrapers --------------------------------
+
+        # JobSpy adapter (LinkedIn, Indeed)
         try:
             scrapers.append(
                 JobSpyAdapter(
@@ -1177,28 +1478,49 @@ class ScraperEngine:
         except Exception as e:  # pragma: no cover
             LOG.warning("JobSpyAdapter not available: %s", e)
 
-        # Jooble API
-        if os.getenv("JOOBLE_API_KEY"):
-            scrapers.append(JoobleAPIScraper(jobs_per_site=20))
-            LOG.info("✓ Jooble API scraper initialized")
-        else:
-            LOG.warning("Jooble API key not found. Skipping Jooble scraper.")
+        # RemoteOK public API (no key required)
+        scrapers.append(RemoteOKAPIScraper(jobs_per_site=50))
+        LOG.info("✓ RemoteOK API scraper initialized")
 
-        # Remotive API (no key required)
-        scrapers.append(RemotiveAPIScraper(jobs_per_site=20))
-        LOG.info("✓ Remotive API scraper initialized")
+        # Himalayas remote jobs API (no key required; endpoint is a placeholder)
+        scrapers.append(HimalayasAPIScraper(jobs_per_site=50))
+        LOG.info("✓ Himalayas API scraper initialized")
 
-        # SerpAPI Google Jobs (optional)
-        if os.getenv("SERPAPI_API_KEY_2"):
+        # SerpAPI Google Jobs — enabled when at least one key is configured
+        if self.resource_manager.active_keys:
             scrapers.append(
                 SerpAPIGoogleJobsScraper(
                     jobs_per_site=20,
                     resource_manager=self.resource_manager,
                 )
             )
-            LOG.info("✓ SerpAPI Google Jobs initialized")
+            LOG.info(
+                "✓ SerpAPI Google Jobs initialized (%d account(s))",
+                len(self.resource_manager.active_keys),
+            )
         else:
-            LOG.info("SerpAPI key not found. Skipping Google Jobs scraper.")
+            LOG.info("No SerpAPI keys found. Skipping Google Jobs scraper.")
+
+        # ---- Phase 2: feature-flagged scrapers --------------------------
+        # Enabled when env ENABLE_PHASE_2_SOURCES=true (or PHASE=2 for legacy support).
+        phase2_enabled = (
+            os.getenv("ENABLE_PHASE_2_SOURCES", "").lower() == "true"
+            or os.getenv("PHASE", "") == "2"
+        )
+        if phase2_enabled:
+            if os.getenv("JOOBLE_API_KEY"):
+                scrapers.append(JoobleAPIScraper(jobs_per_site=20))
+                LOG.info("✓ [Phase 2] Jooble API scraper initialized")
+            else:
+                LOG.warning("[Phase 2] Jooble API key not found. Skipping Jooble scraper.")
+
+            scrapers.append(RemotiveAPIScraper(jobs_per_site=20))
+            LOG.info("✓ [Phase 2] Remotive API scraper initialized")
+        else:
+            LOG.info(
+                "Phase 2 sources disabled. Set ENABLE_PHASE_2_SOURCES=true to enable "
+                "Jooble and Remotive scrapers."
+            )
 
         self.scrapers = scrapers
         self.metrics.sites_scraped = {
@@ -1288,18 +1610,56 @@ class ScraperEngine:
             if self.filter_engine.should_exclude(normalized):
                 continue
 
-            # YAML-driven scoring
+            # YAML-driven static pre-filter scoring (0–100 internal, 0.0–1.0 output)
             score = self.scoring_engine.calculate_score(normalized)
-            decision = self.scoring_engine.classify_decision(score)
-
-            # Only keep jobs above minimum_application_score
-            if decision == "reject":
+            if score < self.scoring_engine.min_application_score:
                 continue
 
-            normalized["relevance_score"] = round(score, 2)
-            normalized["decision"] = decision
+            static_score = max(0.0, min(1.0, score / 100.0))
+            normalized["static_score"] = round(static_score, 2)
 
             self.results.append(normalized)
+
+        # ---- Safety-net activation check --------------------------------
+        # If fewer jobs than min_jobs_target passed all filters + scoring,
+        # supplemental Playwright-based scrapers (Nodesk, Toptal) should be
+        # triggered to top up the result pool.
+        #
+        # TODO (Step 3): Wire Nodesk and Toptal Playwright scrapers here.
+        # When this block is filled in, run their scrape coroutines,
+        # extend all_raw_jobs (or re-run the normalization/filter/score loop
+        # on their output), then merge into self.results.
+        if self.enable_safety_net and len(self.results) < self.min_jobs_target:
+            LOG.warning(
+                "Safety-net triggered: only %d/%d jobs collected after primary scrape. "
+                "Nodesk/Toptal Playwright scrapers should run here (not yet wired).",
+                len(self.results),
+                self.min_jobs_target,
+            )
+            # TODO: instantiate and await NodeskScraper / ToptalScraper here.
+
+        # ---- Enforce unified schema completeness ------------------------
+        # Every job dict reaching here must expose all keys from the unified
+        # schema so downstream agents never encounter a KeyError.
+        # List-type fields default to [] ; scalar fields default to None.
+        # No routing or DB-related keys are added here.
+        _LIST_KEYS = {"required_skills", "preferred_skills", "benefits"}
+        _SCALAR_KEYS = {
+            "job_id", "title", "company", "location", "remote_type",
+            "job_url", "application_url", "source", "platform", "description",
+            "job_type", "employment_type", "salary_min", "salary_max",
+            "salary_currency", "experience_min", "experience_max",
+            "experience_level", "posted_date", "scraped_at", "company_size",
+            "company_url", "industry", "visa_sponsorship", "education_required",
+            "application_method", "normalisation_status", "static_score",
+        }
+        for job in self.results:
+            for key in _LIST_KEYS:
+                if key not in job:
+                    job[key] = []
+            for key in _SCALAR_KEYS:
+                if key not in job:
+                    job[key] = None
 
         # Metrics
         self.metrics.total_jobs_unique = len(self.seen_job_ids)
@@ -1318,7 +1678,7 @@ class ScraperEngine:
             "0-49": 0,
         }
         for job in self.results:
-            s = job.get("relevance_score", 0)
+            s = round(job.get("static_score", 0.0) * 100.0, 2)
             if s >= 90:
                 score_ranges["90-100"] += 1
             elif s >= 80:

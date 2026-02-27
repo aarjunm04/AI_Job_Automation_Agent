@@ -170,6 +170,11 @@ scraper_config:
 # =============================================================================
 # LOCATION PREFERENCES (India + Global Remote Focus)
 # =============================================================================
+# NOTE: These settings are used by FilterEngine at scrape time to hard-exclude
+# jobs that don't match the configured location profile.
+# They are NOT used to make application routing decisions.
+# Downstream agents handle any further location-based prioritisation.
+# =============================================================================
 locations:
   # Preferred locations (in order of preference)
   preferred:
@@ -224,6 +229,13 @@ locations:
 
 # =============================================================================
 # SALARY & COMPENSATION (Indian Market Focus)
+# =============================================================================
+# NOTE: `minimum_salary` is used by FilterEngine as a scrape-time hard floor
+# for INR-denominated jobs only. Jobs below this threshold are dropped before
+# reaching downstream agents.
+# All other compensation fields (`preferred_minimum`, `target_salary`,
+# `salary_required`, `equity_preferred`, etc.) are advisory hints read by
+# ScoringEngine and downstream agents — they do NOT cause hard exclusions here.
 # =============================================================================
 compensation:
   # Salary ranges (in INR annually)
@@ -489,6 +501,14 @@ platforms:
 # =============================================================================
 # AI SCORING CRITERIA (AI/ML Optimized)
 # =============================================================================
+# NOTE: All values in this section are used ONLY as static pre-filter guidance
+# by ScoringEngine at scrape time. They produce a `static_score` in [0.0, 1.0]
+# that is attached to each normalized job dict.
+#
+# These thresholds are NOT routing or application decisions.
+# Final decisions (whether to auto-apply, queue for manual review, or skip) are
+# made EXCLUSIVELY by downstream agents — NOT by the scrapers in this repo.
+# =============================================================================
 ai_scoring:
   # Weights for AI/ML job criteria
   weights:
@@ -499,14 +519,25 @@ ai_scoring:
     company_match: 0.05        # Lax company preference
     experience_match: 0.10     # 0-5 years range
     industry_match: 0.05       # AI/ML industry bonus
-  
+
   # Scoring thresholds
+  # minimum_application_score: scrape-time hard floor — jobs scoring below this
+  #   are dropped from scraper output entirely (saves downstream processing).
+  #   This is NOT an auto-apply gate: it only controls what reaches downstream.
+  # auto_apply_threshold: read by downstream agents only; scrapers do not act on it.
+  # manual_review_threshold: read by downstream agents only; scrapers do not act on it.
   minimum_application_score: 60  # Lower threshold for more opportunities
-  auto_apply_threshold: 80       # High confidence applications
-  manual_review_threshold: 70    # Review borderline cases
+  auto_apply_threshold: 80       # High confidence — interpreted by downstream agents
+  manual_review_threshold: 70    # Borderline review — interpreted by downstream agents
 
 # =============================================================================
 # APPLICATION PREFERENCES (AI/ML Optimized)
+# =============================================================================
+# NOTE: All settings in this section are read and acted upon EXCLUSIVELY by
+# downstream application agents. The scraper stack (scraper_engine.py,
+# scraper_service.py, jobspy_adapter.py) does NOT read or enforce any of these
+# values. No auto-apply, cover-letter generation, or resume customisation logic
+# runs inside the scrapers.
 # =============================================================================
 application_settings:
   # Daily limits

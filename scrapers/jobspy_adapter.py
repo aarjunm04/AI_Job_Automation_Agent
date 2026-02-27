@@ -1,5 +1,5 @@
 """
-core/jobspy_adapter.py
+scrapers/jobspy_adapter.py
 
 ENTERPRISE-GRADE JOBSPY WRAPPER
 ================================
