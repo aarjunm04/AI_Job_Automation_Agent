@@ -33,13 +33,20 @@ import uuid
 from chromadb_store import ChromaStore, ChromaStoreConfig
 from rag_pipeline import (
     RAGPipeline,
-    GeminiEmbedder,
-    LocalDeterministicEmbedder,
+    EmbeddingService,
     chunk_text,
 )
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
+
+
+RESUME_DIR = os.getenv("RESUME_DIR", "resumes")
+
+
+def _resolve_resume_path(filename: str) -> str:
+    """Resolve a resume filename against RESUME_DIR to an absolute path."""
+    return os.path.abspath(os.path.join(RESUME_DIR, filename))
 
 
 # ============================================================
@@ -82,17 +89,21 @@ class ResumeEngine:
         # CHROMA STORE (PersistentClient version)
         self.chroma = ChromaStore(config=chroma_config or ChromaStoreConfig())
 
-        # EMBEDDER
-        if embedder:
-            self.embedder = embedder
+        # EMBEDDING SERVICE (NVIDIA NIM primary, Gemini fallback)
+        if isinstance(embedder, EmbeddingService):
+            self.embedding_service = embedder
         else:
-            if os.getenv("GEMINI_API_KEY_RAG"):
-                self.embedder = GeminiEmbedder()
-            else:
-                self.embedder = LocalDeterministicEmbedder()
+            self.embedding_service = EmbeddingService()
+
+        # Expose primary embedder for compatibility with existing callers
+        self.embedder = self.embedding_service.primary
 
         # RAG PIPELINE
-        self.rag = RAGPipeline(store=self.chroma, embedder=self.embedder)
+        self.rag = RAGPipeline(
+            store=self.chroma,
+            embedder=self.embedder,
+            embedding_service=self.embedding_service,
+        )
 
         # LOAD RESUME CONFIG
         self.resumes: Dict[str, ResumeEntry] = {}
@@ -110,7 +121,8 @@ class ResumeEngine:
 
         for r in raw.get("resumes", []):
             resume_id = r["resume_id"]
-            path = r["local_path"]
+            filename = r["local_path"]
+            path = _resolve_resume_path(filename)
 
             anchor_id = f"resume_vector::{resume_id}::{r['embedding_version']}"
 
@@ -182,7 +194,7 @@ class ResumeEngine:
         chunks = chunk_text(raw_text)
 
         # 2. EMBED CHUNKS
-        chunk_embeddings = [self.embedder.embed_text(c["text"]) for c in chunks]
+        chunk_embeddings = [self.embedding_service.embed_text(c["text"]) for c in chunks]
 
         # 3. UPSERT CHUNKS
         self.chroma.upsert_resume(resume_id, chunks, chunk_embeddings)
@@ -191,7 +203,7 @@ class ResumeEngine:
         pdf_anchor = self._anchor_text(raw_text)
         config_keywords = entry.role_focus  # Rich keywords from config
         anchor_text = f"{config_keywords}\n\n{pdf_anchor}"  # Config first, then PDF
-        anchor_embedding = self.embedder.embed_text(anchor_text)
+        anchor_embedding = self.embedding_service.embed_text(anchor_text)
 
 
         self.chroma.add_anchor(

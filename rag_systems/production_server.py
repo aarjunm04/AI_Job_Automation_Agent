@@ -129,25 +129,16 @@ class ServerConfig:
     RELOAD: bool = os.getenv("RAG_SERVER_RELOAD", "false").lower() == "true"
     WORKERS: int = int(os.getenv("RAG_SERVER_WORKERS", "1"))
 
-    # API Keys
-    API_KEY_CHROME: str = os.getenv("RAG_KEY_CHROME", "")
-    API_KEY_MCP: str = os.getenv("RAG_KEY_MCP", "")
-    API_KEY_DEV: str = os.getenv("RAG_KEY_DEV", "")
-    API_KEY_AUTOMATION: str = os.getenv("RAG_KEY_AUTOMATION", "")
-    MASTER_API_KEY: str = os.getenv("RAG_KEY_MASTER", "")
+    # API Key (single server-wide key)
+    API_KEY: str = os.getenv("RAG_SERVER_API_KEY", "")
+    MASTER_API_KEY: str = API_KEY
     
-    # Collect all valid client keys
-    API_KEYS: Set[str] = {
-        key for key in [API_KEY_CHROME, API_KEY_MCP, API_KEY_DEV, API_KEY_AUTOMATION]
-        if key
-    }
+    # Collect all valid client keys (single-key model, kept as a set for compatibility)
+    API_KEYS: Set[str] = {key for key in [API_KEY] if key}
     
-    # Mapping for logging/tracking
+    # Mapping for logging/tracking (single entry)
     API_KEY_NAMES: Dict[str, str] = {
-        API_KEY_CHROME: "chrome_extension",
-        API_KEY_MCP: "mcp_server",
-        API_KEY_DEV: "development",
-        API_KEY_AUTOMATION: "automation_service"
+        API_KEY: "rag_server"
     }
     
     # Session Management
@@ -856,25 +847,19 @@ async def verify_api_key(
 ) -> str:
     """Verify API key from header"""
     
-    # Collect all valid keys from environment, filtering out None/empty
+    # Collect all valid keys from environment, filtering out None/empty.
+    # Primary key: RAG_SERVER_API_KEY. RAG_API_KEY is accepted for backwards compatibility.
     valid_keys = {
-        key for key in [
-            os.getenv("RAG_KEY_CHROME"),
-            os.getenv("RAG_KEY_MCP"),
-            os.getenv("RAG_KEY_DEV"),
-            os.getenv("RAG_KEY_AUTOMATION"),
-            os.getenv("RAG_KEY_MASTER"),
-            # Fallback to old variable names for backwards compatibility
+        key
+        for key in [
+            os.getenv("RAG_SERVER_API_KEY"),
             os.getenv("RAG_API_KEY"),
-            os.getenv("CHROME_EXT_API_KEY"),
-            os.getenv("MCP_API_KEY")
-        ] if key and key.strip()
+        ]
+        if key and key.strip()
     }
     
-    # Also check ServerConfig.API_KEYS
+    # Also check ServerConfig.API_KEYS / MASTER_API_KEY
     valid_keys.update(ServerConfig.API_KEYS)
-    
-    # Add master key
     if ServerConfig.MASTER_API_KEY:
         valid_keys.add(ServerConfig.MASTER_API_KEY)
     
@@ -1346,17 +1331,12 @@ def main():
     logger.info(f"Port: {ServerConfig.PORT}")
     logger.info(f"Workers: 1 (production mode)")
     
-    logger.info("API Keys configured:")
-    for key_var, client_name in [
-        ("RAG_KEY_CHROME", "Chrome Extension"),
-        ("RAG_KEY_MCP", "MCP Server"),
-        ("RAG_KEY_DEV", "Development"),
-        ("RAG_KEY_AUTOMATION", "Automation Service"),
-        ("RAG_KEY_MASTER", "Master Admin")
-    ]:
-        key_value = os.getenv(key_var)
-        if key_value:
-            logger.info(f"  ✓ {client_name}: {key_value[:15]}...")
+    logger.info("API key configuration:")
+    server_key = os.getenv("RAG_SERVER_API_KEY", "")
+    if server_key:
+        logger.info("  ✓ RAG_SERVER_API_KEY configured: %s...", server_key[:15])
+    else:
+        logger.warning("  ✗ RAG_SERVER_API_KEY is not configured")
     
     logger.info(f"Rate Limit: {ServerConfig.RATE_LIMIT_REQUESTS} req/{ServerConfig.RATE_LIMIT_WINDOW_SECONDS}s")
     logger.info(f"Cache: {'Enabled' if ServerConfig.CACHE_ENABLED else 'Disabled'}")

@@ -7,6 +7,7 @@ Handles text chunking, embedding generation, and semantic search
 from __future__ import annotations
 import os
 import re
+import time
 import httpx
 import logging
 from dataclasses import dataclass, field
@@ -36,8 +37,8 @@ class GeminiEmbedder(EmbeddingProvider):
     Gemini embedding provider using Gemini embeddings API.
     Supports 768, 1536, or 3072 dimensions with MRL
     """
-    api_key: str = field(default_factory=lambda: os.getenv("GEMINI_API_KEY_RAG", ""))
-    model: str = field(default_factory=lambda: os.getenv("GEMINI_EMBEDDING_MODEL", "models/gemini-embedding-001"))
+    api_key: str = field(default_factory=lambda: os.getenv("GEMINI_API_KEY", ""))
+    model: str = field(default_factory=lambda: os.getenv("GEMINI_EMBEDDING_MODEL", "models/text-embedding-004"))
     output_dimensionality: int = 768  # Recommended for storage efficiency
     task_type: str = "RETRIEVAL_DOCUMENT"  # For resume indexing
     timeout_seconds: float = 30
@@ -53,7 +54,7 @@ class GeminiEmbedder(EmbeddingProvider):
             List of floats representing the embedding vector
         """
         if not self.api_key:
-            raise RuntimeError("Missing GEMINI_API_KEY_RAG in environment variables")
+            raise RuntimeError("Missing GEMINI_API_KEY in environment variables")
 
         url = (
             f"https://generativelanguage.googleapis.com/v1beta/"
@@ -100,7 +101,7 @@ class GeminiEmbedder(EmbeddingProvider):
                 raise RuntimeError(
                     "Gemini embedding endpoint/model not found (404). "
                     f"Configured model='{self.model}'. "
-                    "Set GEMINI_EMBEDDING_MODEL=models/gemini-embedding-001 "
+                    "Set GEMINI_EMBEDDING_MODEL=models/text-embedding-004 "
                     "or verify model access for your API key."
                 ) from e
             raise RuntimeError(f"Gemini API request failed: {e}") from e
@@ -125,40 +126,153 @@ class GeminiEmbedder(EmbeddingProvider):
 
     def embed_query(self, text: str) -> List[float]:
         """
-        Embed a query (job description) with RETRIEVAL_QUERY task type
-        
-        Args:
-            text: Query text
-            
-        Returns:
-            Query embedding vector
+        Embed a query (job description) with RETRIEVAL_QUERY task type.
         """
-        # Temporarily switch to query mode
         original_task = self.task_type
         self.task_type = "RETRIEVAL_QUERY"
-        
+
         try:
-            embedding = self.embed_text(text)
-            return embedding
+            return self.embed_text(text)
         finally:
             self.task_type = original_task
 
 
 @dataclass
-class LocalDeterministicEmbedder(EmbeddingProvider):
+class NVIDIANIMEmbedder(EmbeddingProvider):
     """
-    Fallback embedder using deterministic hashing
-    For development/testing without API keys
+    Primary embedding provider using NVIDIA NIM OpenAI-compatible embeddings API.
     """
-    dim: int = 768
-    
+
+    base_url: str = field(
+        default_factory=lambda: os.getenv(
+            "NVIDIA_NIM_BASE_URL", "https://integrate.api.nvidia.com/v1"
+        )
+    )
+    api_key: str = field(default_factory=lambda: os.getenv("NVIDIA_NIM_API_KEY", ""))
+    model: str = field(
+        default_factory=lambda: os.getenv(
+            "NVIDIA_NIM_EMBEDDING_MODEL", "nvidia/nv-embedqa-e5-v5"
+        )
+    )
+    dimensions: int = 1024
+    timeout_seconds: float = 30.0
+    extra_body: Dict[str, Any] = field(
+        default_factory=lambda: {
+            "input_type": "query",
+            "truncate": "NONE",
+        }
+    )
+
     def embed_text(self, text: str) -> List[float]:
-        """Generate deterministic embedding from text hash"""
-        import hashlib
-        h = hashlib.sha256(text.encode()).digest()
-        vec = np.frombuffer(h * 4, dtype=np.uint8)[:self.dim].astype(float)
-        normalized = vec / (np.linalg.norm(vec) or 1.0)
-        return normalized.tolist()
+        """
+        Generate embeddings using NVIDIA NIM OpenAI-compatible embeddings API.
+        """
+        if not self.api_key:
+            raise RuntimeError("Missing NVIDIA_NIM_API_KEY in environment variables")
+
+        url = f"{self.base_url.rstrip('/')}/embeddings"
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+        payload: Dict[str, Any] = {
+            "model": self.model,
+            "input": text,
+            "encoding_format": "float",
+        }
+        payload.update(self.extra_body)
+
+        try:
+            resp = httpx.post(url, json=payload, headers=headers, timeout=self.timeout_seconds)
+            resp.raise_for_status()
+            data = resp.json()
+
+            # Expected OpenAI-compatible response: {"data":[{"embedding":[...]}], ...}
+            embeddings = data.get("data") or []
+            if not embeddings or "embedding" not in embeddings[0]:
+                raise RuntimeError(f"Unexpected NVIDIA NIM response structure: {data}")
+
+            embedding: List[float] = embeddings[0]["embedding"]
+            if len(embedding) != self.dimensions:
+                logger.warning(
+                    "NVIDIA NIM embedding dimension mismatch: expected %d, got %d",
+                    self.dimensions,
+                    len(embedding),
+                )
+
+            logger.debug("Generated %d-dim NVIDIA NIM embedding", len(embedding))
+            return embedding
+        except httpx.HTTPStatusError as e:
+            logger.error(
+                "NVIDIA NIM API HTTP error: %s - %s",
+                e.response.status_code,
+                e.response.text,
+            )
+            raise RuntimeError(f"NVIDIA NIM API request failed: {e}") from e
+        except httpx.RequestError as e:
+            logger.error("NVIDIA NIM API connection error: %s", e)
+            raise RuntimeError("Failed to connect to NVIDIA NIM API") from e
+        except Exception as e:  # noqa: BLE001
+            logger.exception("NVIDIA NIM embedding error: %s", e)
+            raise RuntimeError("NVIDIA NIM embedding request failed") from e
+
+
+@dataclass
+class EmbeddingService:
+    """
+    Embedding service that tries NVIDIA NIM first, then falls back to Gemini.
+
+    All external embedding calls are wrapped with retry (max 3) and
+    exponential backoff (time.sleep(2**attempt)).
+    """
+
+    primary: EmbeddingProvider = field(default_factory=NVIDIANIMEmbedder)
+    fallback: EmbeddingProvider = field(default_factory=GeminiEmbedder)
+    max_retries: int = 3
+
+    def embed_text(self, text: str) -> List[float]:
+        return self._embed(text, is_query=False)
+
+    def embed_query(self, text: str) -> List[float]:
+        return self._embed(text, is_query=True)
+
+    def _embed(self, text: str, is_query: bool) -> List[float]:
+        last_error: Optional[Exception] = None
+
+        for provider_name, provider in (
+            ("NVIDIA_NIM", self.primary),
+            ("Gemini", self.fallback),
+        ):
+            for attempt in range(self.max_retries):
+                try:
+                    if isinstance(provider, GeminiEmbedder) and is_query:
+                        vector = provider.embed_query(text)
+                    else:
+                        vector = provider.embed_text(text)
+                    return vector
+                except Exception as exc:  # noqa: BLE001
+                    last_error = exc
+                    logger.error(
+                        "Embedding error with %s on attempt %d: %s",
+                        provider_name,
+                        attempt + 1,
+                        exc,
+                    )
+                    # Exponential backoff: 1, 2, 4 seconds between retries
+                    if attempt < self.max_retries - 1:
+                        time.sleep(2**attempt)
+            logger.warning(
+                "Provider %s failed after %d attempts, trying next fallback",
+                provider_name,
+                self.max_retries,
+            )
+
+        error_message = (
+            "All embedding providers failed. "
+            f"Last error: {last_error!r}" if last_error else "All embedding providers failed."
+        )
+        logger.error(error_message)
+        raise RuntimeError(error_message)
 
 
 # ============================================================
@@ -245,11 +359,12 @@ def chunk_text(
 @dataclass
 class RAGPipeline:
     """
-    Main RAG orchestration pipeline
-    Handles embedding, retrieval, and context building
+    Main RAG orchestration pipeline.
+    Handles embedding, retrieval, and context building.
     """
     store: Any  # ChromaStore instance
     embedder: EmbeddingProvider
+    embedding_service: EmbeddingService = field(default_factory=EmbeddingService)
 
     def clean_job_text(self, text: str) -> str:
         """Clean and normalize job description text"""
@@ -266,12 +381,7 @@ class RAGPipeline:
             Query embedding vector
         """
         cleaned = self.clean_job_text(text)
-        
-        # Use query-specific embedding if available
-        if isinstance(self.embedder, GeminiEmbedder):
-            return self.embedder.embed_query(cleaned)
-        else:
-            return self.embedder.embed_text(cleaned)
+        return self.embedding_service.embed_query(cleaned)
 
     def get_top_resume_anchors(
         self, 
@@ -354,19 +464,17 @@ def create_default_pipeline(
     
     Args:
         chroma_store: ChromaStore instance
-        use_local_embedder: If True, use local deterministic embedder
-        
+        use_local_embedder: Kept for backwards compatibility (ignored).
+
     Returns:
-        Configured RAGPipeline instance
+        Configured RAGPipeline instance with NVIDIA NIM primary
+        and Gemini fallback embedding service.
     """
-    if use_local_embedder or not os.getenv("GEMINI_API_KEY_RAG"):
-        logger.warning("Using LocalDeterministicEmbedder (no API key found)")
-        embedder = LocalDeterministicEmbedder(dim=768)
-    else:
-        logger.info("Using GeminiEmbedder with model=%s", os.getenv("GEMINI_EMBEDDING_MODEL", "models/gemini-embedding-001"))
-        embedder = GeminiEmbedder(
-            output_dimensionality=768,
-            task_type="RETRIEVAL_DOCUMENT"
-        )
-    
-    return RAGPipeline(store=chroma_store, embedder=embedder)
+    embedding_service = EmbeddingService()
+    # Preserve existing signature by still passing an embedder instance,
+    # while routing all queries through EmbeddingService.
+    return RAGPipeline(
+        store=chroma_store,
+        embedder=embedding_service.primary,
+        embedding_service=embedding_service,
+    )

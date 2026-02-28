@@ -1,104 +1,302 @@
+# integrations/llm_interface.py
 """
-LLM Interface Module
---------------------
-Centralized interface for managing all LLM calls in the AI Job Automation Agent.
-Primary model: Google Gemini (Free Tier)
-Fallback model: OpenRouter (e.g., Polaris Alpha or Llama 4 Maverick :free)
+LLM Interface Module — Spec-Compliant Agent LLM Configuration
+
+Centralized interface for managing CrewAI LLM objects for each agent type.
+Provides primary and fallback LLM chains per IDE_README.md AGENT SYSTEM table.
+All API keys via os.getenv(); no Gemini or OpenRouter logic (embedding-only providers).
 """
 
-import os
-import requests
+from __future__ import annotations
+
 import logging
+import os
+import time
+from typing import Any, Optional
 
-# Configure logger
+from crewai import LLM
+from dotenv import load_dotenv
+
+load_dotenv()
+
+__all__ = ["LLMInterface"]
+
+# Logging configuration
+_LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
+    level=getattr(logging, _LOG_LEVEL, logging.INFO),
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
+logger = logging.getLogger(__name__)
+
+# Agent type constants
+VALID_AGENT_TYPES = frozenset({
+    "MASTER_AGENT",
+    "SCRAPER_AGENT",
+    "ANALYSER_AGENT",
+    "APPLY_AGENT",
+    "TRACKER_AGENT",
+    "DEVELOPER_AGENT",
+})
+
+# Provider config: (model, api_key_env, base_url or None)
+_AGENT_CONFIG: dict[str, dict[str, Any]] = {
+    "MASTER_AGENT": {
+        "primary": ("groq/llama-3.3-70b-versatile", "GROQ_API_KEY", None),
+        "fallback_1": ("cerebras/llama3.3-70b", "CEREBRAS_API_KEY", None),
+        "fallback_2": None,
+    },
+    "SCRAPER_AGENT": {
+        "primary": ("perplexity/sonar", "PERPLEXITY_API_KEY", None),
+        "fallback_1": None,
+        "fallback_2": None,
+    },
+    "ANALYSER_AGENT": {
+        "primary": ("xai/grok-4-fast-reasoning", "XAI_API_KEY", "https://api.x.ai/v1"),
+        "fallback_1": ("sambanova/Meta-Llama-3.1-70B-Instruct", "SAMBANOVA_API_KEY", None),
+        "fallback_2": ("cerebras/llama3.3-70b", "CEREBRAS_API_KEY", None),
+    },
+    "APPLY_AGENT": {
+        "primary": ("xai/grok-4-1-fast-reasoning", "XAI_API_KEY", "https://api.x.ai/v1"),
+        "fallback_1": ("sambanova/Meta-Llama-3.1-70B-Instruct", "SAMBANOVA_API_KEY", None),
+        "fallback_2": ("cerebras/llama3.3-70b", "CEREBRAS_API_KEY", None),
+    },
+    "TRACKER_AGENT": {
+        "primary": ("groq/llama-3.3-70b-versatile", "GROQ_API_KEY", None),
+        "fallback_1": ("cerebras/llama3.3-70b", "CEREBRAS_API_KEY", None),
+        "fallback_2": None,
+    },
+    "DEVELOPER_AGENT": {
+        "primary": ("xai/grok-3-mini-latest", "XAI_API_KEY", "https://api.x.ai/v1"),
+        "fallback_1": ("perplexity/sonar", "PERPLEXITY_API_KEY", None),
+        "fallback_2": None,
+    },
+}
+
+
+def _create_llm(model: str, api_key: str, base_url: Optional[str] = None) -> LLM:
+    """Create a CrewAI LLM instance with optional base_url for xAI providers."""
+    kwargs: dict[str, Any] = {"model": model, "api_key": api_key}
+    if base_url:
+        kwargs["base_url"] = base_url
+    return LLM(**kwargs)
+
 
 class LLMInterface:
-    def __init__(self):
-        # === Primary LLM: Google Gemini ===
-        self.gemini_key = os.getenv("GEMINI_API_KEY")
-        self.gemini_model = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
-        self.gemini_url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.gemini_model}:generateContent?key={self.gemini_key}"
+    """
+    Centralized LLM configuration for all CrewAI agents.
 
-        # === Fallback LLM: OpenRouter ===
-        self.openrouter_key = os.getenv("OPENROUTER_API_KEY")
-        self.openrouter_model = os.getenv("OPENROUTER_MODEL", "openrouter/polaris-alpha")
-        self.openrouter_url = "https://openrouter.ai/api/v1/chat/completions"
+    Returns configured CrewAI LLM objects for each agent type per the
+    IDE_README.md AGENT SYSTEM table. Supports primary and fallback chains.
+    """
 
-        # === System configuration ===
-        self.max_tokens = int(os.getenv("MAX_TOKENS", 1000))
-        self.temperature = float(os.getenv("TEMPERATURE", 0.2))
+    def get_llm(self, agent_type: str) -> LLM:
+        """
+        Return the primary LLM object for the given agent type.
 
-    # === Primary Query: Gemini ===
-    def query_gemini(self, prompt: str) -> str:
-        try:
-            payload = {"contents": [{"role": "user", "parts": [{"text": prompt}]}]}
-            response = requests.post(self.gemini_url, json=payload, timeout=25)
-            response.raise_for_status()
+        Args:
+            agent_type: One of MASTER_AGENT, SCRAPER_AGENT, ANALYSER_AGENT,
+                APPLY_AGENT, TRACKER_AGENT, DEVELOPER_AGENT.
 
-            data = response.json()
-            text = (
-                data.get("candidates", [{}])[0]
-                .get("content", {})
-                .get("parts", [{}])[0]
-                .get("text", "")
+        Returns:
+            Configured CrewAI LLM instance for the primary provider.
+
+        Raises:
+            ValueError: If agent_type is not recognised or required API key
+                is missing or empty.
+        """
+        agent_type = agent_type.strip().upper()
+        if agent_type not in VALID_AGENT_TYPES:
+            raise ValueError(
+                f"Unrecognised agent_type: '{agent_type}'. "
+                f"Valid types: {sorted(VALID_AGENT_TYPES)}"
             )
-            if not text:
-                raise ValueError("Empty Gemini response.")
-            logging.info("✅ Gemini response received.")
-            return text.strip()
 
-        except Exception as e:
-            logging.warning(f"⚠️ Gemini failed: {e}")
-            raise
+        config = _AGENT_CONFIG[agent_type]
+        model, key_env, base_url = config["primary"]
+        api_key = os.getenv(key_env)
+        if not api_key or not str(api_key).strip():
+            raise ValueError(
+                f"Missing or empty API key for {agent_type} primary provider. "
+                f"Set {key_env} in environment."
+            )
+        return _create_llm(model, api_key.strip(), base_url)
 
-    # === Fallback Query: OpenRouter ===
-    def query_openrouter(self, prompt: str) -> str:
-        try:
-            headers = {
-                "Authorization": f"Bearer {self.openrouter_key}",
-                "Content-Type": "application/json",
-            }
-            payload = {
-                "model": self.openrouter_model,
-                "messages": [{"role": "user", "content": prompt}],
-                "temperature": self.temperature,
-                "max_tokens": self.max_tokens,
-            }
-
-            response = requests.post(self.openrouter_url, headers=headers, json=payload, timeout=30)
-            response.raise_for_status()
-
-            data = response.json()
-            text = data.get("choices", [{}])[0].get("message", {}).get("content", "")
-            if not text:
-                raise ValueError("Empty OpenRouter response.")
-            logging.info("✅ OpenRouter fallback response received.")
-            return text.strip()
-
-        except Exception as e:
-            logging.error(f"❌ OpenRouter failed: {e}")
-            raise
-
-    # === Unified Query Handler ===
-    def query(self, prompt: str) -> str:
+    def get_fallback_llm(self, agent_type: str, level: int = 1) -> Optional[LLM]:
         """
-        Tries Gemini first; falls back to OpenRouter if Gemini fails.
+        Return fallback_1 LLM when level=1, fallback_2 when level=2.
+
+        Args:
+            agent_type: One of the valid agent type strings.
+            level: 1 for fallback_1, 2 for fallback_2.
+
+        Returns:
+            Configured CrewAI LLM for the fallback at that level, or None
+            if no fallback exists at that level.
+
+        Raises:
+            ValueError: If agent_type is not recognised or required fallback
+                API key is missing when a fallback exists at that level.
         """
-        try:
-            return self.query_gemini(prompt)
-        except Exception:
-            logging.info("🔄 Switching to fallback model (OpenRouter)...")
-            return self.query_openrouter(prompt)
+        agent_type = agent_type.strip().upper()
+        if agent_type not in VALID_AGENT_TYPES:
+            raise ValueError(
+                f"Unrecognised agent_type: '{agent_type}'. "
+                f"Valid types: {sorted(VALID_AGENT_TYPES)}"
+            )
 
+        key = f"fallback_{level}"
+        config = _AGENT_CONFIG[agent_type]
+        fallback = config.get(key)
+        if fallback is None:
+            return None
 
-# === Example Usage ===
-if __name__ == "__main__":
-    llm = LLMInterface()
-    test_prompt = "Explain the purpose of a centralized LLM interface in an AI automation system."
-    print("\n--- LLM Output ---\n")
-    result = llm.query(test_prompt)
-    print(result)
+        model, key_env, base_url = fallback
+        api_key = os.getenv(key_env)
+        if not api_key or not str(api_key).strip():
+            raise ValueError(
+                f"Missing or empty API key for {agent_type} {key}. "
+                f"Set {key_env} in environment."
+            )
+        return _create_llm(model, api_key.strip(), base_url)
+
+    def get_llm_with_fallback(self, agent_type: str) -> tuple[LLM, list[LLM]]:
+        """
+        Return (primary_llm, [fallback_llms in order]) for the agent type.
+
+        Convenience method for agents to receive their full fallback chain
+        at once.
+
+        Args:
+            agent_type: One of the valid agent type strings.
+
+        Returns:
+            Tuple of (primary LLM, list of fallback LLMs in order).
+            The list may be empty if the agent has no fallbacks.
+
+        Raises:
+            ValueError: If agent_type is not recognised or any required
+                API key is missing.
+        """
+        primary = self.get_llm(agent_type)
+        fallbacks: list[LLM] = []
+        for level in (1, 2):
+            fb = self.get_fallback_llm(agent_type, level=level)
+            if fb is not None:
+                fallbacks.append(fb)
+        return (primary, fallbacks)
+
+    def test_connection(self, agent_type: str) -> dict[str, Any]:
+        """
+        Test primary LLM with a minimal single-token ping call.
+
+        Does not raise; always returns a status dict.
+
+        Args:
+            agent_type: One of the valid agent type strings.
+
+        Returns:
+            Dict with keys: agent, provider, model, reachable, latency_ms, error.
+            error is None on success.
+        """
+        agent_type = agent_type.strip().upper()
+        provider = "unknown"
+        model = "unknown"
+        start = time.perf_counter()
+
+        if agent_type not in VALID_AGENT_TYPES:
+            return {
+                "agent": agent_type,
+                "provider": provider,
+                "model": model,
+                "reachable": False,
+                "latency_ms": (time.perf_counter() - start) * 1000,
+                "error": f"Unrecognised agent_type: '{agent_type}'",
+            }
+
+        config = _AGENT_CONFIG[agent_type]
+        model, key_env, base_url = config["primary"]
+        api_key = os.getenv(key_env)
+        if not api_key or not str(api_key).strip():
+            return {
+                "agent": agent_type,
+                "provider": key_env.replace("_API_KEY", "").lower(),
+                "model": model,
+                "reachable": False,
+                "latency_ms": (time.perf_counter() - start) * 1000,
+                "error": f"Missing or empty {key_env}",
+            }
+
+        provider = key_env.replace("_API_KEY", "").lower()
+        max_retries = 3
+        last_error: Optional[str] = None
+
+        for attempt in range(max_retries):
+            try:
+                import litellm
+
+                completion_kwargs: dict[str, Any] = {
+                    "model": model,
+                    "api_key": api_key.strip(),
+                    "messages": [{"role": "user", "content": "Hi"}],
+                    "max_tokens": 1,
+                }
+                if base_url:
+                    completion_kwargs["api_base"] = base_url
+                response = litellm.completion(**completion_kwargs)
+                if response and response.choices:
+                    latency_ms = (time.perf_counter() - start) * 1000
+                    return {
+                        "agent": agent_type,
+                        "provider": provider,
+                        "model": model,
+                        "reachable": True,
+                        "latency_ms": round(latency_ms, 2),
+                        "error": None,
+                    }
+            except ImportError as e:
+                last_error = f"litellm not available: {e}"
+                break
+            except Exception as e:  # noqa: BLE001
+                last_error = str(e)
+                logger.warning(
+                    "test_connection %s attempt %d failed: %s",
+                    agent_type,
+                    attempt + 1,
+                    e,
+                )
+                if attempt < max_retries - 1:
+                    time.sleep(2**attempt)
+
+        latency_ms = (time.perf_counter() - start) * 1000
+        return {
+            "agent": agent_type,
+            "provider": provider,
+            "model": model,
+            "reachable": False,
+            "latency_ms": round(latency_ms, 2),
+            "error": last_error,
+        }
+
+    def test_all_connections(self) -> list[dict[str, Any]]:
+        """
+        Run test_connection for all 6 agent types.
+
+        Logs a summary of how many providers are reachable vs failed.
+
+        Returns:
+            List of 6 status dicts, one per agent type.
+        """
+        results: list[dict[str, Any]] = []
+        for agent_type in sorted(VALID_AGENT_TYPES):
+            results.append(self.test_connection(agent_type))
+
+        reachable = sum(1 for r in results if r.get("reachable") is True)
+        failed = len(results) - reachable
+        logger.info(
+            "test_all_connections: %d reachable, %d failed out of %d agents",
+            reachable,
+            failed,
+            len(results),
+        )
+        return results
