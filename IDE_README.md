@@ -334,6 +334,9 @@ STEP 5: After completing any change — APPEND row to CHANGE_LOG before closing
 | L014 | 2026-02-28T20:15:00+05:30 | PERPLEXITY | database/init.sql | CREATE | create:init_sql:docker_postgres_bootstrap_pgvector | DONE |
 | L015 | 2026-02-28T20:30:00+05:30 | PERPLEXITY | tools/postgres_tools.py | CREATE | create:postgres_tools:10_crewai_tools_full_crud_9_tables | DONE |
 | L016 | 2026-02-28T20:30:00+05:30 | PERPLEXITY | tools/budget_tools.py | CREATE | create:budget_tools:5_crewai_tools_xai_cap_monthly_cap_enforcement | DONE |
+| L017 | 2026-02-28T20:45:00+05:30 | PERPLEXITY | tools/scraper_tools.py | CREATE | create:scraper_tools:7_crewai_tools_wrap_scraper_engine_all_platforms | DONE |
+| L018 | 2026-02-28T20:55:00+05:30 | PERPLEXITY | integrations/notion.py | CREATE | create:notion_client:5_methods_pagination_retry_both_dbs | DONE |
+| L019 | 2026-02-28T20:55:00+05:30 | PERPLEXITY | tools/notion_tools.py | CREATE | create:notion_tools:5_crewai_tools_sync_queue_update_health | DONE |
 
 ## 2-WEEK SPRINT PLAN
 
