@@ -80,66 +80,28 @@ services:
       - ai_job_network
 
   # =============================================================================
-  # MCP Server - FastAPI service for model context protocol operations
+  # ChromaDB - Vector database for embeddings
   # =============================================================================
-  mcp-server:
-    build:
-      context: .
-      dockerfile: mcp/Dockerfile
-    
-    container_name: ai_mcp_server
+  chromadb:
+    image: chromadb/chroma:latest
+    container_name: job_agent_chromadb
     restart: unless-stopped
     
-    env_file:
-      - ~/narad.env
-    
-    environment:
-      # Service-specific overrides
-      DEBUG: "false"
-      LOG_LEVEL: "info"
-      # Ensure MCP uses containerized database
-      DATABASE_URL: "postgresql://$${POSTGRES_USER:-ai_user}:$${POSTGRES_PASSWORD}@postgres:5432/$${POSTGRES_DB:-ai_job_db}"
-      REDIS_URL: "redis://redis:6379/0"
-    
     ports:
-      - "3001:3001"
+      - "8001:8000"
     
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3001/health"]
-      interval: 15s
-      timeout: 5s
-      retries: 5
-      start_period: 20s
-    
-    # Mount logs for debugging
     volumes:
-      - ./logs:/app/logs
+      - chromadb_data:/chroma/chroma
     
     networks:
       - ai_job_network
-    
-    deploy:
-      resources:
-        limits:
-          cpus: '2'
-          memory: 2G
-        reservations:
-          cpus: '1'
-          memory: 1G
 
   # =============================================================================
   # RAG Server - FastAPI service for retrieval-augmented generation
   # =============================================================================
   rag-server:
     build:
-      context: .
-      dockerfile: rag_systems/Dockerfile
+      context: ./rag_systems
     
     container_name: ai_rag_server
     restart: unless-stopped
@@ -153,6 +115,8 @@ services:
       # ChromaDB is in project root .chroma directory
       CHROMA_DIR: "/app/.chroma"
       REDIS_URL: "redis://redis:6379/0"
+      RESUME_DIR: /app/resumes
+      RAG_SERVER_API_KEY: ${RAG_SERVER_API_KEY}
     
     ports:
       - "8090:8090"
@@ -160,6 +124,8 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+      chromadb:
+        condition: service_started
     
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8090/health"]
