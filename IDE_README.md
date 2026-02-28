@@ -337,6 +337,8 @@ STEP 5: After completing any change — APPEND row to CHANGE_LOG before closing
 | L017 | 2026-02-28T20:45:00+05:30 | PERPLEXITY | tools/scraper_tools.py | CREATE | create:scraper_tools:7_crewai_tools_wrap_scraper_engine_all_platforms | DONE |
 | L018 | 2026-02-28T20:55:00+05:30 | PERPLEXITY | integrations/notion.py | CREATE | create:notion_client:5_methods_pagination_retry_both_dbs | DONE |
 | L019 | 2026-02-28T20:55:00+05:30 | PERPLEXITY | tools/notion_tools.py | CREATE | create:notion_tools:5_crewai_tools_sync_queue_update_health | DONE |
+| L020 | 2026-02-28T21:00:00+05:30 | PERPLEXITY | config/platforms.json | CREATE | create:platforms_config:15_platforms_full_config_run_sequence | DONE |
+| L021 | 2026-02-28T21:00:00+05:30 | PERPLEXITY | agents/scraper_agent.py | CREATE | create:scraper_agent:crewai_agent_full_run_lifecycle_all_platforms | DONE |
 
 ## 2-WEEK SPRINT PLAN
 
