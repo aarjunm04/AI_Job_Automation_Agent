@@ -284,8 +284,8 @@ GRUNT        : GOOGLE_GEMINI_ASSIST — docstrings, type hints, formatting, conf
 
 | TASK_TYPE | ASSIGNED_IDE | NOTES |
 |-----------|--------------|-------|
-| New file creation (full structure) | PERPLEXITY → COPILOT | Perplexity generates base scaffold + writes Copilot prompt. Copilot completes all implementations. |
-| Complex multi-function implementation | COPILOT | Full prod-ready code, no stubs, complete error handling |
+| New file creation (full structure) | PERPLEXITY → CLAUDE | Perplexity generates base scaffold + writes Copilot prompt. Copilot completes all implementations. |
+| Complex multi-function implementation | CLAUDE | Full prod-ready code, no stubs, complete error handling |
 | Bug fix (single function) | CODEX | Precise scope, preserve function signature |
 | Feature delta (modify existing function) | CODEX | Targeted change only, no side effects |
 | Docstrings / type hints | GEMINI | Google-style docstrings, PEP8 type hints |
@@ -310,7 +310,7 @@ STEP 5: After completing any change — APPEND row to CHANGE_LOG before closing
   - Every code change (create/modify/fix/delete) requires an entry
   - LOG_ID: increment from last row (L001, L002, ...)
   - TIMESTAMP: ISO8601 with IST offset (+05:30)
-  - AUTHOR: PERPLEXITY | COPILOT | CODEX | GEMINI
+  - AUTHOR: PERPLEXITY | CLAUDE | CODEX | GEMINI
   - CHANGE_TYPE: INIT | CREATE | MODIFY | BUGFIX | REFACTOR | CONFIG | TEST | DELETE
   - NOTES: snake_case, max 80 chars, format = verb:target:detail
   - STATUS: DONE | IN_PROGRESS | BLOCKED | REVIEW
@@ -339,6 +339,8 @@ STEP 5: After completing any change — APPEND row to CHANGE_LOG before closing
 | L019 | 2026-02-28T20:55:00+05:30 | PERPLEXITY | tools/notion_tools.py | CREATE | create:notion_tools:5_crewai_tools_sync_queue_update_health | DONE |
 | L020 | 2026-02-28T21:00:00+05:30 | PERPLEXITY | config/platforms.json | CREATE | create:platforms_config:15_platforms_full_config_run_sequence | DONE |
 | L021 | 2026-02-28T21:00:00+05:30 | PERPLEXITY | agents/scraper_agent.py | CREATE | create:scraper_agent:crewai_agent_full_run_lifecycle_all_platforms | DONE |
+| L022 | 2026-02-28T21:30:00+05:30 | CLAUDE | tools/agentops_tools.py | CREATE | create:agentops_tools:record_agent_error_record_fallback_event_crewai_tools | DONE |
+| L023 | 2026-02-28T21:30:00+05:30 | CLAUDE | agents/analyser_agent.py | CREATE | create:analyser_agent:full_scoring_rag_routing_fallback_chain | DONE |
 
 ## 2-WEEK SPRINT PLAN
 
@@ -346,7 +348,7 @@ SPRINT: Phase 1 Prod v1 | 2026-03-01 → 2026-03-14
 
 ### Week 1 (Mar 1–7): Foundation + Scraper + Master
 
-| DAY | DATE | TASK | PERPLEXITY | COPILOT | CODEX | GEMINI | MILESTONE |
+| DAY | DATE | TASK | PERPLEXITY | CLAUDE | CODEX | GEMINI | MILESTONE |
 |-----|------|------|------------|---------|-------|--------|-----------|
 | 1 | Mar 1 | Repo init, directory structure, narad.env.template, .gitignore, docker-compose.yml base | Scaffold all files | Complete Dockerfiles + compose | — | env comments + formatting | — |
 | 2 | Mar 2 | Postgres schema.sql, db/init.sql, Supabase setup, migrations v1 | Schema design + SQL base | Full schema + migrations | — | SQL docblock comments | — |
@@ -358,7 +360,7 @@ SPRINT: Phase 1 Prod v1 | 2026-03-01 → 2026-03-14
 
 ### Week 2 (Mar 8–14): Core Agents + Integration + Launch
 
-| DAY | DATE | TASK | PERPLEXITY | COPILOT | CODEX | GEMINI | MILESTONE |
+| DAY | DATE | TASK | PERPLEXITY | CLAUDE | CODEX | GEMINI | MILESTONE |
 |-----|------|------|------------|---------|-------|--------|-----------|
 | 1 | Mar 8 | Master Agent (agents/master_agent.py) + CrewAI crew setup + AgentOps init + budget gate | MasterAgent base + crew config | Full lifecycle + budget_tools.py impl | — | — | — |
 | 2 | Mar 9 | Analyser Agent (agents/analyser_agent.py) — eligibility, scoring, RAG match, routing | AnalyserAgent base + routing logic | Full scoring + RAG query + route assignment | Bug fixes | Docstrings | — |
@@ -400,7 +402,7 @@ SPRINT: Phase 1 Prod v1 | 2026-03-01 → 2026-03-14
 
 ## PROMPT TEMPLATES FOR IDEs
 
-### COPILOT — Heavy Implementation
+### CLAUDE — Heavy Implementation
 
 ```
 [PROJECT] AI Job Application Agent — Python3.11/CrewAI/Playwright/Postgres/ChromaDB/Docker
@@ -417,7 +419,7 @@ SPRINT: Phase 1 Prod v1 | 2026-03-01 → 2026-03-14
   - AgentOps decorators already present — do not remove
   - Follow coding standards in IDE_README.md Section 16
 [EXPECTED_OUTPUT] {what the completed code should do when called}
-[IDE_LOG] Append to IDE_README.md CHANGE_LOG: ID:L{NNN} | AUTHOR:COPILOT | FILE:{path} | TYPE:{CHANGE_TYPE} | NOTES:{verb:target:detail} | STATUS:DONE
+[IDE_LOG] Append to IDE_README.md CHANGE_LOG: ID:L{NNN} | AUTHOR:CLAUDE | FILE:{path} | TYPE:{CHANGE_TYPE} | NOTES:{verb:target:detail} | STATUS:DONE
 ```
 
 ### CODEX — Bug Fix / Feature Delta
