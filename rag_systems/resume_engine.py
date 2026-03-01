@@ -31,7 +31,7 @@ import uuid
 
 # LOCAL MODULES
 from chromadb_store import ChromaStore, ChromaStoreConfig
-from rag_pipeline import (
+from rag_systems.rag_pipeline import (
     RAGPipeline,
     EmbeddingService,
     chunk_text,
