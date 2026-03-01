@@ -20,6 +20,7 @@ import psycopg2.extras
 from psycopg2.extensions import connection as PgConnection
 from crewai.tools import tool
 import agentops
+from agentops.sdk.decorators import agent, operation
 
 # Module-level logger
 logger = logging.getLogger(__name__)
@@ -110,7 +111,7 @@ def _with_retry(max_retries: int = 3) -> Callable:
 
 
 @tool
-@agentops.track_tool
+@operation
 def upsert_job_post(
     run_batch_id: str,
     source_platform: str,
@@ -196,7 +197,7 @@ def upsert_job_post(
 
 
 @tool
-@agentops.track_tool
+@operation
 def save_job_score(
     job_post_id: str,
     resume_id: str,
@@ -260,7 +261,7 @@ def save_job_score(
 
 
 @tool
-@agentops.track_tool
+@operation
 def create_application(
     job_post_id: str,
     resume_id: str,
@@ -373,7 +374,7 @@ def create_application(
 
 
 @tool
-@agentops.track_tool
+@operation
 def update_application_status(
     application_id: str, status: str, error_code: str = ""
 ) -> str:
@@ -438,7 +439,7 @@ def update_application_status(
 
 
 @tool
-@agentops.track_tool
+@operation
 def create_run_batch(run_index_in_week: int) -> str:
     """
     Create a new run batch for the current date.
@@ -499,7 +500,7 @@ def create_run_batch(run_index_in_week: int) -> str:
 
 
 @tool
-@agentops.track_tool
+@operation
 def update_run_batch_stats(
     run_batch_id: str, jobs_discovered: int, jobs_auto_applied: int, jobs_queued: int
 ) -> str:
@@ -567,7 +568,7 @@ def update_run_batch_stats(
 
 
 @tool
-@agentops.track_tool
+@operation
 def log_event(
     run_batch_id: str,
     level: str,
@@ -628,7 +629,7 @@ def log_event(
 
 
 @tool
-@agentops.track_tool
+@operation
 def get_queued_jobs(limit: int = 50) -> str:
     """
     Retrieve queued jobs ordered by priority and queue time.
@@ -706,7 +707,7 @@ def get_queued_jobs(limit: int = 50) -> str:
 
 
 @tool
-@agentops.track_tool
+@operation
 def get_platform_config(platform: str) -> str:
     """
     Retrieve platform configuration limits.
@@ -771,7 +772,7 @@ def get_platform_config(platform: str) -> str:
 
 
 @tool
-@agentops.track_tool
+@operation
 def get_run_stats(run_batch_id: str) -> str:
     """
     Retrieve run batch statistics including error count.

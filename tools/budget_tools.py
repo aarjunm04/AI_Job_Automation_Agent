@@ -17,6 +17,7 @@ import psycopg2
 import psycopg2.extras
 from crewai.tools import tool
 import agentops
+from agentops.sdk.decorators import agent, operation
 
 # Module-level logger
 logger = logging.getLogger(__name__)
@@ -88,7 +89,7 @@ def _log_to_db(
 
 
 @tool
-@agentops.track_tool
+@operation
 def reset_run_cost_tracker(run_batch_id: str) -> str:
     """
     Reset the run cost tracker for a new run.
@@ -113,7 +114,7 @@ def reset_run_cost_tracker(run_batch_id: str) -> str:
 
 
 @tool
-@agentops.track_tool
+@operation
 def record_llm_cost(
     provider: str, cost_usd: float, agent_type: str, run_batch_id: str
 ) -> str:
@@ -163,7 +164,7 @@ def record_llm_cost(
 
 
 @tool
-@agentops.track_tool
+@operation
 def check_xai_run_cap(run_batch_id: str) -> str:
     """
     Check if the xAI run cap has been exceeded.
@@ -218,7 +219,7 @@ def check_xai_run_cap(run_batch_id: str) -> str:
 
 
 @tool
-@agentops.track_tool
+@operation
 def check_monthly_budget(run_batch_id: str) -> str:
     """
     Check if the monthly budget has been exceeded.
@@ -300,7 +301,7 @@ def check_monthly_budget(run_batch_id: str) -> str:
 
 
 @tool
-@agentops.track_tool
+@operation
 def get_cost_summary(run_batch_id: str) -> str:
     """
     Get current run cost summary.

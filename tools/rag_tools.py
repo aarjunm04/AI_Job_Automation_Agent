@@ -9,6 +9,7 @@ from typing import Any, Dict, List
 
 from crewai.tools import tool
 import agentops
+from agentops.sdk.decorators import agent, operation
 
 
 # Ensure project root is on sys.path so that rag_systems is importable
@@ -44,7 +45,7 @@ def _safe_json_dumps(payload: Dict[str, Any]) -> str:
 
 
 @tool
-@agentops.track_tool
+@operation
 def query_resume_match(job_description: str, job_title: str, required_skills: str) -> str:
     """
     Suggest the best resume for a given job description.
@@ -127,7 +128,7 @@ def query_resume_match(job_description: str, job_title: str, required_skills: st
 
 
 @tool
-@agentops.track_tool
+@operation
 def get_resume_context(resume_filename: str, job_description: str) -> str:
     """
     Return formatted resume text chunks relevant to the given job description.
@@ -171,7 +172,7 @@ def get_resume_context(resume_filename: str, job_description: str) -> str:
 
 
 @tool
-@agentops.track_tool
+@operation
 def embed_job_description(job_url: str, job_description: str) -> str:
     """
     Embed a job description into the ChromaDB 'job_descriptions' collection.
@@ -226,7 +227,7 @@ def embed_job_description(job_url: str, job_description: str) -> str:
 
 
 @tool
-@agentops.track_tool
+@operation
 def get_resume_pdf_path(resume_filename: str) -> str:
     """
     Return the absolute path and existence flag for a given resume PDF.

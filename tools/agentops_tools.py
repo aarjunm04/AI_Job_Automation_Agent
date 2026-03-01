@@ -17,6 +17,7 @@ from typing import Any, Optional
 
 import psycopg2
 import agentops
+from agentops.sdk.decorators import agent, operation
 from crewai.tools import tool
 
 logger = logging.getLogger(__name__)
@@ -98,7 +99,7 @@ def _log_to_db(
 
 
 @tool
-@agentops.track_tool
+@operation
 def record_agent_error(
     agent_type: str,
     error_message: str,
@@ -173,7 +174,7 @@ def record_agent_error(
 
 
 @tool
-@agentops.track_tool
+@operation
 def record_fallback_event(
     agent_type: str,
     from_provider: str,

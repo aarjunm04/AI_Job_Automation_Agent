@@ -16,6 +16,7 @@ from typing import Optional, List, Dict, Any
 
 from crewai.tools import tool
 import agentops
+from agentops.sdk.decorators import agent, operation
 import psycopg2
 import psycopg2.extras
 
@@ -116,7 +117,7 @@ def _with_retry(func, max_retries: int = 3):
 
 
 @tool
-@agentops.track_tool
+@operation
 def run_jobspy_scrape(
     run_batch_id: str,
     search_query: str,
@@ -204,7 +205,7 @@ def run_jobspy_scrape(
 
 
 @tool
-@agentops.track_tool
+@operation
 def run_rest_api_scrape(
     run_batch_id: str, platforms: str = "remoteok,himalayas"
 ) -> str:
@@ -308,7 +309,7 @@ def run_rest_api_scrape(
 
 
 @tool
-@agentops.track_tool
+@operation
 def run_playwright_scrape(
     run_batch_id: str, platform: str, max_jobs: int = 30
 ) -> str:
@@ -435,7 +436,7 @@ def run_playwright_scrape(
 
 
 @tool
-@agentops.track_tool
+@operation
 def run_serpapi_scrape(
     run_batch_id: str,
     search_query: str,
@@ -607,7 +608,7 @@ def run_serpapi_scrape(
 
 
 @tool
-@agentops.track_tool
+@operation
 def run_safety_net_scrape(run_batch_id: str, current_job_count: int) -> str:
     """
     Run safety-net scrapers (Nodesk, Toptal) if minimum job count not met.
@@ -693,7 +694,7 @@ def run_safety_net_scrape(run_batch_id: str, current_job_count: int) -> str:
 
 
 @tool
-@agentops.track_tool
+@operation
 def normalise_and_dedup(run_batch_id: str) -> str:
     """
     Normalize and deduplicate jobs for the current run batch.
@@ -793,7 +794,7 @@ def normalise_and_dedup(run_batch_id: str) -> str:
 
 
 @tool
-@agentops.track_tool
+@operation
 def get_scrape_summary(run_batch_id: str) -> str:
     """
     Get summary statistics for the current scrape run.

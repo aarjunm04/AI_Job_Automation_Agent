@@ -1,13 +1,22 @@
 """
 Apply tools for AI Job Application Agent.
 
-Provides CrewAI tool functions for ATS platform detection, CAPTCHA checking,
-proof-of-submission capture, Playwright-driven form filling, and per-run apply
-summary aggregation. All Playwright actions are fail-soft: a single field
-failure never aborts the run. DRY_RUN=true guards every submission path.
+Full rewrite wiring ``ATSDetector`` and ``FormFiller`` into every stage of the
+Playwright session lifecycle.  Replaces the naive ``page.fill()`` loop from
+the previous iteration with proper per-platform ATS detection, intelligent
+multi-step form filling, CAPTCHA gating, and proof-of-submission capture.
 
-All user profile data is sourced exclusively from environment variables loaded
-via narad.env.
+Tool summary:
+- ``detect_ats_platform``  — Playwright session + 3-layer ``ATSDetector``.
+- ``capture_proof``         — Post-submit signal analysis (unchanged).
+- ``check_captcha_present`` — HTML CAPTCHA fingerprint scan (unchanged).
+- ``fill_standard_form``    — Orchestrates the full apply session via
+                              ``ATSDetector`` + ``FormFiller``.
+- ``get_apply_summary``     — Per-run Postgres aggregation (unchanged).
+
+Every tool is decorated with ``@operation`` and called exclusively
+by ``agents/apply_agent.py``.  All Playwright actions are fail-soft.
+``DRY_RUN=true`` guards every submission, click, upload, and keyboard event.
 """
 
 from __future__ import annotations
@@ -20,86 +29,28 @@ import os
 import re
 import time
 from pathlib import Path
-from typing import Any, Optional, cast
+from typing import Any, Optional
 
+import agentops
+from agentops.sdk.decorators import agent, operation
 import psycopg2
 import psycopg2.extras
 from crewai.tools import tool
-from litellm import completion
 from playwright.async_api import Page, TimeoutError as PlaywrightTimeoutError, async_playwright
-import agentops
 
-from tools.postgres_tools import create_application, log_event
+from auto_apply.ats_detector import ATSDetector, ATSProfile, ATSType
+from auto_apply.form_filler import FormFiller, FillResult
+from integrations.llm_interface import LLMInterface
+from tools.postgres_tools import create_application, update_application_status, log_event
 from tools.budget_tools import check_xai_run_cap, record_llm_cost
 from tools.agentops_tools import record_agent_error
+from tools.notion_tools import queue_job_to_applications_db
+from config.settings import db_config, run_config, budget_config
 
 # ---------------------------------------------------------------------------
 # Module-level logger
 # ---------------------------------------------------------------------------
 logger = logging.getLogger(__name__)
-logger.setLevel(os.getenv("LOG_LEVEL", "INFO"))
-
-# ---------------------------------------------------------------------------
-# Constants from environment
-# ---------------------------------------------------------------------------
-DRY_RUN: bool = os.getenv("DRY_RUN", "false").lower() == "true"
-RESUME_DIR: str = os.getenv("RESUME_DIR", "resumes")
-MAX_SESSIONS: int = int(os.getenv("MAX_PLAYWRIGHT_SESSIONS", "5"))
-
-# Database URL (mirrors pattern in other tool modules)
-_DB_URL: Optional[str] = (
-    os.getenv("LOCAL_POSTGRES_URL")
-    if os.getenv("ACTIVE_DB", "local") == "local"
-    else os.getenv("SUPABASE_URL")
-)
-
-# APPLY_AGENT model string (xAI primary per LLMInterface._AGENT_CONFIG)
-_APPLY_MODEL: str = "xai/grok-4-1-fast-reasoning"
-_APPLY_API_KEY_ENV: str = "XAI_API_KEY"
-_APPLY_API_BASE: str = "https://api.x.ai/v1"
-
-# ---------------------------------------------------------------------------
-# ATS URL patterns
-# ---------------------------------------------------------------------------
-ATS_PATTERNS: dict[str, list[str]] = {
-    "greenhouse": ["greenhouse.io"],
-    "lever": ["lever.co"],
-    "workday": ["workday.com", "myworkdayjobs.com"],
-    "ashby": ["ashbyhq.com"],
-    "jobvite": ["jobvite.com"],
-    "icims": ["icims.com"],
-    "smartrecruiters": ["smartrecruiters.com"],
-    "bamboohr": ["bamboohr.com"],
-    "direct": [],
-}
-
-# ---------------------------------------------------------------------------
-# Proxy round-robin state
-# ---------------------------------------------------------------------------
-_proxy_index: int = 0
-
-
-def _get_proxy() -> Optional[dict[str, str]]:
-    """Return the next proxy in round-robin rotation from WEBSHARE_PROXY_LIST.
-
-    Returns:
-        A dict ``{"server": "<proxy_url>"}`` for Playwright, or ``None`` if
-        the environment variable is not set or the list is empty.
-    """
-    global _proxy_index  # noqa: PLW0603
-
-    raw: str = os.getenv("WEBSHARE_PROXY_LIST", "").strip()
-    if not raw:
-        return None
-
-    proxies: list[str] = [p.strip() for p in raw.split(",") if p.strip()]
-    if not proxies:
-        return None
-
-    proxy_url: str = proxies[_proxy_index % len(proxies)]
-    _proxy_index = (_proxy_index + 1) % len(proxies)
-    return {"server": proxy_url}
-
 
 # ---------------------------------------------------------------------------
 # Public API surface
@@ -112,63 +63,164 @@ __all__ = [
     "get_apply_summary",
 ]
 
+# ---------------------------------------------------------------------------
+# Constants from config singletons — no raw os.getenv() in tool logic
+# ---------------------------------------------------------------------------
+DRY_RUN: bool = run_config.dry_run
+RESUME_DIR: Path = Path(run_config.resume_dir)
+MAX_SESSIONS: int = run_config.max_playwright_sessions
+
+# Database URL — kept as module-level for get_apply_summary (exact legacy logic)
+_DB_URL: Optional[str] = (
+    os.getenv("LOCAL_POSTGRES_URL")
+    if os.getenv("ACTIVE_DB", "local") == "local"
+    else os.getenv("SUPABASE_URL")
+)
 
 # ---------------------------------------------------------------------------
-# TOOL 1 — ATS platform detection
+# Proxy round-robin — explicit os.getenv per spec
 # ---------------------------------------------------------------------------
-@tool
-@agentops.track_tool
-def detect_ats_platform(job_url: str, run_batch_id: str) -> str:
-    """Detect the ATS platform from a job URL using pure pattern matching.
+_proxy_list: list[str] = [
+    p.strip() for p in os.getenv("WEBSHARE_PROXY_LIST", "").split(",") if p.strip()
+]
+_proxy_index: int = 0
 
-    No network calls are made. The URL is matched against known ATS domain
-    patterns defined in ``ATS_PATTERNS``. Returns ``"direct"`` when no known
-    ATS is detected.
+
+def _get_proxy() -> Optional[dict[str, str]]:
+    """Return the next proxy in round-robin rotation from WEBSHARE_PROXY_LIST.
 
     Args:
-        job_url: The full URL of the job posting.
-        run_batch_id: UUID of the current run batch (used for logging only).
+        None.
 
     Returns:
-        JSON string ``{"ats": str, "job_url": str, "confidence": "high"|"low"}``.
+        ``{"server": "<proxy_url>"}`` for Playwright context, or ``None``
+        when ``WEBSHARE_PROXY_LIST`` is empty or unset.
     """
-    try:
-        url_lower: str = job_url.lower()
-        detected_ats: str = "direct"
-        confidence: str = "low"
-
-        for ats_name, domains in ATS_PATTERNS.items():
-            if ats_name == "direct":
-                continue
-            for domain in domains:
-                if domain in url_lower:
-                    detected_ats = ats_name
-                    confidence = "high"
-                    break
-            if detected_ats != "direct":
-                break
-
-        logger.info(
-            "detect_ats_platform: url=%s ats=%s confidence=%s",
-            job_url,
-            detected_ats,
-            confidence,
-        )
-        return json.dumps(
-            {"ats": detected_ats, "job_url": job_url, "confidence": confidence}
-        )
-    except Exception as exc:  # noqa: BLE001
-        logger.error("detect_ats_platform failed: %s", exc)
-        return json.dumps(
-            {"ats": "direct", "job_url": job_url, "confidence": "low"}
-        )
+    global _proxy_index  # noqa: PLW0603
+    if not _proxy_list:
+        return None
+    proxy_url: str = _proxy_list[_proxy_index % len(_proxy_list)]
+    _proxy_index = (_proxy_index + 1) % len(_proxy_list)
+    return {"server": proxy_url}
 
 
 # ---------------------------------------------------------------------------
-# TOOL 2 — Proof of submission capture
+# TOOL 1 — ATS platform detection (Playwright + ATSDetector)
 # ---------------------------------------------------------------------------
 @tool
-@agentops.track_tool
+@operation
+def detect_ats_platform(job_url: str, run_batch_id: str) -> str:
+    """Detect the ATS platform powering a job application page.
+
+    Launches a minimal headless Playwright session (no proxy), navigates to
+    ``job_url``, and runs the ``ATSDetector`` 3-layer pipeline (URL pattern →
+    DOM fingerprint → LLM classification).  Retries up to 2 times on
+    ``TimeoutError`` only.
+
+    Args:
+        job_url: Full URL of the job application page.
+        run_batch_id: UUID of the current run batch (for logging context).
+
+    Returns:
+        JSON string of ``ATSProfile.to_dict()`` merged with
+        ``{"job_url": job_url}``.  On any failure returns
+        ``{"ats_type": "unknown", "confidence": 0.0, "job_url": ..., "error": ...}``.
+    """
+
+    async def _detect_inner(url: str) -> dict[str, Any]:
+        """Run ATSDetector inside a minimal Playwright session.
+
+        Args:
+            url: Full URL to navigate to.
+
+        Returns:
+            Merged dict of ``ATSProfile.to_dict()`` and ``{"job_url": url}``.
+        """
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(headless=True)
+            context = await browser.new_context()
+            page: Page = await context.new_page()
+            try:
+                await page.goto(url, wait_until="networkidle", timeout=20000)
+                detector = ATSDetector()
+                ats_profile: ATSProfile = await detector.detect(page, url)
+                result: dict[str, Any] = {**ats_profile.to_dict(), "job_url": url}
+                return result
+            finally:
+                try:
+                    await context.close()
+                except Exception:  # noqa: BLE001
+                    pass
+                try:
+                    await browser.close()
+                except Exception:  # noqa: BLE001
+                    pass
+
+    max_retries: int = 2
+    for attempt in range(max_retries + 1):
+        try:
+            result: dict[str, Any] = asyncio.run(_detect_inner(job_url))
+            logger.info(
+                "detect_ats_platform: ats=%s confidence=%.2f method=%s url=%s",
+                result.get("ats_type"),
+                result.get("confidence", 0.0),
+                result.get("detection_method"),
+                job_url,
+            )
+            return json.dumps(result)
+
+        except PlaywrightTimeoutError as te:
+            if attempt < max_retries:
+                logger.warning(
+                    "detect_ats_platform: TimeoutError attempt %d/%d for %s — retrying: %s",
+                    attempt + 1,
+                    max_retries,
+                    job_url,
+                    te,
+                )
+                continue
+            logger.error(
+                "detect_ats_platform: TimeoutError after %d retries for %s: %s",
+                max_retries,
+                job_url,
+                te,
+            )
+            return json.dumps(
+                {
+                    "ats_type": "unknown",
+                    "confidence": 0.0,
+                    "job_url": job_url,
+                    "error": str(te),
+                }
+            )
+
+        except Exception as exc:  # noqa: BLE001
+            logger.error("detect_ats_platform: error for %s: %s", job_url, exc)
+            return json.dumps(
+                {
+                    "ats_type": "unknown",
+                    "confidence": 0.0,
+                    "job_url": job_url,
+                    "error": str(exc),
+                }
+            )
+
+    # Unreachable — loop always returns or raises above
+    return json.dumps(  # pragma: no cover
+        {
+            "ats_type": "unknown",
+            "confidence": 0.0,
+            "job_url": job_url,
+            "error": "max_retries_exceeded",
+        }
+    )
+
+
+# ---------------------------------------------------------------------------
+# TOOL 2 — Proof of submission capture (UNCHANGED)
+# ---------------------------------------------------------------------------
+@tool
+@operation
 def capture_proof(page_html: str, page_url: str, job_url: str) -> str:
     """Extract proof-of-submission signals from a post-apply page snapshot.
 
@@ -273,15 +325,17 @@ def capture_proof(page_html: str, page_url: str, job_url: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# TOOL 3 — CAPTCHA detection
+# TOOL 3 — CAPTCHA detection (UNCHANGED)
 # ---------------------------------------------------------------------------
 @tool
-@agentops.track_tool
+@operation
 def check_captcha_present(page_html: str, job_url: str) -> str:
     """Detect CAPTCHA or bot-challenge presence in page HTML.
 
     Scans for known CAPTCHA fingerprints (reCAPTCHA, hCaptcha, Cloudflare
-    Turnstile, etc.). Logs a WARNING-level event to Postgres when detected.
+    Turnstile, etc.). Logs a WARNING-level event to Python logger when
+    detected; does not call Postgres directly (no valid run_batch_id at
+    this scope).
 
     Args:
         page_html: Full HTML content of the page to inspect.
@@ -313,9 +367,6 @@ def check_captcha_present(page_html: str, job_url: str) -> str:
         action: str = "skip_to_manual" if captcha_detected else "proceed"
 
         if captcha_detected:
-            # run_batch_id is not available at this tool scope; log via Python
-            # logger only — calling log_event without a valid run_batch_id would
-            # violate the FK constraint on logs_events.run_batch_id.
             logger.warning(
                 "check_captcha_present: CAPTCHA detected type=%s url=%s",
                 detected_type,
@@ -349,309 +400,367 @@ async def _run_apply(
     user_id: str,
     ats_platform: str,
 ) -> dict[str, Any]:
-    """Execute the full Playwright apply flow for a single job posting.
+    """Execute the full Playwright apply flow wiring ATSDetector + FormFiller.
 
-    Handles: dry-run gate, budget gate, CAPTCHA abort, LLM field detection,
-    form fill, submission, proof capture, screenshot, and DB audit write.
+    All 13 steps follow the orchestration contract defined in
+    ``[CONTEXT]`` of the module docstring.  Every step is individually
+    guarded — a single step failure never aborts the run.
 
     Args:
         job_url: URL of the job application form.
-        job_post_id: UUID of the job_posts row.
-        resume_filename: Filename of the resume PDF in RESUME_DIR.
+        job_post_id: UUID of the ``job_posts`` row.
+        resume_filename: Filename of the resume PDF inside ``RESUME_DIR``.
         run_batch_id: UUID of the current run batch.
-        user_id: UUID of the candidate user.
-        ats_platform: Detected ATS platform label.
+        user_id: UUID of the candidate (``users`` table).
+        ats_platform: ATS type string from a prior ``detect_ats_platform``
+            call, or ``"unknown"`` / ``""`` to trigger live detection.
 
     Returns:
-        Dict with apply result keys (applied, status, proof_confidence, etc.).
+        Dict with apply result keys per the STEP 13 spec.  Never raises.
     """
-    # Step 1 — DRY_RUN gate
+    # -----------------------------------------------------------------------
+    # STEP 1 — Guards: DRY_RUN + budget cap
+    # -----------------------------------------------------------------------
     if DRY_RUN:
-        logger.info("_run_apply: DRY_RUN=true — skipping real apply for %s", job_url)
-        log_event(run_batch_id, "INFO", "dry_run_skip", f"dry_run|{job_url}")
-        return {"applied": False, "dry_run": True, "job_url": job_url}
+        logger.info("_run_apply: DRY_RUN=true — skipping browser for %s", job_url)
+        try:
+            log_event(run_batch_id, "INFO", "dry_run_skip", f"dry_run|{job_url}")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("_run_apply: log_event (dry_run_skip) failed: %s", exc)
 
-    # Step 2 — Budget gate
+        fill_simulation: dict[str, Any] = {}
+        try:
+            detector_dry = ATSDetector()
+            ats_profile_dry: ATSProfile = detector_dry.get_profile_for_ats(ats_platform)
+            filler_dry = FormFiller(
+                page=None,  # type: ignore[arg-type]
+                job_title=run_config.search_query,
+                job_description="",
+                company="",
+                resume_filename=resume_filename,
+                ats_type=ats_profile_dry.ats_type.value,
+            )
+            fill_result_dry: FillResult = await filler_dry.fill_all_fields()
+            fill_simulation = {
+                "total_fields": fill_result_dry.total_fields,
+                "filled": fill_result_dry.filled,
+                "skipped": fill_result_dry.skipped,
+                "failed": fill_result_dry.failed,
+                "llm_calls": fill_result_dry.llm_calls,
+                "custom_questions": fill_result_dry.custom_questions,
+                "errors": fill_result_dry.errors,
+                "success": fill_result_dry.success,
+            }
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("_run_apply: dry_run simulation error: %s", exc)
+
+        return {
+            "applied": False,
+            "dry_run": True,
+            "ats_type": ats_platform,
+            "fill_simulation": fill_simulation,
+        }
+
+    # Budget gate
     try:
-        cap_result: dict[str, Any] = json.loads(check_xai_run_cap(run_batch_id))
-        if cap_result.get("abort"):
+        budget_result: dict[str, Any] = json.loads(check_xai_run_cap(run_batch_id))
+        if budget_result.get("abort"):
             logger.critical(
                 "_run_apply: xAI budget cap hit — aborting apply for %s", job_url
             )
             return {
                 "applied": False,
-                "status": "failed",
-                "reason": "budget_cap_hit",
+                "status": "budget_cap_hit",
+                "re_route": "manual",
                 "job_url": job_url,
             }
     except Exception as exc:  # noqa: BLE001
         logger.warning("_run_apply: budget cap check failed (proceeding): %s", exc)
 
-    browser = None
-    context = None
-    try:
-        # Step 3 — Launch Playwright browser
-        async with async_playwright() as pw:
-            proxy_cfg: Optional[dict[str, str]] = _get_proxy()
-            launch_kwargs: dict[str, Any] = {"headless": True}
-            if proxy_cfg:
-                launch_kwargs["proxy"] = proxy_cfg
+    # -----------------------------------------------------------------------
+    # STEP 2 — Browser setup
+    # -----------------------------------------------------------------------
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(
+            headless=True,
+            args=[
+                "--no-sandbox",
+                "--disable-dev-shm-usage",
+                "--disable-blink-features=AutomationControlled",
+            ],
+        )
+        proxy: Optional[dict[str, str]] = _get_proxy()
+        context = await browser.new_context(
+            proxy=proxy,  # type: ignore[arg-type]
+            user_agent=(
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/122.0.0.0 Safari/537.36"
+            ),
+        )
+        await context.add_init_script(
+            "Object.defineProperty(navigator,'webdriver',{get:()=>undefined})"
+        )
+        page: Page = await context.new_page()
 
-            browser = await pw.chromium.launch(**launch_kwargs)
+        # Initialise fill_result default before any early returns that skip STEP 8
+        fill_result: FillResult = FillResult()
 
-            context_kwargs: dict[str, Any] = {
-                "user_agent": (
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/120.0.0.0 Safari/537.36"
-                )
-            }
-            context = await browser.new_context(**context_kwargs)
-            page: Page = await context.new_page()
-
-            # Step 4 — Navigate to job URL
+        try:
+            # -------------------------------------------------------------------
+            # STEP 3 — Navigate
+            # -------------------------------------------------------------------
             await page.goto(job_url, wait_until="networkidle", timeout=30000)
+            await page.wait_for_timeout(1500)  # let React hydrate
 
-            # Step 5 — Capture initial HTML
+            # -------------------------------------------------------------------
+            # STEP 4 — CAPTCHA check
+            # -------------------------------------------------------------------
             html: str = await page.content()
-
-            # Step 6 — CAPTCHA check
-            captcha_result: dict[str, Any] = json.loads(
-                check_captcha_present(html, job_url)
-            )
-            if captcha_result.get("captcha_detected"):
+            captcha: dict[str, Any] = json.loads(check_captcha_present(html, job_url))
+            if captcha.get("captcha_detected"):
                 logger.warning(
-                    "_run_apply: CAPTCHA detected — re-routing to manual: %s", job_url
+                    "_run_apply: CAPTCHA detected: %s at %s",
+                    captcha.get("captcha_type"),
+                    job_url,
                 )
                 await context.close()
                 await browser.close()
                 return {
                     "applied": False,
-                    "status": "failed",
+                    "status": "captcha_blocked",
                     "re_route": "manual",
-                    "reason": "captcha",
                     "job_url": job_url,
                 }
 
-            # Step 7 — LLM field detection
-            field_map: dict[str, str] = {}
+            # -------------------------------------------------------------------
+            # STEP 5 — ATS Detection
+            # -------------------------------------------------------------------
+            ats_profile: ATSProfile
+            if ats_platform in ("unknown", ""):
+                detector = ATSDetector()
+                ats_profile = await detector.detect(page, job_url)
+            else:
+                detector = ATSDetector()
+                ats_profile = detector.get_profile_for_ats(ats_platform)
+
+            logger.info(
+                "_run_apply: ATS profile: %s | confidence=%.2f | strategy=%s",
+                ats_profile.ats_type.value,
+                ats_profile.confidence,
+                ats_profile.apply_strategy,
+            )
+
+            # -------------------------------------------------------------------
+            # STEP 6 — LinkedIn Easy Apply gate
+            # -------------------------------------------------------------------
+            if ats_profile.ats_type == ATSType.LINKEDIN_EASY_APPLY:
+                logger.warning(
+                    "_run_apply: LinkedIn Easy Apply requires active session — "
+                    "routing to manual"
+                )
+                await context.close()
+                await browser.close()
+                return {
+                    "applied": False,
+                    "status": "linkedin_requires_session",
+                    "re_route": "manual",
+                }
+
+            # -------------------------------------------------------------------
+            # STEP 7 — Workday login gate
+            # -------------------------------------------------------------------
+            if ats_profile.requires_login and ats_profile.ats_type == ATSType.WORKDAY:
+                logger.warning(
+                    "_run_apply: Workday requires account login — routing to manual"
+                )
+                await context.close()
+                await browser.close()
+                return {
+                    "applied": False,
+                    "status": "requires_login",
+                    "re_route": "manual",
+                }
+
+            # -------------------------------------------------------------------
+            # STEP 8 — Form filling via FormFiller
+            # -------------------------------------------------------------------
+            filler = FormFiller(
+                page=page,
+                job_title=run_config.search_query,
+                job_description="",
+                company="",
+                resume_filename=resume_filename,
+                ats_type=ats_profile.ats_type.value,
+            )
             try:
-                xai_api_key: Optional[str] = os.getenv(_APPLY_API_KEY_ENV)
-                if xai_api_key:
-                    _start: int = 0
-                    _stop: int = 8000
-                    html_snippet: str = html[_start:_stop]  # explicit int bounds for type checker
-                    llm_prompt = (
-                        "You are a form analysis assistant. Given the following HTML, "
-                        "identify all visible input fields in the application form. "
-                        "Return ONLY a valid JSON object mapping CSS selectors to field "
-                        "types. Example: {\"input[name='first_name']\": \"first_name\", "
-                        "\"input[name='email']\": \"email\"}. "
-                        "Field types to detect: first_name, last_name, email, phone, "
-                        "linkedin, portfolio, website, location, years_experience, resume, cv. "
-                        "Return only JSON, no explanation.\n\nHTML:\n" + html_snippet
-                    )
-                    llm_response = completion(
-                        model=_APPLY_MODEL,
-                        api_key=xai_api_key,
-                        api_base=_APPLY_API_BASE,
-                        messages=[{"role": "user", "content": llm_prompt}],
-                        max_tokens=512,
-                    )
-                    raw_content: str = llm_response.choices[0].message.content or "{}"
-                    # Strip markdown code fences if present
-                    raw_content = re.sub(
-                        r"^```(?:json)?\s*|\s*```$", "", raw_content.strip()
-                    )
-                    # cast: json.loads returns Any; we assert the LLM returned a
-                    # flat {selector: field_type} object — invalid shapes are caught
-                    # by the per-field try/except in step 8.
-                    parsed: Any = json.loads(raw_content)
-                    field_map = cast(dict[str, str], parsed) if isinstance(parsed, dict) else {}
+                if ats_profile.is_multi_step:
+                    fill_result = await filler.handle_multi_step_form(max_steps=8)
+                else:
+                    fill_result = await filler.fill_all_fields()
+            except Exception as fill_exc:  # noqa: BLE001
+                logger.warning("_run_apply: form fill raised: %s", fill_exc)
+                fill_result = filler.result  # partial result from filler
+
+            try:
+                record_llm_cost(
+                    "xai",
+                    0.002 * fill_result.llm_calls,
+                    "APPLY_AGENT",
+                    run_batch_id,
+                )
             except Exception as exc:  # noqa: BLE001
-                logger.warning("_run_apply: LLM field detection failed: %s", exc)
-                field_map = {}
+                logger.warning("_run_apply: record_llm_cost failed: %s", exc)
 
-            try:
-                record_llm_cost("xai", 0.002, "APPLY_AGENT", run_batch_id)
-            except Exception:  # noqa: BLE001
-                pass
+            logger.info(
+                "_run_apply: Form filled: %d/%d fields | llm_calls=%d",
+                fill_result.filled,
+                fill_result.total_fields,
+                fill_result.llm_calls,
+            )
 
-            # Step 8 — Fill fields
-            username: str = os.getenv("USERNAME", "")
-            name_parts: list[str] = username.split()
-            first_name: str = name_parts[0] if name_parts else ""
-            last_name: str = name_parts[-1] if len(name_parts) > 1 else ""
-
-            field_values: dict[str, str] = {
-                "first_name": first_name,
-                "last_name": last_name,
-                "email": os.getenv("USER_EMAIL", ""),
-                "phone": os.getenv("USER_PHONE", ""),
-                "linkedin": os.getenv("USER_LINKEDIN_URL", ""),
-                "portfolio": os.getenv("USER_PORTFOLIO_URL", ""),
-                "website": os.getenv("USER_PORTFOLIO_URL", ""),
-                "location": os.getenv("USER_LOCATION", ""),
-                "years_experience": os.getenv("USER_YEARS_EXPERIENCE", ""),
-            }
-            file_field_types: set[str] = {"resume", "cv"}
-            resume_path: Path = Path(RESUME_DIR) / resume_filename
-
-            for selector, field_type in field_map.items():
-                try:
-                    if field_type in file_field_types:
-                        if not DRY_RUN and resume_path.exists():
-                            await page.set_input_files(selector, str(resume_path))
-                        elif DRY_RUN:
-                            logger.info(
-                                "_run_apply: DRY_RUN — skipping file upload %s", selector
-                            )
-                    elif field_type in field_values:
-                        value: str = field_values[field_type]
-                        if value:
-                            await page.fill(selector, value)
-                except Exception as field_exc:  # noqa: BLE001
-                    logger.warning(
-                        "_run_apply: field fill skipped selector=%s type=%s err=%s",
-                        selector,
-                        field_type,
-                        field_exc,
-                    )
-
-            # Step 9 — Submit (guarded by DRY_RUN)
+            # -------------------------------------------------------------------
+            # STEP 9 — Submit (guarded by DRY_RUN)
+            # -------------------------------------------------------------------
             if not DRY_RUN:
-                submit_selectors: list[str] = [
-                    "button[type=submit]",
-                    "input[type=submit]",
-                    "button:has-text('Submit')",
-                    "button:has-text('Apply')",
-                ]
-                submitted: bool = False
-                for submit_sel in submit_selectors:
+                for raw_selector in ats_profile.submit_selector.split(","):
+                    submit_selector: str = raw_selector.strip()
+                    if not submit_selector:
+                        continue
                     try:
-                        submit_locator = page.locator(submit_sel).first
-                        if await submit_locator.count() > 0:
-                            await submit_locator.click()
-                            await page.wait_for_load_state(
-                                "networkidle", timeout=15000
-                            )
-                            submitted = True
+                        submit_btn = await page.query_selector(submit_selector)
+                        if submit_btn is not None:
+                            await submit_btn.click()
                             break
                     except Exception as sub_exc:  # noqa: BLE001
                         logger.warning(
-                            "_run_apply: submit selector failed %s: %s",
-                            submit_sel,
+                            "_run_apply: submit selector failed '%s': %s",
+                            submit_selector,
                             sub_exc,
                         )
-                if not submitted:
+                        continue
+
+                try:
+                    await page.wait_for_load_state("networkidle", timeout=15000)
+                except Exception as exc:  # noqa: BLE001
                     logger.warning(
-                        "_run_apply: no submit button found for %s", job_url
+                        "_run_apply: wait_for_load_state after submit failed: %s", exc
                     )
 
-            # Step 10 — Post-submit page snapshot
+            await page.wait_for_timeout(2000)
+
+            # -------------------------------------------------------------------
+            # STEP 10 — Proof capture
+            # -------------------------------------------------------------------
             post_html: str = await page.content()
             post_url: str = page.url
-
-            # Step 11 — Proof capture
             proof: dict[str, Any] = json.loads(
                 capture_proof(post_html, post_url, job_url)
             )
 
-            # Step 12 — Screenshot (always captured for audit)
             screenshot_b64: str = ""
             try:
-                screenshot_bytes: bytes = await page.screenshot(
-                    type="png", full_page=False
-                )
-                screenshot_b64 = base64.b64encode(screenshot_bytes).decode()
+                screenshot_b64 = base64.b64encode(
+                    await page.screenshot(type="png", full_page=False)
+                ).decode()
             except Exception as ss_exc:  # noqa: BLE001
                 logger.warning("_run_apply: screenshot failed: %s", ss_exc)
 
-            # Step 13 — Close browser
-            await context.close()
-            await browser.close()
-            browser = None
+            # -------------------------------------------------------------------
+            # STEP 11 — Close browser
+            # -------------------------------------------------------------------
+            try:
+                await context.close()
+            except Exception:  # noqa: BLE001
+                pass
+            try:
+                await browser.close()
+            except Exception:  # noqa: BLE001
+                pass
 
-            # Step 14 — Determine final status
-            applied_status: str = (
+            # -------------------------------------------------------------------
+            # STEP 12 — Determine status + write to Postgres
+            # -------------------------------------------------------------------
+            status: str = (
                 "applied"
                 if proof.get("proof_confidence") in ("high", "medium", "low")
                 else "failed"
             )
 
-            # Step 15 — Persist application record
             try:
                 create_application(
                     job_post_id=job_post_id,
                     resume_id="",
                     user_id=user_id,
                     mode="auto",
-                    status=applied_status,
-                    platform=ats_platform,
-                    error_code="" if applied_status == "applied" else "proof_none",
+                    status=status,
+                    platform=ats_profile.ats_type.value,
+                    error_code="" if status == "applied" else "proof_none",
                 )
             except Exception as db_exc:  # noqa: BLE001
                 logger.error("_run_apply: create_application failed: %s", db_exc)
 
-            # Step 16 — Audit log
             try:
                 log_event(
                     run_batch_id,
-                    "INFO" if applied_status == "applied" else "ERROR",
+                    "INFO" if status == "applied" else "ERROR",
                     "auto_apply_attempt",
                     (
-                        f"{applied_status}|{job_url}|"
-                        f"confidence={proof.get('proof_confidence')}"
+                        f"{status}|{job_url}"
+                        f"|ats={ats_profile.ats_type.value}"
+                        f"|confidence={proof.get('proof_confidence')}"
+                        f"|fields={fill_result.filled}/{fill_result.total_fields}"
                     ),
                 )
             except Exception as log_exc:  # noqa: BLE001
                 logger.warning("_run_apply: log_event failed: %s", log_exc)
 
-            # Step 17 — Return result
+            # -------------------------------------------------------------------
+            # STEP 13 — Return
+            # -------------------------------------------------------------------
             return {
-                "applied": applied_status == "applied",
-                "status": applied_status,
+                "applied": status == "applied",
+                "status": status,
+                "ats_type": ats_profile.ats_type.value,
+                "ats_detection_method": ats_profile.detection_method.value,
                 "proof_confidence": proof.get("proof_confidence"),
                 "proof_signals": proof.get("signals_captured"),
-                "job_url": job_url,
-                "ats_platform": ats_platform,
+                "fields_filled": fill_result.filled,
+                "fields_total": fill_result.total_fields,
+                "llm_calls_used": fill_result.llm_calls,
+                "custom_questions_answered": len(fill_result.custom_questions),
                 "screenshot_captured": bool(screenshot_b64),
-                "dry_run": False,
+                "dry_run": DRY_RUN,
+                "job_url": job_url,
             }
 
-    except Exception as outer_exc:  # noqa: BLE001
-        # Close browser if still open — best effort, swallow secondary errors
-        if browser:
+        except Exception as inner_exc:  # noqa: BLE001
+            # Fail-soft: close browser and re-route to manual
+            try:
+                await context.close()
+            except Exception:  # noqa: BLE001
+                pass
             try:
                 await browser.close()
             except Exception:  # noqa: BLE001
                 pass
-        logger.error("_run_apply: unexpected error for %s: %s", job_url, outer_exc)
-        # Return a structured failure dict so fill_standard_form can decide
-        # whether to retry (TimeoutError) or immediately re-route to manual.
-        return {
-            "applied": False,
-            "status": "failed",
-            "reason": str(outer_exc),
-            "re_route": "manual",
-            "job_url": job_url,
-        }
-
-    # Unreachable fallback — the async with always returns via step 17 or the
-    # outer except above, but the type checker needs an explicit return here.
-    return {  # pragma: no cover
-        "applied": False,
-        "status": "failed",
-        "reason": "unreachable",
-        "job_url": job_url,
-    }
+            logger.error(
+                "_run_apply: unexpected error for %s: %s", job_url, inner_exc
+            )
+            return {
+                "applied": False,
+                "status": "failed",
+                "reason": str(inner_exc),
+                "re_route": "manual",
+                "job_url": job_url,
+            }
 
 
 # ---------------------------------------------------------------------------
-# TOOL 4 — Fill standard form (sync wrapper)
+# TOOL 4 — Fill standard form (sync wrapper around _run_apply)
 # ---------------------------------------------------------------------------
 @tool
-@agentops.track_tool
+@operation
 def fill_standard_form(
     job_url: str,
     job_post_id: str,
@@ -660,27 +769,31 @@ def fill_standard_form(
     user_id: str,
     ats_platform: str,
 ) -> str:
-    """Apply to a job via Playwright with LLM-assisted form field detection.
+    """Apply to a job via Playwright using ATSDetector + FormFiller.
 
-    Wraps the async apply coroutine in a synchronous interface for CrewAI.
-    Retries up to 2 times on ``TimeoutError`` only, using exponential backoff.
-    Any non-retriable failure is logged and re-routed to manual queue.
+    Wraps the async ``_run_apply`` coroutine in a synchronous CrewAI tool
+    interface.  Retries up to 2 times on ``TimeoutError`` only (exponential
+    backoff).  Any non-retriable failure is recorded via ``record_agent_error``
+    and immediately re-routed to manual queue.
 
-    DRY_RUN=true prevents any real form submission or file upload from
-    occurring, even if this function is called.
+    ``DRY_RUN=true`` prevents any real form submission, file upload, or click
+    from occurring, but still runs ATSDetector + FormFiller detection to
+    validate the wiring.
 
     Args:
         job_url: URL of the job application page.
-        job_post_id: UUID of the job_posts row.
-        resume_filename: Filename of the resume PDF inside RESUME_DIR.
+        job_post_id: UUID of the ``job_posts`` row.
+        resume_filename: Filename of the resume PDF inside ``RESUME_DIR``.
         run_batch_id: UUID of the current run batch.
-        user_id: UUID of the candidate (users table).
-        ats_platform: Detected ATS platform label (from detect_ats_platform).
+        user_id: UUID of the candidate (``users`` table).
+        ats_platform: ATS type string from ``detect_ats_platform``, or
+            ``"unknown"``/``""`` to trigger live detection.
 
     Returns:
-        JSON string with apply outcome fields:
-        applied, status, proof_confidence, proof_signals, job_url,
-        ats_platform, screenshot_captured, dry_run (or error details).
+        JSON string with apply outcome containing: applied, status, ats_type,
+        ats_detection_method, proof_confidence, proof_signals, fields_filled,
+        fields_total, llm_calls_used, custom_questions_answered,
+        screenshot_captured, dry_run, job_url.
     """
     max_retries: int = 2
 
@@ -700,7 +813,7 @@ def fill_standard_form(
 
         except (PlaywrightTimeoutError, asyncio.TimeoutError) as te:
             if attempt < max_retries:
-                backoff: int = 2**attempt
+                backoff: int = 2 ** attempt
                 logger.warning(
                     "fill_standard_form: TimeoutError attempt %d/%d for %s — "
                     "retrying in %ds: %s",
@@ -734,6 +847,7 @@ def fill_standard_form(
                         "status": "failed",
                         "reason": str(te),
                         "re_route": "manual",
+                        "job_url": job_url,
                     }
                 )
 
@@ -757,20 +871,27 @@ def fill_standard_form(
                     "status": "failed",
                     "reason": str(exc),
                     "re_route": "manual",
+                    "job_url": job_url,
                 }
             )
 
-    # Unreachable — kept for type-checker satisfaction
-    return json.dumps(
-        {"applied": False, "status": "failed", "reason": "max_retries_exceeded"}
+    # Unreachable — all retry paths return above
+    return json.dumps(  # pragma: no cover
+        {
+            "applied": False,
+            "status": "failed",
+            "reason": "max_retries_exceeded",
+            "re_route": "manual",
+            "job_url": job_url,
+        }
     )
 
 
 # ---------------------------------------------------------------------------
-# TOOL 5 — Per-run apply summary
+# TOOL 5 — Per-run apply summary (UNCHANGED)
 # ---------------------------------------------------------------------------
 @tool
-@agentops.track_tool
+@operation
 def get_apply_summary(run_batch_id: str) -> str:
     """Aggregate application counts by status for a given run batch.
 
@@ -810,7 +931,6 @@ def get_apply_summary(run_batch_id: str) -> str:
 
         counts: dict[str, int] = {"applied": 0, "failed": 0, "manual_queued": 0}
         for row in rows:
-            # RealDictRow values are typed as object; cast explicitly
             status_key: str = str(row["status"])
             if status_key in counts:
                 counts[status_key] = int(str(row["cnt"]))
@@ -849,8 +969,7 @@ def get_apply_summary(run_batch_id: str) -> str:
             except Exception:  # noqa: BLE001
                 pass
 
-    # Unreachable fallback — both try and except branches return, but the type
-    # checker cannot prove this when a finally block is present.
+    # Unreachable — both branches return above; type-checker satisfaction only
     return json.dumps(  # pragma: no cover
         {"error": "get_apply_summary_failed", "detail": "unreachable"}
     )

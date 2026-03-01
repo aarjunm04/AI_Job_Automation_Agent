@@ -13,6 +13,7 @@ from typing import Optional
 
 from crewai.tools import tool
 import agentops
+from agentops.sdk.decorators import agent, operation
 
 from integrations.notion import NotionClient
 from tools.postgres_tools import log_event
@@ -48,7 +49,7 @@ def _get_client() -> NotionClient:
 
 
 @tool
-@agentops.track_tool
+@operation
 def sync_application_to_job_tracker(
     application_id: str,
     job_post_id: str,
@@ -150,7 +151,7 @@ def sync_application_to_job_tracker(
 
 
 @tool
-@agentops.track_tool
+@operation
 def queue_job_to_applications_db(
     job_post_id: str,
     run_batch_id: str,
@@ -259,7 +260,7 @@ def queue_job_to_applications_db(
 
 
 @tool
-@agentops.track_tool
+@operation
 def update_notion_page_status(
     page_id: str, status: str, run_batch_id: str
 ) -> str:
@@ -310,7 +311,7 @@ def update_notion_page_status(
 
 
 @tool
-@agentops.track_tool
+@operation
 def get_pending_manual_queue(run_batch_id: str) -> str:
     """
     Get all pending jobs from the Notion Applications database.
@@ -394,7 +395,7 @@ def get_pending_manual_queue(run_batch_id: str) -> str:
 
 
 @tool
-@agentops.track_tool
+@operation
 def check_notion_connection(run_batch_id: str) -> str:
     """
     Check Notion API connection health.
