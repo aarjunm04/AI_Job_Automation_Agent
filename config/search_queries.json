@@ -1,0 +1,46 @@
+{
+    "primary_queries": [
+        "AI Engineer remote",
+        "ML Engineer remote",
+        "Machine Learning Engineer remote",
+        "Data Science Engineer remote",
+        "AI Automation Engineer remote",
+        "LLM Engineer remote",
+        "GenAI Engineer remote",
+        "MLOps Engineer remote",
+        "RAG Engineer remote",
+        "AI Solutions Architect remote"
+    ],
+    "secondary_queries": [
+        "Applied ML Engineer remote",
+        "Data Engineer AI remote",
+        "Prompt Engineer remote",
+        "AI Product Engineer remote",
+        "Deep Learning Engineer remote"
+    ],
+    "location_filters": [
+        "Remote",
+        "India",
+        "Worldwide"
+    ],
+    "job_type_filters": [
+        "full-time",
+        "contract"
+    ],
+    "experience_level_filters": [
+        "entry",
+        "mid",
+        "senior"
+    ],
+    "exclude_keywords": [
+        "staff",
+        "principal",
+        "director",
+        "VP",
+        "head of",
+        "manager",
+        "intern",
+        "internship"
+    ],
+    "results_per_query": 25
+}

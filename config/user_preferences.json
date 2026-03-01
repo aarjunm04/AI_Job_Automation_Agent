@@ -1,0 +1,43 @@
+{
+    "candidate": {
+        "name": "",
+        "email": "",
+        "phone": "",
+        "linkedin_url": "",
+        "portfolio_url": "",
+        "location": "Nagpur, Maharashtra, India",
+        "years_experience": 0
+    },
+    "job_preferences": {
+        "accepted_job_types": [
+            "full-time",
+            "contract"
+        ],
+        "accepted_locations": [
+            "Remote",
+            "India"
+        ],
+        "target_roles": [
+            "AI Engineer",
+            "ML Engineer",
+            "Machine Learning Engineer",
+            "Data Scientist",
+            "AI Automation Engineer",
+            "LLM Engineer",
+            "MLOps Engineer",
+            "RAG Engineer",
+            "GenAI Engineer"
+        ],
+        "min_salary_usd": 0,
+        "currency_preference": "USD",
+        "relocation_open": false,
+        "visa_sponsorship_required": false
+    },
+    "application_preferences": {
+        "auto_apply_enabled": true,
+        "dry_run": false,
+        "max_applications_per_run": 150,
+        "preferred_resume_default": "AarjunGen.pdf",
+        "cover_letter_enabled": false
+    }
+}

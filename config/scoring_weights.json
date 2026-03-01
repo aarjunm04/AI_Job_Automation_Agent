@@ -1,0 +1,21 @@
+{
+  "fit_score_thresholds": {
+    "skip": 0.40,
+    "low_confidence_manual": 0.49,
+    "mid_priority_floor": 0.50,
+    "high_priority_floor": 0.75,
+    "force_manual_floor": 0.90
+  },
+  "routing_rules": {
+    "skip": "fit_score < 0.40 — discard entirely, no Notion entry",
+    "manual_only": "fit_score 0.40–0.49 — manual queue only, never auto-apply",
+    "auto_eligible": "fit_score 0.50–0.74 — route by form complexity",
+    "high_priority": "fit_score 0.75–0.89 — route by form complexity, high priority",
+    "force_manual": "fit_score >= 0.90 — always manual regardless of form complexity"
+  },
+  "auto_apply_target_pct": 0.60,
+  "manual_queue_target_pct": 0.40,
+  "rag_top_k_resumes": 3,
+  "rag_similarity_weight": 0.70,
+  "llm_eligibility_weight": 0.30
+}
