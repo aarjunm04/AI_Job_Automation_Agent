@@ -366,3 +366,6 @@ mcp_context.db
 *.db
 .chroma/
 rag_systems/.chroma/
+*.egg-info/
+dist/
+build/

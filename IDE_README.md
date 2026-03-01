@@ -341,6 +341,15 @@ STEP 5: After completing any change — APPEND row to CHANGE_LOG before closing
 | L021 | 2026-02-28T21:00:00+05:30 | PERPLEXITY | agents/scraper_agent.py | CREATE | create:scraper_agent:crewai_agent_full_run_lifecycle_all_platforms | DONE |
 | L022 | 2026-02-28T21:30:00+05:30 | CLAUDE | tools/agentops_tools.py | CREATE | create:agentops_tools:record_agent_error_record_fallback_event_crewai_tools | DONE |
 | L023 | 2026-02-28T21:30:00+05:30 | CLAUDE | agents/analyser_agent.py | CREATE | create:analyser_agent:full_scoring_rag_routing_fallback_chain | DONE |
+| L025 | 2026-03-01T15:30:00+05:30 | GEMINI | config/scoring_weights.json | CONFIG | config:scoring_weights:thresholds_routing_rag_weights | DONE |
+| L026 | 2026-03-01T15:30:00+05:30 | GEMINI | config/search_queries.json | CONFIG | config:search_queries:primary_secondary_filters_excludes | DONE |
+| L027 | 2026-03-01T15:30:00+05:30 | GEMINI | config/user_preferences.json | CONFIG | config:user_preferences:candidate_job_application_prefs | DONE |
+| L028 | 2026-03-01T15:45:00+05:30 | GEMINI | tools/apply_tools.py | CREATE | create:apply_tools:playwright_ats_llm_form_fill_proof_dry_run | DONE |
+| L029 | 2026-03-01T15:47:00+05:30 | GEMINI | tools/apply_tools.py | BUGFIX | fix:apply_tools:playwright_timeout_error_cast_deadvar_return_paths | DONE |
+| L029 | 2026-03-01T16:00:00+05:30 | GEMINI | config/settings.py | CREATE | create:settings:4_frozen_dataclasses_singleton_fixes_master_run_import | DONE |
+| L030 | 2026-03-01T16:15:00+05:30 | GEMINI | agents/tracker_agent.py | CREATE | create:tracker_agent:crewai_notion_sync_agentops_close_session | DONE |
+| L031 | 2026-03-01T16:30:00+05:30 | GEMINI | agents/master_agent.py | CREATE | create:master_agent:full_pipeline_orchestrator_boot_phases_budget_gates_report | DONE |
+| L032 | 2026-03-01T16:45:00+05:30 | GEMINI | agents/apply_agent.py | CREATE | create:apply_agent:full_manifest_execution_ats_proof_reroute_fallback_chain | DONE |
 
 ## 2-WEEK SPRINT PLAN
 
