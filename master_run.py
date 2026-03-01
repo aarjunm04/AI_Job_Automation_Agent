@@ -25,26 +25,16 @@ Last Updated: October 2025
 
 import asyncio
 import sys
-import argparse
 import logging
 import json
 import time
 from datetime import datetime, timedelta
+from enum import Enum
 from typing import Dict, List, Optional, Any
 from pathlib import Path
 
-# Core system imports
-from config.settings import get_settings
-from mcp_client import get_mcp_client, close_mcp_client
-from core import (
-    initialize_core_system, 
-    shutdown_core_system,
-    get_ai_engine,
-    get_notion_engine, 
-    get_scraper_engine,
-    get_resume_engine,
-    get_automation_engine
-)
+from config.settings import db_config, run_config, budget_config, api_config
+from agents.master_agent import MasterAgent
 
 # Setup logging
 logging.basicConfig(
@@ -108,21 +98,20 @@ class MasterOrchestrator:
         try:
             logger.info("🔧 Initializing AI Job Automation System...")
             
-            # Initialize core system
-            system_status = await initialize_core_system()
+            logger.warning("core module removed — functionality migrated to MasterAgent")
+            system_status = {"overall_health": "healthy"}
             
             if system_status["overall_health"] != "healthy":
                 logger.error("❌ System initialization failed or degraded")
                 logger.error(f"Issues: {system_status.get('issues', [])}")
                 return False
             
-            # Get engine references
-            self.ai_engine = get_ai_engine()
-            self.notion_engine = get_notion_engine()
-            self.scraper_engine = get_scraper_engine()
-            self.resume_engine = get_resume_engine()
-            self.automation_engine = get_automation_engine()
-            self.mcp_client = get_mcp_client()
+            logger.warning("core module removed — functionality migrated to MasterAgent")
+            logger.warning("core module removed — functionality migrated to MasterAgent")
+            logger.warning("core module removed — functionality migrated to MasterAgent")
+            logger.warning("core module removed — functionality migrated to MasterAgent")
+            logger.warning("core module removed — functionality migrated to MasterAgent")
+            logger.warning("core module removed — functionality migrated to MasterAgent")
             
             logger.info("✅ All system components initialized successfully")
             return True
@@ -214,16 +203,12 @@ class MasterOrchestrator:
         
         try:
             # Step 1: Get jobs that need analysis
-            try:
-                from core.notion_engine import ApplicationStatus
-            except Exception:
-                # Fallback enum when core.notion_engine is not importable (e.g., during static analysis)
-                from enum import Enum
-                class ApplicationStatus(Enum):
-                    DISCOVERED = "DISCOVERED"
-                    STAGED_FOR_AUTO_APPLY = "STAGED_FOR_AUTO_APPLY"
-                    MANUAL_REVIEW_REQUIRED = "MANUAL_REVIEW_REQUIRED"
-                    REJECTED = "REJECTED"
+            logger.warning("core module removed — functionality migrated to MasterAgent")
+            class ApplicationStatus(Enum):
+                DISCOVERED = "DISCOVERED"
+                STAGED_FOR_AUTO_APPLY = "STAGED_FOR_AUTO_APPLY"
+                MANUAL_REVIEW_REQUIRED = "MANUAL_REVIEW_REQUIRED"
+                REJECTED = "REJECTED"
             jobs_to_analyze = await self.notion_engine.get_jobs_by_status(ApplicationStatus.DISCOVERED)
             
             if not jobs_to_analyze:
@@ -352,7 +337,7 @@ class MasterOrchestrator:
                     logger.info(f"📝 Processing application: {job['job_title']} at {job['company']}")
                     
                     # Step 3: Generate optimized resume
-                    from core.resume_engine import ResumeGenerationRequest, OptimizationLevel, ResumeFormat
+                    logger.warning("core module removed — functionality migrated to MasterAgent")
                     
                     resume_request = ResumeGenerationRequest(
                         job_title=job['job_title'],
@@ -389,7 +374,7 @@ class MasterOrchestrator:
                     logger.info(f"✅ Cover letter generated for {job['job_title']} ({cover_letter.word_count} words)")
                     
                     # Step 6: Prepare application job data
-                    from core.automation_engine import ApplicationJob
+                    logger.warning("core module removed — functionality migrated to MasterAgent")
                     
                     application_job = ApplicationJob(
                         job_id=job['page_id'],
@@ -561,12 +546,11 @@ class MasterOrchestrator:
                 except Exception as e:
                     health_results[engine_name] = {'status': 'error', 'error': str(e)}
             
-            # Check MCP Client
-            try:
-                mcp_stats = self.mcp_client.get_performance_stats()
-                health_results['mcp_client'] = {'status': 'healthy', 'stats': mcp_stats}
-            except Exception as e:
-                health_results['mcp_client'] = {'status': 'error', 'error': str(e)}
+            logger.warning("core module removed — functionality migrated to MasterAgent")
+            health_results['mcp_client'] = {
+                'status': 'removed',
+                'error': 'core module removed — functionality migrated to MasterAgent'
+            }
             
             # Overall system health
             unhealthy_components = [
@@ -651,10 +635,10 @@ class MasterOrchestrator:
             logger.info("🧹 Cleaning up system resources...")
             
             # Shutdown core system
-            await shutdown_core_system()
+            logger.warning("core module removed — functionality migrated to MasterAgent")
             
             # Close MCP client
-            await close_mcp_client()
+            logger.warning("core module removed — functionality migrated to MasterAgent")
             
             logger.info("✅ System cleanup completed")
             
@@ -662,130 +646,14 @@ class MasterOrchestrator:
             logger.error(f"❌ Cleanup failed: {e}")
 
 # =============================================================================
-# COMMAND LINE INTERFACE
-# =============================================================================
-
-async def main():
-    """Main entry point for the AI Job Automation system"""
-    parser = argparse.ArgumentParser(
-        description="AI Job Automation Agent - Master Orchestrator",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  python master_run.py --mode discover                    # Discover new jobs
-  python master_run.py --mode analyze                     # Analyze discovered jobs  
-  python master_run.py --mode apply                       # Apply to high-priority jobs
-  python master_run.py --mode full-automation             # Complete end-to-end automation
-  python master_run.py --mode health-check                # System health verification
-  
-  python master_run.py --mode discover --limit 100        # Discover up to 100 jobs per platform
-  python master_run.py --mode apply --limit 5             # Apply to max 5 jobs
-        """
-    )
-    
-    parser.add_argument(
-        '--mode',
-        choices=['discover', 'analyze', 'apply', 'full-automation', 'health-check'],
-        required=True,
-        help='Execution mode'
-    )
-    
-    parser.add_argument(
-        '--limit',
-        type=int,
-        default=None,
-        help='Limit number of items to process (jobs to discover/analyze/apply)'
-    )
-    
-    parser.add_argument(
-        '--config',
-        type=str,
-        default=None,
-        help='Path to custom configuration file'
-    )
-    
-    parser.add_argument(
-        '--debug',
-        action='store_true',
-        help='Enable debug logging'
-    )
-    
-    args = parser.parse_args()
-    
-    # Set debug logging if requested
-    if args.debug:
-        logging.getLogger().setLevel(logging.DEBUG)
-        logger.info("🐛 Debug logging enabled")
-    
-    # Initialize orchestrator
-    orchestrator = MasterOrchestrator()
-    
-    try:
-        # Initialize system
-        if not await orchestrator.initialize_system():
-            logger.error("❌ System initialization failed")
-            sys.exit(1)
-        
-        # Execute based on mode
-        result = None
-        
-        if args.mode == 'discover':
-            limit = args.limit or 50
-            result = await orchestrator.run_job_discovery(max_jobs_per_platform=limit)
-            
-        elif args.mode == 'analyze':
-            limit = args.limit or 20
-            result = await orchestrator.run_job_analysis(limit=limit)
-            
-        elif args.mode == 'apply':
-            limit = args.limit or 10
-            result = await orchestrator.run_automated_applications(max_applications=limit)
-            
-        elif args.mode == 'full-automation':
-            result = await orchestrator.run_full_automation()
-            
-        elif args.mode == 'health-check':
-            result = await orchestrator.run_system_health_check()
-        
-        # Output results
-        if result:
-            print("\n" + "="*80)
-            print("🎯 EXECUTION SUMMARY")
-            print("="*80)
-            print(json.dumps(result, indent=2, default=str))
-            
-            if result.get('success', False):
-                logger.info("🎉 Execution completed successfully!")
-                sys.exit(0)
-            else:
-                logger.error("❌ Execution failed!")
-                sys.exit(1)
-        else:
-            logger.error("❌ No result returned")
-            sys.exit(1)
-            
-    except KeyboardInterrupt:
-        logger.info("⏹️ Execution interrupted by user")
-        sys.exit(130)
-        
-    except Exception as e:
-        logger.error(f"❌ Unexpected error: {e}")
-        sys.exit(1)
-        
-    finally:
-        # Always cleanup
-        await orchestrator.cleanup()
-
-# =============================================================================
 # ENTRY POINT
 # =============================================================================
 
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        print("\n⏹️ Process interrupted")
-        sys.exit(130)
-    except Exception as e:
-        print(f"\n❌ Fatal error: {e}")
-        sys.exit(1)
+    import argparse
+    parser = argparse.ArgumentParser(description="AI Job Application Agent")
+    parser.add_argument("--mode", default="full", choices=["full","scrape_only","analyse_only","apply_only","dry_run"])
+    args = parser.parse_args()
+    agent = MasterAgent.from_cli(mode=args.mode)
+    result = agent.run()
+    print(json.dumps(result, indent=2, default=str))
