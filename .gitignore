@@ -369,3 +369,7 @@ rag_systems/.chroma/
 *.egg-info/
 dist/
 build/
+
+# narad environment files (if any)
+narad.env
+~/narad.env
