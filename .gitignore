@@ -370,6 +370,9 @@ rag_systems/.chroma/
 dist/
 build/
 
-# narad environment files (if any)
+# java.env — project-specific secrets (never commit)
+java.env
+~/java.env
 narad.env
 ~/narad.env
+*.env

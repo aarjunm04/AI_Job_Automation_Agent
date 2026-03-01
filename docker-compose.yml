@@ -34,7 +34,7 @@ services:
     restart: unless-stopped
     
     env_file:
-      - ~/narad.env
+      - ~/java.env
     
     environment:
       POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
@@ -107,7 +107,7 @@ services:
     restart: unless-stopped
     
     env_file:
-      - ~/narad.env
+      - ~/java.env
     
     environment:
       DEBUG: "false"
@@ -150,7 +150,6 @@ services:
         reservations:
           cpus: '1'
           memory: 1G
-
 
 
 

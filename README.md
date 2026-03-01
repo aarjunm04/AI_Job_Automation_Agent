@@ -218,7 +218,7 @@ The system uses **CrewAI** (open-source, free) as the agent orchestration framew
 | Containerisation | Docker + Docker Compose | Full local dev stack | Free |
 | CI/CD + Cron Scheduler | GitHub Actions | `0 6 * * 1,4,6` UTC · CI/CD pipelines | Free tier |
 | Observability | AgentOps | Agent traces · LLM cost tracking · error patterns | Free tier |
-| Secrets Management | `~/narad.env` | Single git-ignored env file — passed to Docker via `--env-file` | Free |
+| Secrets Management | `~/java.env` | Single git-ignored env file — passed to Docker via `--env-file` | Free |
 
 ### LLM Provider Summary
 
@@ -318,7 +318,7 @@ Approx runs/month:    ~13
 
 ### Secrets Management
 
-All secrets live in `~/narad.env` — a single, **git-ignored** file that is the source of truth for all API keys, DB URLs, and config values. Auto-loaded by the shell and passed to all Docker containers via `--env-file ~/narad.env`.
+All secrets live in `~/java.env` — a single, **git-ignored** file that is the source of truth for all API keys, DB URLs, and config values. Auto-loaded by the shell and passed to all Docker containers via `--env-file ~/java.env`.
 
 ---
 
@@ -342,15 +342,15 @@ cd AI_Job_Automation_Agent
 
 ```bash
 # Create the global env file (single source of truth — git-ignored)
-touch ~/narad.env
-nano ~/narad.env   # Add all required variables — see Environment Variables section below
+touch ~/java.env
+nano ~/java.env   # Add all required variables — see Environment Variables section below
 ```
 
 ### Step 3 — Boot Full Stack
 
 ```bash
 # Start all services: Postgres, Redis, FastAPI
-docker-compose --env-file ~/narad.env up -d
+docker-compose --env-file ~/java.env up -d
 
 # Verify all containers are healthy
 docker-compose ps
@@ -386,7 +386,7 @@ python main.py --health-check
 
 ## 🔐 Environment Variables
 
-All variables live in `~/narad.env`. This file is never committed to git and is auto-loaded by your shell and Docker via `--env-file`.
+All variables live in `~/java.env`. This file is never committed to git and is auto-loaded by your shell and Docker via `--env-file`.
 
 ```env
 # ── LLM APIs ───────────────────────────────────────────────────────────────
@@ -443,7 +443,7 @@ TIMEZONE=Asia/Kolkata
 
 | Milestone | Target | Deliverable |
 |-----------|--------|-------------|
-| **M1** | Week 1 | Repo structure · Docker Compose · `narad.env` schema · Postgres schema + Supabase setup · ChromaDB init |
+| **M1** | Week 1 | Repo structure · Docker Compose · `java.env` schema · Postgres schema + Supabase setup · ChromaDB init |
 | **M2** | Week 1–2 | RAG system live — all 15 resumes embedded · NVIDIA NIM primary + Gemini fallback |
 | **M3** | Week 2 | CrewAI framework setup · Master Agent · AgentOps integration |
 | **M4** | Week 2–3 | Scraper Agent — all 10 platforms + safety-net · SerpAPI · Perplexity `sonar` normalisation |

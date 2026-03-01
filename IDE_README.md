@@ -8,7 +8,7 @@ PROJECT      : AI Job Application Agent
 PHASE        : 1 (Phase 2: Apr 2 – May 14 2026)
 SPRINT       : 2W | START: 2026-03-01 | TARGET: 2026-03-14
 STACK        : Python3.11 | CrewAI | Playwright | PostgreSQL | ChromaDB | Redis | FastAPI | Docker | AgentOps
-SECRETS      : ~/narad.env (single source of truth, git-ignored, loaded via --env-file)
+SECRETS      : ~/java.env (single source of truth, git-ignored, loaded via --env-file)
 DB_DEV       : Local Docker Postgres (switch via ACTIVEDB=local)
 DB_PROD      : Supabase PostgreSQL (switch via ACTIVEDB=supabase)
 RUN_SCHEDULE : Mon/Thu/Sat 12:00 PM IST | cron: 0 6 1,4,6 * *
@@ -133,7 +133,7 @@ ENDPOINTS    : 3 only — no others
 | ENDPOINT | METHOD | CALLED_BY | PURPOSE |
 |----------|--------|-----------|---------|
 | /match | POST | Chrome Extension | RAG resume match for current job page — returns resume_suggested, similarity_score, fit_score, match_reasoning, talking_points |
-| /autofill | POST | Chrome Extension | Returns field-value map for detected form fields from narad.env user profile |
+| /autofill | POST | Chrome Extension | Returns field-value map for detected form fields from java.env user profile |
 | /log-application | POST | Chrome Extension | Logs manual application to Postgres + triggers Notion Job Tracker sync |
 
 ## NARAD.ENV KEYS
@@ -201,8 +201,8 @@ ENDPOINTS    : 3 only — no others
 | agent_runner | job_agent_runner | custom (.services/agents/) | — | resumes_data(ro), chromadb_data | postgres, redis, chromadb, fastapi |
 
 ```text
-BOOT_CMD     : docker-compose --env-file ~/narad.env up -d
-RUN_CMD      : docker-compose --env-file ~/narad.env run --rm agent_runner python main.py
+BOOT_CMD     : docker-compose --env-file ~/java.env up -d
+RUN_CMD      : docker-compose --env-file ~/java.env run --rm agent_runner python main.py
 NETWORK      : Single bridge network job_agent_network — all services internal
 ```
 
@@ -213,8 +213,8 @@ AIJobAutomationAgent/
 ├── main.py                      # Entrypoint — boots CrewAI crew, starts run session
 ├── IDE_README.md                # This file — IDE coordination document
 ├── docker-compose.yml           # Full stack definition
-├── narad.env.template           # All keys with empty values — safe to commit
-├── .gitignore                   # Includes narad.env, __pycache__, .env, *.pyc
+├── java.env.template           # All keys with empty values — safe to commit
+├── .gitignore                   # Includes java.env, __pycache__, .env, *.pyc
 ├── requirements.txt             # Top-level consolidated deps
 ├── agents/
 │   ├── master_agent.py          # CrewAI crew manager, run lifecycle, budget gate
@@ -289,7 +289,7 @@ GRUNT        : GOOGLE_GEMINI_ASSIST — docstrings, type hints, formatting, conf
 | Bug fix (single function) | CODEX | Precise scope, preserve function signature |
 | Feature delta (modify existing function) | CODEX | Targeted change only, no side effects |
 | Docstrings / type hints | GEMINI | Google-style docstrings, PEP8 type hints |
-| Config file edits | GEMINI | narad.env.template, platforms.json, requirements.txt |
+| Config file edits | GEMINI | java.env.template, platforms.json, requirements.txt |
 | Architecture decision | PERPLEXITY only | Never delegate arch decisions to IDEs |
 | Prompt generation for other IDEs | PERPLEXITY only | All IDE prompts written and issued by Perplexity |
 
@@ -363,6 +363,8 @@ STEP 5: After completing any change — APPEND row to CHANGE_LOG before closing
 | L045 | 2026-03-01T19:15:00+05:30 | CODEX | agents/*.py tools/*.py auto_apply/*.py | FIX | fix:agentops_v04_decorator_migration_track_agent_to_agent_track_tool_to_operation | DONE |
 | L046 | 2026-03-01T19:30:00+05:30 | CODEX | requirements.txt | FIX | fix:requirements:add_5_missing_remove_30_bloat_fix_crewai_version | DONE |
 | L047 | 2026-03-01T19:10:00+05:30 | CODEX | rag_systems/rag_api.py | FIX | fix:bare_import_to_fully_qualified_rag_systems_package_path | DONE |
+| L048 | 2026-03-01T22:43:08+05:30 | CODEX | docker-compose.yml, .github/workflows/run_pipeline.yml, .github/workflows/ci.yml, .gitignore, IDE_README.md | FEATURE DELTA | renameEnvFile:java.env→java.env across all infra files | DONE |
+| L049 | 2026-03-01T22:52:49+05:30 | CODEX | README.md, IDE_README.md | FEATURE DELTA | renameEnvFile:narad.env→java.env in readmes | DONE |
 
 ## 2-WEEK SPRINT PLAN
 
@@ -372,7 +374,7 @@ SPRINT: Phase 1 Prod v1 | 2026-03-01 → 2026-03-14
 
 | DAY | DATE | TASK | PERPLEXITY | CLAUDE | CODEX | GEMINI | MILESTONE |
 |-----|------|------|------------|---------|-------|--------|-----------|
-| 1 | Mar 1 | Repo init, directory structure, narad.env.template, .gitignore, docker-compose.yml base | Scaffold all files | Complete Dockerfiles + compose | — | env comments + formatting | — |
+| 1 | Mar 1 | Repo init, directory structure, java.env.template, .gitignore, docker-compose.yml base | Scaffold all files | Complete Dockerfiles + compose | — | env comments + formatting | — |
 | 2 | Mar 2 | Postgres schema.sql, db/init.sql, Supabase setup, migrations v1 | Schema design + SQL base | Full schema + migrations | — | SQL docblock comments | — |
 | 3 | Mar 3 | ChromaDB setup, resume ingestion pipeline (rag/ingestion.py, rag/embedder.py) | EmbeddingService base class | Full NVIDIA NIM + Gemini fallback impl | — | Docstrings | — |
 | 4 | Mar 4 | RAG query service (rag/query.py), ChromaDB collections setup | RAGQueryService base | Full similarity search + resume selection | Bug fixes if any | Type hints | M1: Infra + RAG ready |
@@ -408,7 +410,7 @@ SPRINT: Phase 1 Prod v1 | 2026-03-01 → 2026-03-14
 ## CODING STANDARDS
 
 - Language: Python 3.11 — no walrus operator, no match-case for compatibility
-- All secrets via os.getenv() from narad.env — never hardcode
+- All secrets via os.getenv() from java.env — never hardcode
 - Every agent tool function decorated with @agentops.track_tool
 - Every agent class decorated with @agentops.track_agent
 - Error handling: all external calls (LLM APIs, Playwright, Postgres, Notion) wrapped in try/except with retry logic (max 3 retries, exponential backoff)
@@ -416,7 +418,7 @@ SPRINT: Phase 1 Prod v1 | 2026-03-01 → 2026-03-14
 - All DB writes atomic — use transactions for multi-table operations
 - LLM fallback chain: always implement primary → fallback_1 → fallback_2 for Analyser and Apply agents
 - No MCP — FastAPI slim server is the ONLY HTTP boundary
-- Logging: use Python logging module at LOG_LEVEL from narad.env — no print() in production code
+- Logging: use Python logging module at LOG_LEVEL from java.env — no print() in production code
 - Type hints on all function signatures (mypy strict)
 - Google-style docstrings on all public methods and classes
 - Module-level __all__ defined in every tool file
@@ -436,7 +438,7 @@ SPRINT: Phase 1 Prod v1 | 2026-03-01 → 2026-03-14
 [CONSTRAINTS]
   - Prod-ready: full error handling, retry (max 3, exponential backoff), fail-soft
   - No stubs, no TODOs, no placeholder comments — complete implementations only
-  - All secrets via os.getenv() from narad.env
+  - All secrets via os.getenv() from java.env
   - Preserve existing class/method signatures exactly
   - AgentOps decorators already present — do not remove
   - Follow coding standards in IDE_README.md Section 16
@@ -457,7 +459,7 @@ SPRINT: Phase 1 Prod v1 | 2026-03-01 → 2026-03-14
   - No new imports unless strictly necessary
   - Preserve function signature and return type
   - Fail-soft: no exceptions should propagate to caller uncaught
-  - narad.env for any new config values needed
+  - java.env for any new config values needed
 [IDE_LOG] Append: L{NNN} | CODEX | {path} | {CHANGE_TYPE} | {notes} | DONE
 ```
 
