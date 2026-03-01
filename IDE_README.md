@@ -42,6 +42,38 @@ PHASE2_DONE  : 2026-05-14
 AGENT_FLOW   : Master → delegates → Scraper → Master → Analyser → Master → Apply → Master → Tracker → Master
 HANDOFF      : All agent-to-agent state via Postgres tables ONLY. No in-memory passing.
 BUDGET_GATE  : Master checks xAI spend after EVERY Apply Agent call. Abort run gracefully if > $0.38.
+
+## Chrome Extension (Manual Apply)
+
+- Manifest V3, Chrome only (v1), lives in `extension/` directory
+- Communicates EXCLUSIVELY via FastAPI slim server — no direct DB or agent access
+- No automated submission — user always clicks Submit
+
+### Extension Files
+
+| FILE | PURPOSE |
+|------|---------|
+| manifest.json | MV3 manifest — permissions: activeTab, storage, scripting, notifications |
+| popup/popup.html | Main panel — fit score card, resume suggestion, talking points accordion, autofill button, mark-as-applied button, queue badge |
+| popup/popup.js | Button event handling, background message passing, data rendering |
+| popup/popup.css | Dark-mode UI |
+| content_scripts/content.js | DOM scanner — detects input[type=text/email], select, textarea, file inputs; extracts field names/IDs/labels; sends detected_fields to popup |
+| background/service_worker.js | All fetch() calls to FastAPI (auth header with FASTAPI_API_KEY from storage), message routing between content script and popup |
+| utils/api_client.js | Shared callMatch, callAutofill, callLogApplication with retry (max 2) and error handling |
+| utils/dom_detector.js | Shared DOM parsing, field type classification, React input detection |
+
+### 5-Step User Flow
+
+1. User opens Notion Applications DB → reviews Queued jobs by Priority → opens job URL in Chrome
+2. Extension auto-calls /match on page load → shows fit score, reasoning, resume suggestion, talking points, autofill readiness
+3. User clicks Autofill → extension injects name/email/phone/LinkedIn/years_of_experience into standard fields
+4. User completes custom questions using talking points, uploads suggested resume, submits
+5. User clicks Mark as Applied → extension calls /log-application → FastAPI writes applied_manual to Postgres → Tracker Agent → Notion Job Tracker DB sync
+
+### Config
+
+- FASTAPI_HOST and FASTAPI_API_KEY stored in chrome.storage.sync (set in extension options)
+- Default host: http://localhost:8000
 ```
 
 ## PLATFORM CONFIGURATION
@@ -365,6 +397,8 @@ STEP 5: After completing any change — APPEND row to CHANGE_LOG before closing
 | L047 | 2026-03-01T19:10:00+05:30 | CODEX | rag_systems/rag_api.py | FIX | fix:bare_import_to_fully_qualified_rag_systems_package_path | DONE |
 | L048 | 2026-03-01T22:43:08+05:30 | CODEX | docker-compose.yml, .github/workflows/run_pipeline.yml, .github/workflows/ci.yml, .gitignore, IDE_README.md | FEATURE DELTA | renameEnvFile:java.env→java.env across all infra files | DONE |
 | L049 | 2026-03-01T22:52:49+05:30 | CODEX | README.md, IDE_README.md | FEATURE DELTA | renameEnvFile:narad.env→java.env in readmes | DONE |
+| L050 | 2026-03-02T00:23:00+05:30 | PERPLEXITY | IDE_README.md | UPDATE | session-start:add-chrome-ext-specs-platform-apply-specs-developer-agent-specs-session-handoff | DONE |
+
 
 ## 2-WEEK SPRINT PLAN
 
