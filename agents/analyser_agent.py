@@ -31,6 +31,7 @@ import psycopg2
 import psycopg2.extras
 from crewai import Agent, Task, Crew, Process
 import agentops
+from agentops.sdk.decorators import agent, operation
 
 from integrations.llm_interface import LLMInterface
 from tools.rag_tools import query_resume_match, get_resume_context, embed_job_description
@@ -104,7 +105,7 @@ def _provider_from_model(model: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-@agentops.track_agent(agent_type="AnalyserAgent")
+@agent
 class AnalyserAgent:
     """
     CrewAI Analyser Agent — eligibility filter, RAG resume matching, routing.
@@ -699,7 +700,7 @@ JOB LIST (JSON)
     # Public: main run method
     # ------------------------------------------------------------------
 
-    @agentops.track_tool
+    @operation
     def run(self) -> dict[str, Any]:
         """
         Execute the full Analyser Agent scoring pass for the current run batch.

@@ -21,6 +21,7 @@ import time
 from typing import Any, Optional
 
 import agentops
+from agentops.sdk.decorators import agent, operation
 import psycopg2
 import psycopg2.extras
 from crewai import Agent, Crew, Process, Task
@@ -107,7 +108,7 @@ def _end_agentops_session(end_state: str = "Success") -> bool:
 # TrackerAgent
 # ---------------------------------------------------------------------------
 
-@agentops.track_agent(agent_type="TrackerAgent")
+@agent
 class TrackerAgent:
     """Final pipeline agent: Notion sync, AgentOps summary, run-session close.
 
@@ -357,7 +358,7 @@ If some Notion syncs failed, include them in the "errors" list as strings.
     # Public entry point
     # ------------------------------------------------------------------
 
-    @agentops.track_tool
+    @operation
     def run(self) -> dict[str, Any]:
         """Execute the full tracker pass for the current run batch.
 

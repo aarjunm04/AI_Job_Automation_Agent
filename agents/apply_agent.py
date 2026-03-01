@@ -27,6 +27,7 @@ from typing import Any, Dict, List, Optional
 
 from crewai import Agent, Task, Crew, Process
 import agentops
+from agentops.sdk.decorators import agent, operation
 import psycopg2
 import psycopg2.extras
 
@@ -101,7 +102,7 @@ def _get_db_conn() -> psycopg2.extensions.connection:
 # ---------------------------------------------------------------------------
 
 
-@agentops.track_agent(agent_type="ApplyAgent")
+@agent
 class ApplyAgent:
     """CrewAI Apply Agent — autonomous job application executor.
 
@@ -924,7 +925,7 @@ ROUTING MANIFEST (JSON)
     # Public: main run method
     # ------------------------------------------------------------------
 
-    @agentops.track_tool
+    @operation
     def run(self) -> Dict[str, Any]:
         """Execute the full apply pass for all auto-route jobs.
 

@@ -14,6 +14,7 @@ from typing import Dict, Any, List, Optional
 
 from crewai import Agent, Task, Crew, Process
 import agentops
+from agentops.sdk.decorators import agent, operation
 
 from integrations.llm_interface import LLMInterface
 from tools.scraper_tools import (
@@ -73,7 +74,7 @@ def _load_platform_config() -> Dict[str, Any]:
     return _platform_config
 
 
-@agentops.track_agent(agent_type="ScraperAgent")
+@agent
 class ScraperAgent:
     """
     CrewAI Scraper Agent for job discovery.
@@ -222,7 +223,7 @@ IMPORTANT:
             agent=agent,
         )
 
-    @agentops.track_tool
+    @operation
     def run(self) -> Dict[str, Any]:
         """
         Execute the scraper agent run.

@@ -25,6 +25,7 @@ from typing import Any, Dict, List, Optional
 
 from crewai import Agent, Task, Crew, Process
 import agentops
+from agentops.sdk.decorators import agent, operation
 import psycopg2
 
 from config.settings import db_config, run_config, budget_config, api_config
@@ -161,7 +162,7 @@ def _record_run_summary(run_batch_id: str) -> bool:
 # ---------------------------------------------------------------------------
 
 
-@agentops.track_agent(agent_type="MasterAgent")
+@agent
 class MasterAgent:
     """CrewAI Master Agent — full pipeline orchestrator.
 
@@ -905,7 +906,7 @@ class MasterAgent:
     # Public: main entry point
     # ------------------------------------------------------------------
 
-    @agentops.track_tool
+    @operation
     def run(self) -> Dict[str, Any]:
         """Execute the full pipeline run.
 
