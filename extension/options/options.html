@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Job Agent — Settings</title>
+  <style>
+    *, *::before, *::after {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      background: #1a1a2e;
+      color: #e0e0e0;
+      font-family: system-ui, -apple-system, sans-serif;
+      font-size: 14px;
+      line-height: 1.6;
+      min-height: 100vh;
+      display: flex;
+      justify-content: center;
+      align-items: flex-start;
+      padding: 40px 16px;
+    }
+
+    .settings-card {
+      background: #16213e;
+      border-radius: 12px;
+      padding: 32px 28px;
+      width: 100%;
+      max-width: 480px;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+    }
+
+    .settings-title {
+      font-size: 20px;
+      font-weight: 700;
+      color: #e0e0e0;
+      margin-bottom: 4px;
+    }
+
+    .settings-subtitle {
+      font-size: 12px;
+      color: #9ca3af;
+      margin-bottom: 24px;
+    }
+
+    .field-group {
+      margin-bottom: 20px;
+    }
+
+    .field-label {
+      display: block;
+      font-size: 12px;
+      font-weight: 600;
+      color: #9ca3af;
+      margin-bottom: 6px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    .field-input-wrapper {
+      position: relative;
+      display: flex;
+      align-items: center;
+    }
+
+    .field-input {
+      width: 100%;
+      background: #1a1a2e;
+      border: 1px solid #2d3748;
+      border-radius: 8px;
+      color: #e0e0e0;
+      padding: 10px 12px;
+      font-size: 13px;
+      font-family: inherit;
+      outline: none;
+      transition: border-color 0.15s ease;
+    }
+
+    .field-input:focus {
+      border-color: #4ade80;
+    }
+
+    .field-input::placeholder {
+      color: #6b7280;
+    }
+
+    .toggle-visibility-btn {
+      position: absolute;
+      right: 8px;
+      background: none;
+      border: none;
+      color: #9ca3af;
+      cursor: pointer;
+      font-size: 13px;
+      padding: 4px 6px;
+      border-radius: 4px;
+      transition: color 0.15s ease;
+    }
+
+    .toggle-visibility-btn:hover {
+      color: #e0e0e0;
+    }
+
+    .btn-row {
+      display: flex;
+      gap: 10px;
+      margin-top: 24px;
+    }
+
+    .btn {
+      flex: 1;
+      padding: 10px 16px;
+      border-radius: 8px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      border: none;
+      transition: background 0.15s ease, opacity 0.15s ease;
+      text-align: center;
+    }
+
+    .btn-save {
+      background: #4ade80;
+      color: #000;
+    }
+
+    .btn-save:hover {
+      background: #22c55e;
+    }
+
+    .btn-test {
+      background: #1a1a2e;
+      color: #e0e0e0;
+      border: 1px solid #2d3748;
+    }
+
+    .btn-test:hover {
+      background: #0f3460;
+    }
+
+    .btn:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+      pointer-events: none;
+    }
+
+    #status-msg {
+      margin-top: 16px;
+      font-size: 13px;
+      font-weight: 600;
+      min-height: 20px;
+      text-align: center;
+      transition: opacity 0.2s ease;
+    }
+
+    .status-success {
+      color: #4ade80;
+    }
+
+    .status-error {
+      color: #f87171;
+    }
+
+    .queue-display {
+      margin-top: 20px;
+      padding: 12px;
+      background: #1a1a2e;
+      border-radius: 8px;
+      text-align: center;
+      font-size: 13px;
+      color: #9ca3af;
+    }
+
+    .queue-display strong {
+      color: #4ade80;
+      font-weight: 700;
+    }
+
+    .divider {
+      height: 1px;
+      background: #2d3748;
+      margin: 24px 0;
+    }
+  </style>
+</head>
+<body>
+  <div class="settings-card">
+    <div class="settings-title">Job Agent — Settings</div>
+    <div class="settings-subtitle">Configure your FastAPI server connection</div>
+
+    <div class="divider"></div>
+
+    <div class="field-group">
+      <label class="field-label" for="fastapi-host">FastAPI Server URL</label>
+      <div class="field-input-wrapper">
+        <input
+          type="text"
+          id="fastapi-host"
+          class="field-input"
+          placeholder="http://localhost:8000"
+          autocomplete="off"
+          spellcheck="false"
+        >
+      </div>
+    </div>
+
+    <div class="field-group">
+      <label class="field-label" for="api-key">API Key</label>
+      <div class="field-input-wrapper">
+        <input
+          type="password"
+          id="api-key"
+          class="field-input"
+          placeholder="Enter your API key"
+          autocomplete="off"
+          spellcheck="false"
+          style="padding-right: 60px;"
+        >
+        <button type="button" class="toggle-visibility-btn" id="toggle-key-btn">Show</button>
+      </div>
+    </div>
+
+    <div class="btn-row">
+      <button class="btn btn-save" id="save-btn">Save Settings</button>
+      <button class="btn btn-test" id="test-btn">Test Connection</button>
+    </div>
+
+    <div id="status-msg"></div>
+
+    <div class="divider"></div>
+
+    <div class="queue-display" id="queue-count-display">
+      Manual Queue: <strong>—</strong> jobs pending
+    </div>
+  </div>
+
+  <script>
+    (function () {
+      /* ── DOM References ── */
+      const hostInput   = document.getElementById('fastapi-host');
+      const keyInput    = document.getElementById('api-key');
+      const saveBtn     = document.getElementById('save-btn');
+      const testBtn     = document.getElementById('test-btn');
+      const toggleBtn   = document.getElementById('toggle-key-btn');
+      const statusMsg   = document.getElementById('status-msg');
+      const queueDiv    = document.getElementById('queue-count-display');
+
+      /* ── Status Message Helper ── */
+      let statusTimer = null;
+
+      function showStatus(message, type) {
+        if (statusTimer) clearTimeout(statusTimer);
+        statusMsg.textContent = message;
+        statusMsg.className = type === 'success' ? 'status-success' : 'status-error';
+        statusTimer = setTimeout(() => {
+          statusMsg.textContent = '';
+          statusMsg.className = '';
+        }, 2500);
+      }
+
+      /* ── Show/Hide API Key Toggle ── */
+      toggleBtn.addEventListener('click', () => {
+        const isPassword = keyInput.type === 'password';
+        keyInput.type = isPassword ? 'text' : 'password';
+        toggleBtn.textContent = isPassword ? 'Hide' : 'Show';
+      });
+
+      /* ── Load Saved Settings ── */
+      chrome.storage.sync.get(['FASTAPI_HOST', 'FASTAPI_API_KEY'], (result) => {
+        if (result.FASTAPI_HOST) hostInput.value = result.FASTAPI_HOST;
+        if (result.FASTAPI_API_KEY) keyInput.value = result.FASTAPI_API_KEY;
+
+        /* Fetch queue count on load if host is available */
+        if (result.FASTAPI_HOST) {
+          fetchQueueCount(result.FASTAPI_HOST, result.FASTAPI_API_KEY || '');
+        }
+      });
+
+      /* ── Save Settings ── */
+      saveBtn.addEventListener('click', () => {
+        const host = hostInput.value.trim();
+        const key  = keyInput.value.trim();
+
+        if (!host) {
+          showStatus('Server URL is required', 'error');
+          return;
+        }
+
+        chrome.storage.sync.set({
+          FASTAPI_HOST: host,
+          FASTAPI_API_KEY: key
+        }, () => {
+          if (chrome.runtime.lastError) {
+            showStatus('Error saving: ' + chrome.runtime.lastError.message, 'error');
+          } else {
+            showStatus('Settings saved!', 'success');
+            fetchQueueCount(host, key);
+          }
+        });
+      });
+
+      /* ── Test Connection ── */
+      testBtn.addEventListener('click', async () => {
+        const host = hostInput.value.trim();
+        const key  = keyInput.value.trim();
+
+        if (!host) {
+          showStatus('Enter a server URL first', 'error');
+          return;
+        }
+
+        testBtn.disabled = true;
+        testBtn.textContent = 'Testing…';
+
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 5000);
+
+        try {
+          const url = host.replace(/\/+$/, '') + '/health';
+          const headers = {};
+          if (key) headers['Authorization'] = 'Bearer ' + key;
+
+          const response = await fetch(url, {
+            method: 'GET',
+            headers: headers,
+            signal: controller.signal
+          });
+
+          clearTimeout(timeout);
+
+          if (response.ok) {
+            showStatus('✓ Connected', 'success');
+          } else {
+            showStatus('✗ Unreachable (HTTP ' + response.status + ')', 'error');
+          }
+        } catch (err) {
+          clearTimeout(timeout);
+          if (err.name === 'AbortError') {
+            showStatus('✗ Unreachable (timeout)', 'error');
+          } else {
+            showStatus('✗ Unreachable (' + err.message + ')', 'error');
+          }
+        } finally {
+          testBtn.disabled = false;
+          testBtn.textContent = 'Test Connection';
+        }
+      });
+
+      /* ── Fetch Queue Count ── */
+      async function fetchQueueCount(host, key) {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 5000);
+
+        try {
+          const url = host.replace(/\/+$/, '') + '/queue-count';
+          const headers = {};
+          if (key) headers['Authorization'] = 'Bearer ' + key;
+
+          const response = await fetch(url, {
+            method: 'GET',
+            headers: headers,
+            signal: controller.signal
+          });
+
+          clearTimeout(timeout);
+
+          if (response.ok) {
+            const data = await response.json();
+            const count = data.count !== undefined ? data.count : data.queue_count;
+            queueDiv.innerHTML = 'Manual Queue: <strong>' + (count !== undefined ? count : '—') + '</strong> jobs pending';
+          } else {
+            queueDiv.innerHTML = 'Manual Queue: <strong>—</strong> jobs pending';
+          }
+        } catch (err) {
+          clearTimeout(timeout);
+          queueDiv.innerHTML = 'Manual Queue: <strong>—</strong> jobs pending';
+        }
+      }
+    })();
+  </script>
+</body>
+</html>

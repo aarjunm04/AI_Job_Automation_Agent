@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Job Agent</title>
+    <link rel="stylesheet" href="popup.css">
+</head>
+
+<body>
+
+    <!-- HEADER -->
+    <header class="popup-header">
+        <span class="header-title">🤖 Job Agent</span>
+        <span class="queue-badge" id="queue-badge">—</span>
+    </header>
+
+    <!-- STATE: LOADING -->
+    <div id="state-loading" class="popup-body">
+        <div class="spinner-container">
+            <div class="spinner"></div>
+        </div>
+        <p style="text-align:center;color:var(--text-secondary);font-size:12px;margin-top:8px">
+            Analysing job match…
+        </p>
+    </div>
+
+    <!-- STATE: NOT A JOB PAGE -->
+    <div id="state-not-job" class="popup-body" hidden>
+        <div class="error-card">
+            <div class="error-title">Not a job page</div>
+            <div class="error-detail" id="not-job-detail">
+                Open a job application page, then click the extension icon.
+            </div>
+        </div>
+        <button class="btn btn-secondary" id="btn-rescan" style="margin-top:10px">
+            🔄 Rescan Page
+        </button>
+    </div>
+
+    <!-- STATE: ERROR -->
+    <div id="state-error" class="popup-body" hidden>
+        <div class="error-card">
+            <div class="error-title" id="error-title">Connection failed</div>
+            <div class="error-detail" id="error-detail">
+                FastAPI server unreachable. Is Docker running?
+            </div>
+        </div>
+        <button class="btn btn-secondary" id="btn-retry" style="margin-top:10px">
+            🔄 Retry
+        </button>
+    </div>
+
+    <!-- STATE: MATCH READY — main panel -->
+    <div id="state-match" class="popup-body" hidden>
+
+        <!-- Job info card -->
+        <div class="job-info-card">
+            <div class="job-url" id="job-url">—</div>
+            <div class="job-platform" id="job-platform">—</div>
+        </div>
+
+        <!-- Fit score panel -->
+        <div class="score-panel">
+            <div class="score-number" id="score-number">—</div>
+            <div class="score-label">Fit Score</div>
+            <div class="score-reasoning" id="score-reasoning">—</div>
+        </div>
+
+        <!-- Resume suggestion card -->
+        <div class="resume-card">
+            <span class="resume-icon">📄</span>
+            <div>
+                <div class="resume-name" id="resume-name">—</div>
+                <div class="resume-score" id="resume-score">—</div>
+            </div>
+        </div>
+
+        <!-- Talking points accordion -->
+        <div class="talking-points">
+            <div class="tp-header" id="tp-toggle">
+                <span class="tp-header-text">💡 Talking Points</span>
+                <span class="tp-chevron" id="tp-chevron">▼</span>
+            </div>
+            <div class="tp-body" id="tp-body">
+                <!-- populated by popup.js -->
+            </div>
+        </div>
+
+        <!-- Autofill section -->
+        <div class="autofill-section">
+            <button class="btn btn-primary" id="btn-autofill" disabled>
+                ⚡ Autofill Form Fields
+            </button>
+            <div class="autofill-status" id="autofill-status"></div>
+        </div>
+
+        <!-- Notes section -->
+        <div class="notes-section">
+            <label class="notes-label" for="notes-input">Notes (optional)</label>
+            <textarea class="notes-input" id="notes-input" placeholder="Add any notes about this application…"
+                rows="3"></textarea>
+        </div>
+
+        <!-- Mark as Applied -->
+        <button class="btn btn-secondary" id="btn-applied" disabled>
+            ✓ Mark as Applied
+        </button>
+
+    </div>
+
+    <!-- STATE: APPLIED SUCCESS -->
+    <div id="state-applied" class="popup-body" hidden>
+        <div class="success-banner">
+            <span class="success-icon">🎉</span>
+            <div class="success-text">Application Logged!</div>
+            <div class="success-sub" id="success-sub">Synced to Notion Job Tracker</div>
+        </div>
+    </div>
+
+    <!-- FOOTER (always visible except loading state) -->
+    <footer class="popup-footer" id="popup-footer" hidden>
+        <span class="footer-timestamp" id="footer-timestamp">—</span>
+        <a class="footer-settings" id="footer-settings">⚙ Settings</a>
+    </footer>
+
+    <script src="popup.js"></script>
+</body>
+
+</html>
