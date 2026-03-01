@@ -39,9 +39,9 @@ jobs:
           playwright install chromium
           playwright install-deps chromium
 
-      - name: Write narad.env from GitHub Secrets
+      - name: Write java.env from GitHub Secrets
         run: |
-          cat > ~/narad.env << 'EOF'
+          cat > ~/java.env << 'EOF'
           GROQ_API_KEY=${{ secrets.GROQ_API_KEY || '' }}
           CEREBRAS_API_KEY=${{ secrets.CEREBRAS_API_KEY || '' }}
           XAI_API_KEY=${{ secrets.XAI_API_KEY || '' }}
@@ -86,7 +86,7 @@ jobs:
           CHROMADB_PATH=app/chromadb
           SEARCH_QUERY=AI ML Data Science Automation Engineer remote
           EOF
-          chmod 600 ~/narad.env
+          chmod 600 ~/java.env
 
       - name: Run health check
         run: python main.py --health-check
