@@ -1,0 +1,147 @@
+name: CI — Lint, Type Check, Tests
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main]
+
+env:
+  PYTHON_VERSION: '3.11'
+
+jobs:
+  lint-and-typecheck:
+    name: Lint + Type Check
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install black isort mypy flake8
+
+      - name: Write minimal narad.env for CI
+        run: |
+          cat > ~/narad.env << 'EOF'
+          GROQ_API_KEY=ci_placeholder
+          XAI_API_KEY=ci_placeholder
+          LOCAL_POSTGRES_URL=postgresql://ci:ci@localhost:5432/ci
+          ACTIVE_DB=local
+          REDIS_URL=redis://localhost:6379
+          LOG_LEVEL=INFO
+          DRY_RUN=true
+          AUTO_APPLY_ENABLED=false
+          RESUME_DIR=resumes
+          DEFAULT_RESUME=AarjunGen.pdf
+          CHROMADB_PATH=app/chromadb
+          JOBS_PER_RUN_TARGET=10
+          XAI_COST_CAP_PER_RUN=0.38
+          TOTAL_MONTHLY_BUDGET=10.00
+          EOF
+          chmod 600 ~/narad.env
+
+      - name: Black formatting check
+        run: black --check --line-length 100 .
+
+      - name: isort import order check
+        run: isort --check-only --profile black --line-length 100 .
+
+      - name: Flake8 lint
+        run: |
+          flake8 . \
+            --max-line-length=100 \
+            --exclude=venv,.git,__pycache__,*.egg-info \
+            --ignore=E203,W503,E501
+
+      - name: Mypy type check
+        run: |
+          mypy . \
+            --python-version 3.11 \
+            --ignore-missing-imports \
+            --exclude venv \
+            --exclude postgres_data \
+            --exclude '\.egg-info'
+
+  test:
+    name: Run Test Suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: lint-and-typecheck
+
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: testdb
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio
+
+      - name: Write test narad.env
+        run: |
+          cat > ~/narad.env << 'EOF'
+          GROQ_API_KEY=ci_placeholder
+          XAI_API_KEY=ci_placeholder
+          LOCAL_POSTGRES_URL=postgresql://test:test@localhost:5432/testdb
+          ACTIVE_DB=local
+          REDIS_URL=redis://localhost:6379
+          LOG_LEVEL=DEBUG
+          DRY_RUN=true
+          AUTO_APPLY_ENABLED=false
+          RESUME_DIR=resumes
+          DEFAULT_RESUME=AarjunGen.pdf
+          CHROMADB_PATH=app/chromadb
+          JOBS_PER_RUN_TARGET=10
+          XAI_COST_CAP_PER_RUN=0.38
+          TOTAL_MONTHLY_BUDGET=10.00
+          EOF
+          chmod 600 ~/narad.env
+
+      - name: Run test suite
+        run: |
+          pytest test_scripts/ \
+            --timeout=60 \
+            --tb=short \
+            -v \
+            --ignore=test_scripts/test_playwright.py
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ github.run_id }}
+          path: test_scripts/
+          retention-days: 7

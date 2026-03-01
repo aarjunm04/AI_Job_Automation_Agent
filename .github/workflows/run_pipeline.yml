@@ -1,0 +1,113 @@
+name: AI Job Application Pipeline
+
+on:
+  schedule:
+    # Mon, Thu, Sat at 6:00 AM IST (00:30 UTC)
+    - cron: '30 0 * * 1,4,6'
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Pipeline mode'
+        required: true
+        default: 'full'
+        type: choice
+        options: [full, scrape_only, analyse_only, apply_only, dry_run]
+
+env:
+  PYTHON_VERSION: '3.11'
+
+jobs:
+  run-pipeline:
+    name: Run Autonomous Job Application Pipeline
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          playwright install chromium
+          playwright install-deps chromium
+
+      - name: Write narad.env from GitHub Secrets
+        run: |
+          cat > ~/narad.env << 'EOF'
+          GROQ_API_KEY=${{ secrets.GROQ_API_KEY }}
+          CEREBRAS_API_KEY=${{ secrets.CEREBRAS_API_KEY }}
+          XAI_API_KEY=${{ secrets.XAI_API_KEY }}
+          PERPLEXITY_API_KEY=${{ secrets.PERPLEXITY_API_KEY }}
+          SAMBANOVA_API_KEY=${{ secrets.SAMBANOVA_API_KEY }}
+          NVIDIA_NIM_API_KEY=${{ secrets.NVIDIA_NIM_API_KEY }}
+          GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}
+          AGENTOPS_API_KEY=${{ secrets.AGENTOPS_API_KEY }}
+          SUPABASE_URL=${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY=${{ secrets.SUPABASE_KEY }}
+          LOCAL_POSTGRES_URL=${{ secrets.LOCAL_POSTGRES_URL }}
+          ACTIVE_DB=${{ secrets.ACTIVE_DB }}
+          REDIS_URL=${{ secrets.REDIS_URL }}
+          SERPAPI_API_KEY_1=${{ secrets.SERPAPI_API_KEY_1 }}
+          SERPAPI_API_KEY_2=${{ secrets.SERPAPI_API_KEY_2 }}
+          SERPAPI_API_KEY_3=${{ secrets.SERPAPI_API_KEY_3 }}
+          SERPAPI_API_KEY_4=${{ secrets.SERPAPI_API_KEY_4 }}
+          JOOBLE_API_KEY=${{ secrets.JOOBLE_API_KEY }}
+          WEBSHARE_PROXY_LIST=${{ secrets.WEBSHARE_PROXY_LIST }}
+          NOTION_API_KEY=${{ secrets.NOTION_API_KEY }}
+          NOTION_APPLICATIONS_DB_ID=${{ secrets.NOTION_APPLICATIONS_DB_ID }}
+          NOTION_JOB_TRACKER_DB_ID=${{ secrets.NOTION_JOB_TRACKER_DB_ID }}
+          RAG_SERVER_API_KEY=${{ secrets.RAG_SERVER_API_KEY }}
+          USERNAME=${{ secrets.USERNAME }}
+          USER_EMAIL=${{ secrets.USER_EMAIL }}
+          USER_PHONE=${{ secrets.USER_PHONE }}
+          USER_LINKEDIN_URL=${{ secrets.USER_LINKEDIN_URL }}
+          USER_PORTFOLIO_URL=${{ secrets.USER_PORTFOLIO_URL }}
+          USER_LOCATION=${{ secrets.USER_LOCATION }}
+          USER_YEARS_EXPERIENCE=${{ secrets.USER_YEARS_EXPERIENCE }}
+          XAI_COST_CAP_PER_RUN=0.38
+          TOTAL_MONTHLY_BUDGET=10.00
+          JOBS_PER_RUN_TARGET=150
+          JOBS_PER_RUN_MINIMUM=100
+          MAX_PLAYWRIGHT_SESSIONS=5
+          AUTO_APPLY_ENABLED=true
+          RESUME_DIR=resumes
+          DEFAULT_RESUME=AarjunGen.pdf
+          LOG_LEVEL=INFO
+          DRY_RUN=false
+          ACTIVE_DB=supabase
+          CHROMADB_PATH=app/chromadb
+          SEARCH_QUERY=AI ML Data Science Automation Engineer remote
+          EOF
+          chmod 600 ~/narad.env
+
+      - name: Run health check
+        run: python main.py --health-check
+
+      - name: Run pipeline
+        run: |
+          MODE=${{ github.event.inputs.mode || 'full' }}
+          python main.py --mode $MODE
+
+      - name: Upload pipeline logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pipeline-logs-${{ github.run_id }}
+          path: logs/pipeline.log
+          retention-days: 14
+
+      - name: Upload run report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: run-report-${{ github.run_id }}
+          path: logs/
+          retention-days: 30
