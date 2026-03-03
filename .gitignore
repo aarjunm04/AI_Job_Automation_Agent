@@ -103,6 +103,7 @@ chrome_extension/*.crx
 chrome_extension/*.zip
 chrome_extension/build/
 chrome_extension/dist/
+chrome_extension/
 extension-key.pem
 
 # IDE and editor files
