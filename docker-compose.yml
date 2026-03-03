@@ -1,18 +1,13 @@
 # =============================================================================
-# AI Job Automation Agent - Production Docker Compose Setup
+# AI Job Automation Agent — Production Docker Compose
 # =============================================================================
-# Version: 3.8
-# Purpose: Orchestrate MCP Server, RAG Server, PostgreSQL, and Redis
-#
-# CRITICAL NOTES:
-# - n8n runs SEPARATELY as standalone infrastructure (not included)
-# - All services use env_file pointing to ~/java.env (secrets management)
-# - Services communicate via internal docker network (service names as hostnames)
-# - Chrome extension & n8n reach services via localhost on host
-# - Data persistence: ./postgres_data/, ./dump.rdb, ./.chroma/, ./logs/
+# Services : postgres | redis | chromadb | rag-server | agentrunner
+# Network  : ai_job_network (bridge, single)
+# Secrets  : ~/java.env loaded as env_file at runtime — NEVER baked into image
+# Volumes  : named volumes for postgres / redis / chromadb (no bind-mount data dirs)
 # =============================================================================
 
-version: '3.8'
+version: "3.8"
 
 networks:
   ai_job_network:
@@ -20,139 +15,157 @@ networks:
     name: ai_job_network
 
 volumes:
-  # Named volume for ChromaDB vector store
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
   chromadb_data:
     driver: local
 
 services:
-  # =============================================================================
-  # PostgreSQL 15 - Primary database for MCP Server and system state
-  # =============================================================================
+
+  # ---------------------------------------------------------------------------
+  # PostgreSQL 15 — primary relational store for jobs, applications, state
+  # ---------------------------------------------------------------------------
   postgres:
     image: postgres:15-alpine
     container_name: ai_postgres
     restart: unless-stopped
-    
     env_file:
       - ~/java.env
-    
     environment:
       POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
       PGDATA: /var/lib/postgresql/data/pgdata
-    
-    # Direct bind mount to existing postgres_data directory
     volumes:
-      - ./postgres_data:/var/lib/postgresql/data
-    
+      - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-ai_user} -d $${POSTGRES_DB:-ai_job_db} || exit 1"]
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-postgres}"]
       interval: 10s
       timeout: 5s
       retries: 6
       start_period: 15s
-    
     networks:
       - ai_job_network
 
-  # =============================================================================
-  # Redis 7 - In-memory cache and session store for MCP/RAG servers
-  # =============================================================================
+  # ---------------------------------------------------------------------------
+  # Redis 7 — in-memory cache and session store (AOF persistence)
+  # ---------------------------------------------------------------------------
   redis:
     image: redis:7-alpine
     container_name: ai_redis
     restart: unless-stopped
-    
-    # Redis persistence configuration
-    command: redis-server --appendonly no --save 900 1 --save 300 10 --save 60 10000 --dir /data
-    
-    # Mount project root as /data so Redis writes dump.rdb to host
+    command: redis-server --appendonly yes --dir /data
     volumes:
-      - ./redis_data:/data
-    
+      - redis_data:/data
     healthcheck:
-      test: ["CMD-SHELL", "redis-cli ping | grep PONG || exit 1"]
+      test: ["CMD-SHELL", "redis-cli ping | grep PONG"]
       interval: 10s
       timeout: 5s
       retries: 6
       start_period: 10s
-    
     networks:
       - ai_job_network
 
-  # =============================================================================
-  # ChromaDB - Vector database for embeddings
-  # =============================================================================
+  # ---------------------------------------------------------------------------
+  # ChromaDB — vector database for resume embeddings
+  # Exposed on host at :8001 so devs can inspect via HTTP
+  # ---------------------------------------------------------------------------
   chromadb:
     image: chromadb/chroma:latest
-    container_name: job_agent_chromadb
+    container_name: ai_chromadb
     restart: unless-stopped
-    
     ports:
       - "8001:8000"
-    
     volumes:
       - chromadb_data:/chroma/chroma
-    
+    environment:
+      ANONYMIZED_TELEMETRY: "false"
     networks:
       - ai_job_network
 
-  # =============================================================================
-  # RAG Server - FastAPI service for retrieval-augmented generation
-  # =============================================================================
+  # ---------------------------------------------------------------------------
+  # RAG Server — FastAPI endpoint consumed by the Chrome extension
+  # Source   : rag_systems/production_server.py  (app object confirmed)
+  # Port     : 8090 (host) → 8090 (container)
+  # ---------------------------------------------------------------------------
   rag-server:
     build:
-      context: ./rag_systems
-    
+      context: .
+      dockerfile: Dockerfile
     container_name: ai_rag_server
     restart: unless-stopped
-    
     env_file:
       - ~/java.env
-    
     environment:
-      DEBUG: "false"
-      LOG_LEVEL: "info"
-      # ChromaDB is in project root .chroma directory
-      CHROMA_DIR: "/app/.chroma"
-      REDIS_URL: "redis://redis:6379/0"
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      CHROMADB_HOST: chromadb
+      CHROMADB_PORT: "8000"
+      REDIS_URL: redis://redis:6379/0
       RESUME_DIR: /app/resumes
-      RAG_SERVER_API_KEY: ${RAG_SERVER_API_KEY}
-    
+    command:
+      - uvicorn
+      - rag_systems.production_server:app
+      - --host
+      - "0.0.0.0"
+      - --port
+      - "8090"
     ports:
       - "8090:8090"
-    
     depends_on:
       redis:
         condition: service_healthy
       chromadb:
         condition: service_started
-    
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8090/health"]
       interval: 15s
       timeout: 5s
       retries: 5
-      start_period: 20s
-    
-    # Mount ChromaDB directory from project root and logs
+      start_period: 30s
     volumes:
-      - ./.chroma:/app/.chroma
+      - ./app/resumes:/app/resumes:ro
       - ./logs:/app/logs
-    
     networks:
       - ai_job_network
-    
     deploy:
       resources:
         limits:
-          cpus: '2'
+          cpus: "2"
           memory: 2G
-        reservations:
-          cpus: '1'
-          memory: 1G
 
-
-
-
-
-
+  # ---------------------------------------------------------------------------
+  # Agent Runner — autonomous pipeline (batch job; exits when done)
+  # restart: "no" — this is NOT a daemon; it runs once per scheduling trigger
+  # ---------------------------------------------------------------------------
+  agentrunner:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ai_agentrunner
+    restart: "no"
+    env_file:
+      - ~/java.env
+    environment:
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      CHROMADB_HOST: chromadb
+      CHROMADB_PORT: "8000"
+      REDIS_URL: redis://redis:6379/0
+      RESUME_DIR: /app/resumes
+      DRY_RUN: ${DRY_RUN:-false}
+      ACTIVE_DB: ${ACTIVE_DB:-local}
+      LOCAL_POSTGRES_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-ai_job_db}
+    command: ["python", "main.py"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      chromadb:
+        condition: service_started
+      rag-server:
+        condition: service_healthy
+    volumes:
+      - ./app/resumes:/app/resumes:ro
+      - ./logs:/app/logs
+    networks:
+      - ai_job_network
