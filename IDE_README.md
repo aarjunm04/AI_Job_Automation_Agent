@@ -444,12 +444,12 @@ STEP 5: After completing any change — APPEND row to CHANGE_LOG before closing
 | L094 | 2026-03-03T18:30+05:30 | CLAUDE | tools/scraper_tools.py | BUGFIX | fix:add_3attempt_retry_exponential_backoff_to_get_scrape_summary | DONE |
 | L095 | 2026-03-03T18:45+05:30 | CLAUDE | scrapers/scraper_engine.py, tools/scraper_tools.py, tools/serpapi_tool.py | BUGFIX | fix:replace_all_print_statements_with_structured_logging | DONE |
 | L096 | 2026-03-03T18:45+05:30 | CLAUDE | utils/db_utils.py, agents/analyser_agent.py, agents/apply_agent.py | BUGFIX | fix:centralise_get_db_conn_into_utils_db_utils_remove_duplicates | DONE |
-| L100 | 2026-03-03T19:33+05:30 | CLAUDE | tools/scraper_tools.py, scrapers/__init__.py | BUGFIX | fix:remove_dead_SerpAPIGoogleJobsScraper_import_wire_serpapi_tool | DONE |
 | L097 | 2026-03-03T19:00+05:30 | CLAUDE | tools/serpapi_tool.py + all .py files | BUGFIX | fix:serpapi_key_names_SERPAPI_KEY_to_SERPAPI_API_KEY_correct | DONE |
 | L098 | 2026-03-03T19:00+05:30 | CLAUDE | utils/proxy_ratelimit.py + all files | BUGFIX | fix:webshare_proxy_keys_fix_wenshare_typo_java_env_final_purge | DONE |
 | L099 | 2026-03-03T19:15+05:30 | CLAUDE | utils/__init__.py + all package __init__.py files | BUGFIX | fix:create_missing_package_init_files_utils_agents_tools | DONE |
 | L0100 | 2026-03-03T19:15+05:30 | CLAUDE | utils/proxy_ratelimit.py | BUGFIX | fix:add_module_level_get_proxy_dict_get_next_proxy_reset_cycle_functions | DONE |
 | L0101 | 2026-03-03T19:30+05:30 | CLAUDE | Utils/ → utils/ (directory rename) | BUGFIX | fix:rename_Utils_dir_to_lowercase_utils_resolve_ModuleNotFoundError_on_case_sensitive_fs | DONE |
+| L102 | 2026-03-03T19:33+05:30 | CLAUDE | tools/scraper_tools.py, scrapers/__init__.py | BUGFIX | fix:remove_dead_SerpAPIGoogleJobsScraper_import_wire_serpapi_tool | DONE |
 
 
 ## 2-WEEK SPRINT PLAN
