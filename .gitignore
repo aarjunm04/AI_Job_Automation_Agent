@@ -374,6 +374,9 @@ build/
 # java.env — project-specific secrets (never commit)
 java.env
 ~/java.env
-narad.env
-~/narad.env
 *.env
+
+#resumes dir 
+resumes/
+.pdf 
+Aarjun_Gen.pdf
