@@ -450,6 +450,8 @@ STEP 5: After completing any change — APPEND row to CHANGE_LOG before closing
 | L0100 | 2026-03-03T19:15+05:30 | CLAUDE | utils/proxy_ratelimit.py | BUGFIX | fix:add_module_level_get_proxy_dict_get_next_proxy_reset_cycle_functions | DONE |
 | L0101 | 2026-03-03T19:30+05:30 | CLAUDE | Utils/ → utils/ (directory rename) | BUGFIX | fix:rename_Utils_dir_to_lowercase_utils_resolve_ModuleNotFoundError_on_case_sensitive_fs | DONE |
 | L102 | 2026-03-03T19:33+05:30 | CLAUDE | tools/scraper_tools.py, scrapers/__init__.py | BUGFIX | fix:remove_dead_SerpAPIGoogleJobsScraper_import_wire_serpapi_tool | DONE |
+| L103 | 2026-03-03T19:39+05:30 | CLAUDE | rag_systems/chromadb_store.py, rag_systems/resume_engine.py | BUGFIX | fix:chromadb_store_missing_module_fully_qualified_import_path | DONE |
+| L104 | 2026-03-03T19:52+05:30 | CLAUDE | FULL CODEBASE | BUGFIX | fix:full_import_chain_audit_all_broken_imports_fixed_one_pass | DONE |
 
 
 ## 2-WEEK SPRINT PLAN

@@ -61,10 +61,6 @@ import asyncio
 import hashlib
 import traceback
 
-# Add rag_systems to path for module imports
-from pathlib import Path
-import sys
-sys.path.insert(0, str(Path(__file__).parent))
 
 # ═══════════════════════════════════════════════════════════════════════════
 # STANDARD LIBRARY & THIRD-PARTY IMPORTS
@@ -85,7 +81,7 @@ except ImportError:
 # ═══════════════════════════════════════════════════════════════════════════
 
 try:
-    from rag_api import (
+    from rag_systems.rag_api import (
         select_resume,
         get_resume_pdf_path,
         get_rag_context,
@@ -93,7 +89,7 @@ try:
         list_resumes,
         healthcheck,
     )
-    from resume_engine import get_default_engine
+    from rag_systems.resume_engine import get_default_engine
 except ImportError:
     print("ERROR: Cannot import from rag_systems. Ensure rag_api.py and resume_engine.py exist.")
     sys.exit(1)

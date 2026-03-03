@@ -30,7 +30,7 @@ load_dotenv()
 import uuid
 
 # LOCAL MODULES
-from chromadb_store import ChromaStore, ChromaStoreConfig
+from rag_systems.chromadb_store import ChromaStore, ChromaStoreConfig
 from rag_systems.rag_pipeline import (
     RAGPipeline,
     EmbeddingService,
