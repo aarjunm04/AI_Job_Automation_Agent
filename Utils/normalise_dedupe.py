@@ -12,14 +12,43 @@ logger = logging.getLogger(__name__)
 __all__ = ["normalise_job_post", "deduplicate_jobs", "generate_url_hash", "clean_description"]
 
 
-def clean_description(text: str) -> str:
-    """Strip HTML tags, collapse whitespace/newlines, strip and truncate."""
+def clean_description(text: str, max_chars: int = 2000) -> str:
+    """Clean and truncate a raw job description string.
+
+    Strips HTML tags using BeautifulSoup, normalises whitespace,
+    and truncates at word boundary. Falls back to regex on error.
+
+    Args:
+        text: Raw description string, may contain HTML.
+        max_chars: Maximum character length. Default 2000.
+
+    Returns:
+        Cleaned, truncated plain text string.
+    """
     if not text:
         return ""
-    text = re.sub(r'<[^>]+>', '', str(text))
-    text = re.sub(r'\s+', ' ', text)
-    text = text.strip()
-    return text[:5000]
+    try:
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(text, "html.parser")
+        cleaned = soup.get_text(separator=" ")
+    except Exception as e:
+        logger.warning(
+            "BeautifulSoup HTML clean failed: %s — using regex fallback",
+            str(e)
+        )
+        import re
+        cleaned = re.sub(r"<[^>]+>", " ", text)
+
+    import re
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+
+    if len(cleaned) <= max_chars:
+        return cleaned
+    truncated = cleaned[:max_chars]
+    last_space = truncated.rfind(" ")
+    if last_space > int(max_chars * 0.8):
+        truncated = truncated[:last_space]
+    return truncated + "..."
 
 
 def generate_url_hash(url: str) -> str:

@@ -448,6 +448,42 @@ class MasterAgent:
                 result["aborted"] = True
                 return result
 
+            # ----------------------------------------------------------
+            # Dedup: filter out jobs already processed in this run_batch_id
+            # Guards against crash-restart re-processing duplicates.
+            # ----------------------------------------------------------
+            try:
+                db_conn = psycopg2.connect(db_config.connection_url)
+                try:
+                    with db_conn.cursor() as cur:
+                        cur.execute(
+                            "SELECT job_url FROM jobs WHERE run_id = %s",
+                            (self.run_batch_id,)
+                        )
+                        already_processed = {row[0] for row in cur.fetchall()}
+
+                    if already_processed:
+                        self.logger.info(
+                            "run_batch dedup: %d jobs already in Postgres for "
+                            "run_id=%s — downstream dedup will filter duplicates",
+                            len(already_processed),
+                            self.run_batch_id,
+                        )
+                    else:
+                        self.logger.debug(
+                            "run_batch dedup: no prior jobs found for run_id=%s",
+                            self.run_batch_id,
+                        )
+                finally:
+                    db_conn.close()
+            except Exception as e:
+                self.logger.warning(
+                    "run_batch dedup query failed: %s — "
+                    "proceeding with full unfiltered batch",
+                    str(e),
+                )
+                # Fail-soft: do NOT abort run on dedup failure
+
             # Store result in run state
             self._run_state["scraper"] = result
 

@@ -87,23 +87,130 @@ class LLMInterface:
     Centralized LLM configuration for all CrewAI agents.
 
     Returns configured CrewAI LLM objects for each agent type per the
-    IDE_README.md AGENT SYSTEM table. Supports primary and fallback chains.
+    IDE_README.md AGENT SYSTEM table. Supports primary and fallback chains
+    with per-provider retry, exponential backoff, and unavailability tracking.
     """
 
-    def get_llm(self, agent_type: str) -> LLM:
+    # Auth-error substrings that should NOT be retried
+    _AUTH_SIGNALS: tuple[str, ...] = (
+        "401", "403", "unauthorized", "forbidden",
+        "invalid api key", "api key",
+    )
+
+    def __init__(self) -> None:
+        self._unavailable: set[str] = set()
+        self.logger = logging.getLogger(self.__class__.__name__)
+
+    # ------------------------------------------------------------------
+    # Private: construction helper with retry + backoff
+    # ------------------------------------------------------------------
+
+    def _build_llm(
+        self,
+        provider_name: str,
+        model: str,
+        api_key: str,
+        base_url: Optional[str] = None,
+    ) -> Optional[LLM]:
+        """Attempt to construct a CrewAI LLM with up to 3 retries.
+
+        Auth errors are detected immediately and the provider is marked
+        unavailable without retrying. Transient errors are retried with
+        2s / 4s exponential backoff.
+
+        Args:
+            provider_name: Human-readable name used for logging and
+                the ``_unavailable`` set (e.g. ``"groq"``).
+            model: CrewAI model string (e.g. ``"groq/llama-3.3-70b-versatile"``).
+            api_key: Resolved API key string.
+            base_url: Optional base URL override for the provider.
+
+        Returns:
+            Constructed ``LLM`` on success, ``None`` if all attempts failed.
         """
-        Return the primary LLM object for the given agent type.
+        llm: Optional[LLM] = None
+        for attempt in range(1, 4):  # max 3 attempts
+            try:
+                llm = _create_llm(model, api_key, base_url)
+                break  # success — exit retry loop
+            except Exception as e:
+                err_str = str(e).lower()
+                # Auth errors — do not retry, mark unavailable immediately
+                if any(sig in err_str for sig in self._AUTH_SIGNALS):
+                    self.logger.error(
+                        "LLM provider '%s' auth error — marking unavailable: %s",
+                        provider_name, str(e),
+                    )
+                    self._unavailable.add(provider_name)
+                    return None
+                # Transient error — retry with backoff unless exhausted
+                if attempt < 3:
+                    wait = 2 ** attempt  # 2s, then 4s
+                    self.logger.warning(
+                        "LLM provider '%s' attempt %d/3 failed: %s "
+                        "— retrying in %ds",
+                        provider_name, attempt, str(e), wait,
+                    )
+                    time.sleep(wait)
+                else:
+                    self.logger.error(
+                        "LLM provider '%s' failed after 3 attempts: %s "
+                        "— marking unavailable",
+                        provider_name, str(e),
+                    )
+                    self._unavailable.add(provider_name)
+                    return None
+        return llm
+
+    # ------------------------------------------------------------------
+    # Private: build ordered fallback chain for an agent type
+    # ------------------------------------------------------------------
+
+    def _chain_for(self, agent_type: str) -> list[tuple[str, str, str, Optional[str]]]:
+        """Return ordered list of (provider_name, model, api_key, base_url).
+
+        Skips entries where the API key env var is not set. The list
+        preserves primary → fallback_1 → fallback_2 order.
+        """
+        config = _AGENT_CONFIG[agent_type]
+        chain: list[tuple[str, str, str, Optional[str]]] = []
+        for slot in ("primary", "fallback_1", "fallback_2"):
+            entry = config.get(slot)
+            if entry is None:
+                continue
+            model, key_env, base_url = entry
+            api_key = os.getenv(key_env, "").strip()
+            provider_name = key_env.replace("_API_KEY", "").lower()
+            if not api_key:
+                self.logger.warning(
+                    "API key %s not set for %s %s — skipping",
+                    key_env, agent_type, slot,
+                )
+                continue
+            chain.append((provider_name, model, api_key, base_url))
+        return chain
+
+    # ------------------------------------------------------------------
+    # Public: get_llm — primary + full fallback walk
+    # ------------------------------------------------------------------
+
+    def get_llm(self, agent_type: str) -> LLM:
+        """Return the best available LLM for ``agent_type``.
+
+        Walks primary → fallback_1 → fallback_2 in order. Skips any
+        provider already in ``_unavailable``. Constructs and returns
+        the first successfully built LLM.
 
         Args:
             agent_type: One of MASTER_AGENT, SCRAPER_AGENT, ANALYSER_AGENT,
                 APPLY_AGENT, TRACKER_AGENT, DEVELOPER_AGENT.
 
         Returns:
-            Configured CrewAI LLM instance for the primary provider.
+            Configured CrewAI LLM instance.
 
         Raises:
-            ValueError: If agent_type is not recognised or required API key
-                is missing or empty.
+            ValueError: If ``agent_type`` is unrecognised.
+            RuntimeError: If all providers in the chain are unavailable.
         """
         agent_type = agent_type.strip().upper()
         if agent_type not in VALID_AGENT_TYPES:
@@ -112,19 +219,25 @@ class LLMInterface:
                 f"Valid types: {sorted(VALID_AGENT_TYPES)}"
             )
 
-        config = _AGENT_CONFIG[agent_type]
-        model, key_env, base_url = config["primary"]
-        api_key = os.getenv(key_env)
-        if not api_key or not str(api_key).strip():
-            raise ValueError(
-                f"Missing or empty API key for {agent_type} primary provider. "
-                f"Set {key_env} in environment."
-            )
-        return _create_llm(model, api_key.strip(), base_url)
+        chain = self._chain_for(agent_type)
+        for provider_name, model, api_key, base_url in chain:
+            if provider_name in self._unavailable:
+                self.logger.debug(
+                    "Skipping unavailable provider '%s' for %s",
+                    provider_name, agent_type,
+                )
+                continue
+            llm = self._build_llm(provider_name, model, api_key, base_url)
+            if llm is not None:
+                return llm
+
+        raise RuntimeError(
+            f"All LLM providers unavailable for agent '{agent_type}'. "
+            "Check API keys in narad.env."
+        )
 
     def get_fallback_llm(self, agent_type: str, level: int = 1) -> Optional[LLM]:
-        """
-        Return fallback_1 LLM when level=1, fallback_2 when level=2.
+        """Return fallback_1 LLM when level=1, fallback_2 when level=2.
 
         Args:
             agent_type: One of the valid agent type strings.
@@ -132,11 +245,10 @@ class LLMInterface:
 
         Returns:
             Configured CrewAI LLM for the fallback at that level, or None
-            if no fallback exists at that level.
+            if no fallback exists at that level or the provider is unavailable.
 
         Raises:
-            ValueError: If agent_type is not recognised or required fallback
-                API key is missing when a fallback exists at that level.
+            ValueError: If ``agent_type`` is unrecognised.
         """
         agent_type = agent_type.strip().upper()
         if agent_type not in VALID_AGENT_TYPES:
@@ -146,26 +258,35 @@ class LLMInterface:
             )
 
         key = f"fallback_{level}"
-        config = _AGENT_CONFIG[agent_type]
-        fallback = config.get(key)
+        fallback = _AGENT_CONFIG[agent_type].get(key)
         if fallback is None:
             return None
 
         model, key_env, base_url = fallback
-        api_key = os.getenv(key_env)
-        if not api_key or not str(api_key).strip():
-            raise ValueError(
-                f"Missing or empty API key for {agent_type} {key}. "
-                f"Set {key_env} in environment."
+        api_key = os.getenv(key_env, "").strip()
+        provider_name = key_env.replace("_API_KEY", "").lower()
+
+        if not api_key:
+            self.logger.warning(
+                "API key %s not set for %s %s — skipping",
+                key_env, agent_type, key,
             )
-        return _create_llm(model, api_key.strip(), base_url)
+            return None
+
+        if provider_name in self._unavailable:
+            self.logger.debug(
+                "Skipping unavailable provider '%s' for %s fallback_%d",
+                provider_name, agent_type, level,
+            )
+            return None
+
+        return self._build_llm(provider_name, model, api_key, base_url)
 
     def get_llm_with_fallback(self, agent_type: str) -> tuple[LLM, list[LLM]]:
-        """
-        Return (primary_llm, [fallback_llms in order]) for the agent type.
+        """Return (primary_llm, [fallback_llms in order]) for the agent type.
 
         Convenience method for agents to receive their full fallback chain
-        at once.
+        at once. Skips unavailable providers transparently.
 
         Args:
             agent_type: One of the valid agent type strings.
@@ -175,8 +296,9 @@ class LLMInterface:
             The list may be empty if the agent has no fallbacks.
 
         Raises:
-            ValueError: If agent_type is not recognised or any required
-                API key is missing.
+            ValueError: If ``agent_type`` is unrecognised.
+            RuntimeError: If the primary provider and all fallbacks are
+                unavailable.
         """
         primary = self.get_llm(agent_type)
         fallbacks: list[LLM] = []

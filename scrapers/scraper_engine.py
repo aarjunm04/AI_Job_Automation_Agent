@@ -61,10 +61,8 @@ import pandas as pd
 from dateutil import parser as date_parser
 
 from .jobspy_adapter import JobSpyAdapter
-
-# ================================================================================
-# LOGGING
-# ================================================================================
+from tools.serpapi_tool import search_google_jobs
+from utils.proxy_ratelimit import get_proxy_dict, get_next_proxy, reset_proxy_cycle
 
 logging.basicConfig(
     level=logging.INFO,
@@ -74,6 +72,67 @@ logging.basicConfig(
 
 LOG = logging.getLogger("scraper_engine")
 LOG.setLevel(logging.INFO)
+
+
+# ================================================================================
+# PROXY HELPER
+# ================================================================================
+
+
+def _make_proxied_request(
+    url: str,
+    method: str = "GET",
+    **kwargs: Any,
+) -> requests.Response:
+    """Make an HTTP request routed through the Webshare proxy pool with rotation.
+
+    Uses round-robin proxy selection from ``utils.proxy_ratelimit``. On
+    ``ProxyError`` or ``ConnectionError`` the proxy is rotated and the request
+    is retried (max 3 attempts). If all proxies fail the request is attempted
+    directly as a last resort. Falls back to direct if no proxy is configured.
+
+    Args:
+        url: Target URL string.
+        method: HTTP method ``"GET"`` or ``"POST"``.
+        **kwargs: Additional kwargs forwarded to ``requests.get`` / ``requests.post``.
+
+    Returns:
+        ``requests.Response`` object.
+
+    Raises:
+        requests.RequestException: If all proxy attempts AND the direct fallback fail.
+    """
+    proxies = get_proxy_dict()
+    if proxies:
+        kwargs["proxies"] = proxies
+    else:
+        LOG.debug("No proxy configured — direct request to %s", url)
+
+    last_exc: Optional[Exception] = None
+    for attempt in range(1, 4):  # max 3 attempts
+        try:
+            if method.upper() == "POST":
+                return requests.post(url, **kwargs)
+            return requests.get(url, **kwargs)
+        except (requests.exceptions.ProxyError,
+                requests.exceptions.ConnectionError) as e:
+            last_exc = e
+            LOG.warning(
+                "Proxy request attempt %d/3 failed for %s: %s — rotating proxy",
+                attempt, url, str(e),
+            )
+            new_proxies = get_proxy_dict()
+            if new_proxies:
+                kwargs["proxies"] = new_proxies
+
+    # All proxies failed — try direct as last resort
+    LOG.warning(
+        "All proxy attempts failed for %s — attempting direct request", url
+    )
+    kwargs.pop("proxies", None)
+    if method.upper() == "POST":
+        return requests.post(url, **kwargs)
+    return requests.get(url, **kwargs)
 
 # ================================================================================
 # PATHS
@@ -89,198 +148,7 @@ OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 LATEST_RUN_PATH = OUTPUT_DIR / "latest_run.json"
 LATEST_METRICS_PATH = OUTPUT_DIR / "latest_metrics.json"
-SERPAPI_USAGE_PATH = OUTPUT_DIR / "serpapi_usage.json"
 
-# ================================================================================
-# RESOURCE MANAGER
-# ================================================================================
-
-
-class ResourceManager:
-    """
-    Manages SerpAPI credit tracking across up to 4 accounts with monthly quotas.
-
-    Supported env vars: SERPAPI_API_KEY_1 .. SERPAPI_API_KEY_4
-
-    usage_data structure:
-        {
-          "current_month": "YYYY-MM",
-          "accounts": {
-            "SERPAPI_API_KEY_1": {"credits_used": int, "credits_remaining": int},
-            ...
-          },
-          "total_credits_used": int,
-          "total_credits_remaining": int,
-          "last_reset": str,      # ISO-8601
-          "next_reset": str,      # ISO-8601
-          "runs_this_month": int
-        }
-    """
-
-    _ACCOUNT_KEYS = [
-        "SERPAPI_API_KEY_1",
-        "SERPAPI_API_KEY_2",
-        "SERPAPI_API_KEY_3",
-        "SERPAPI_API_KEY_4",
-    ]
-
-    def __init__(self, monthly_quota: int = 250, usage_file: Path = SERPAPI_USAGE_PATH):
-        self.monthly_quota = monthly_quota
-        self.usage_file = usage_file
-        # Discover which keys are actually set
-        self.active_keys: List[str] = [
-            k for k in self._ACCOUNT_KEYS if os.getenv(k)
-        ]
-        self.usage_data = self._load_usage()
-        self._check_reset()
-
-        LOG.info(
-            "ResourceManager initialized | accounts=%d | quota_per_account=%d",
-            len(self.active_keys),
-            self.monthly_quota,
-        )
-
-    # ------------------------------------------------------------------ #
-    # PERSISTENCE
-    # ------------------------------------------------------------------ #
-
-    def _build_fresh_usage(self) -> Dict[str, Any]:
-        """Build a fresh usage structure for all active accounts."""
-        now = datetime.now(timezone.utc)
-        accounts = {
-            k: {"credits_used": 0, "credits_remaining": self.monthly_quota}
-            for k in self.active_keys
-        }
-        return {
-            "current_month": now.strftime("%Y-%m"),
-            "accounts": accounts,
-            "total_credits_used": 0,
-            "total_credits_remaining": self.monthly_quota * max(1, len(self.active_keys)),
-            "last_reset": now.isoformat(),
-            "next_reset": self._get_next_reset_date().isoformat(),
-            "runs_this_month": 0,
-        }
-
-    def _load_usage(self) -> Dict[str, Any]:
-        """Load usage data from file or initialize fresh."""
-        if not self.usage_file.exists():
-            return self._build_fresh_usage()
-        try:
-            with self.usage_file.open("r", encoding="utf-8") as f:
-                data = json.load(f)
-            # Ensure any newly-added account keys are present
-            if "accounts" not in data:
-                return self._build_fresh_usage()
-            for k in self.active_keys:
-                if k not in data["accounts"]:
-                    data["accounts"][k] = {
-                        "credits_used": 0,
-                        "credits_remaining": self.monthly_quota,
-                    }
-            self._recompute_totals(data)
-            return data
-        except Exception as e:  # pragma: no cover
-            LOG.warning(
-                "Failed to load SerpAPI usage data: %s. Initializing fresh.", e
-            )
-            return self._build_fresh_usage()
-
-    def _get_next_reset_date(self) -> datetime:
-        """Return the 1st of next month at midnight UTC."""
-        now = datetime.now(timezone.utc)
-        if now.month == 12:
-            return datetime(now.year + 1, 1, 1, tzinfo=timezone.utc)
-        return datetime(now.year, now.month + 1, 1, tzinfo=timezone.utc)
-
-    def _recompute_totals(self, data: Dict[str, Any]) -> None:
-        """Recompute total_credits_used and total_credits_remaining from accounts."""
-        accounts = data.get("accounts", {})
-        data["total_credits_used"] = sum(
-            v.get("credits_used", 0) for v in accounts.values()
-        )
-        data["total_credits_remaining"] = sum(
-            v.get("credits_remaining", 0) for v in accounts.values()
-        )
-
-    def _check_reset(self) -> None:
-        """Reset all account quotas at the start of a new month."""
-        now = datetime.now(timezone.utc)
-        current_month = now.strftime("%Y-%m")
-        if self.usage_data.get("current_month") != current_month:
-            LOG.info("Monthly SerpAPI quota reset. Resetting all accounts.")
-            self.usage_data = self._build_fresh_usage()
-            self._save_usage()
-
-    def _save_usage(self) -> None:
-        """Persist usage_data to file."""
-        try:
-            with self.usage_file.open("w", encoding="utf-8") as f:
-                json.dump(self.usage_data, f, indent=2)
-        except Exception as e:  # pragma: no cover
-            LOG.error("Failed to save SerpAPI usage data: %s", e)
-
-    # ------------------------------------------------------------------ #
-    # PUBLIC API
-    # ------------------------------------------------------------------ #
-
-    def select_account_for_request(self, required_credits: int = 1) -> Optional[str]:
-        """
-        Pick the env-var name of the account with the most remaining credits
-        that still has >= required_credits available.
-
-        Returns None if no account qualifies or no keys are configured.
-        """
-        if not self.active_keys:
-            return None
-        accounts = self.usage_data.get("accounts", {})
-        candidates = [
-            (k, accounts.get(k, {}).get("credits_remaining", 0))
-            for k in self.active_keys
-            if accounts.get(k, {}).get("credits_remaining", 0) >= required_credits
-        ]
-        if not candidates:
-            return None
-        # Pick the account with the most credits remaining (greedy)
-        candidates.sort(key=lambda x: x[1], reverse=True)
-        return candidates[0][0]
-
-    def use_credits(self, account_key: str, credits: int) -> bool:
-        """
-        Deduct credits from account_key, recompute totals, and persist.
-
-        Returns False if account_key is unknown or has insufficient credits.
-        """
-        accounts = self.usage_data.get("accounts", {})
-        if account_key not in accounts:
-            LOG.warning("use_credits: unknown account key '%s'", account_key)
-            return False
-        acct = accounts[account_key]
-        if acct.get("credits_remaining", 0) < credits:
-            return False
-        acct["credits_used"] = acct.get("credits_used", 0) + credits
-        acct["credits_remaining"] = acct.get("credits_remaining", 0) - credits
-        self.usage_data["runs_this_month"] = (
-            self.usage_data.get("runs_this_month", 0) + 1
-        )
-        self._recompute_totals(self.usage_data)
-        self._save_usage()
-        return True
-
-    # Legacy helpers — kept for callers that used the old single-account API
-    def can_use_credits(self, credits: int) -> bool:
-        """Return True if any account has at least `credits` remaining."""
-        return self.select_account_for_request(credits) is not None
-
-    def get_status(self) -> Dict[str, Any]:
-        """Return current usage status (multi-account aware)."""
-        return {
-            "total_credits_used": self.usage_data.get("total_credits_used", 0),
-            "total_credits_remaining": self.usage_data.get("total_credits_remaining", 0),
-            "accounts": self.usage_data.get("accounts", {}),
-            "current_month": self.usage_data.get("current_month"),
-            "next_reset": self.usage_data.get("next_reset"),
-            "runs_this_month": self.usage_data.get("runs_this_month", 0),
-        }
 
 
 # ================================================================================
@@ -1155,7 +1023,7 @@ class RemotiveAPIScraper(BaseAPIScraper):
     def _run_sync(self) -> List[Dict[str, Any]]:
         """Scrape jobs from Remotive API."""
         try:
-            response = requests.get(self.endpoint, timeout=20)
+            response = _make_proxied_request(self.endpoint, method="GET", timeout=20)
             response.raise_for_status()
             data = response.json()
         except requests.RequestException as e:
@@ -1207,8 +1075,9 @@ class RemoteOKAPIScraper(BaseAPIScraper):
     def _run_sync(self) -> List[Dict[str, Any]]:
         """Fetch jobs from the RemoteOK public API."""
         try:
-            response = requests.get(
+            response = _make_proxied_request(
                 self.endpoint,
+                method="GET",
                 timeout=20,
                 headers={"User-Agent": "job-automation-agent/1.0"},
             )
@@ -1274,8 +1143,9 @@ class HimalayasAPIScraper(BaseAPIScraper):
         """Fetch jobs from the Himalayas API."""
         try:
             params: Dict[str, Any] = {"limit": self.jobs_per_site}
-            response = requests.get(
+            response = _make_proxied_request(
                 self.endpoint,
+                method="GET",
                 params=params,
                 timeout=20,
                 headers={"User-Agent": "job-automation-agent/1.0"},
@@ -1322,90 +1192,6 @@ class HimalayasAPIScraper(BaseAPIScraper):
         return results
 
 
-class SerpAPIGoogleJobsScraper(BaseAPIScraper):
-    """Google Jobs via SerpAPI scraper (multi-account aware)."""
-
-    name = "google_jobs"
-    endpoint = "https://serpapi.com/search.json"
-
-    def __init__(
-        self,
-        jobs_per_site: int,
-        resource_manager: ResourceManager,
-        query: str = (
-            "AI engineer OR machine learning engineer OR data scientist remote"
-        ),
-    ):
-        super().__init__(jobs_per_site)
-        self.query = query
-        self.resource_manager = resource_manager
-
-    def _run_sync(self) -> List[Dict[str, Any]]:
-        """Scrape jobs from Google Jobs via SerpAPI using multi-account key selection."""
-        account_key = self.resource_manager.select_account_for_request(1)
-        if account_key is None:
-            LOG.warning(
-                "SerpAPI quota exhausted across all accounts. Skipping Google Jobs."
-            )
-            return []
-
-        api_key = os.getenv(account_key)
-        if not api_key:
-            LOG.warning(
-                "SerpAPI account key env var '%s' is not set. Skipping Google Jobs.",
-                account_key,
-            )
-            return []
-
-        params = {
-            "engine": "google_jobs",
-            "q": self.query,
-            "hl": "en",
-            "num": self.jobs_per_site,
-            "api_key": api_key,
-        }
-
-        try:
-            response = requests.get(self.endpoint, params=params, timeout=25)
-            response.raise_for_status()
-            data = response.json()
-            self.resource_manager.use_credits(account_key, 1)
-            jobs = data.get("jobs_results", [])[: self.jobs_per_site]
-            results: List[Dict[str, Any]] = []
-            for j in jobs:
-                title = j.get("title", "")
-                company = j.get("company_name", "")
-                location = j.get("location") or "Remote"
-                job_url = j.get("link") or ""
-                description = j.get("description") or ""
-                if not title or not job_url:
-                    continue
-                detect_extensions = j.get("detected_extensions", {})
-                posted_date = detect_extensions.get("posted_at")
-                results.append(
-                    {
-                        "title": title,
-                        "company": company,
-                        "location": location,
-                        "job_url": job_url,
-                        "description": description,
-                        "source": self.name,
-                        "posted_date": posted_date,
-                        "job_type": j.get("schedule_type"),
-                    }
-                )
-            LOG.info(
-                "SerpAPI Google Jobs returned %d jobs (account=%s)",
-                len(results),
-                account_key,
-            )
-            return results
-        except requests.RequestException as e:
-            LOG.error("SerpAPI Google Jobs failed: %s", e)
-            return []
-        except Exception as e:  # pragma: no cover
-            LOG.error("SerpAPI Google Jobs parse failed: %s", e)
-            return []
 
 
 # ================================================================================
@@ -1433,7 +1219,6 @@ class ScraperEngine:
         self.scrapers: List[Any] = []
 
         # Initialize components
-        self.resource_manager = ResourceManager(monthly_quota=250)
         self.proxy_pool = ProxyPool()
 
         # Load filters once; pass data to FilterEngine + ScoringEngine
@@ -1486,21 +1271,6 @@ class ScraperEngine:
         scrapers.append(HimalayasAPIScraper(jobs_per_site=50))
         LOG.info("✓ Himalayas API scraper initialized")
 
-        # SerpAPI Google Jobs — enabled when at least one key is configured
-        if self.resource_manager.active_keys:
-            scrapers.append(
-                SerpAPIGoogleJobsScraper(
-                    jobs_per_site=20,
-                    resource_manager=self.resource_manager,
-                )
-            )
-            LOG.info(
-                "✓ SerpAPI Google Jobs initialized (%d account(s))",
-                len(self.resource_manager.active_keys),
-            )
-        else:
-            LOG.info("No SerpAPI keys found. Skipping Google Jobs scraper.")
-
         # ---- Phase 2: feature-flagged scrapers --------------------------
         # Enabled when env ENABLE_PHASE_2_SOURCES=true (or PHASE=2 for legacy support).
         phase2_enabled = (
@@ -1512,89 +1282,96 @@ class ScraperEngine:
                 scrapers.append(JoobleAPIScraper(jobs_per_site=20))
                 LOG.info("✓ [Phase 2] Jooble API scraper initialized")
             else:
-                LOG.warning("[Phase 2] Jooble API key not found. Skipping Jooble scraper.")
+                LOG.info("[Phase 2] Jooble skipped — JOOBLE_API_KEY not set")
 
-            scrapers.append(RemotiveAPIScraper(jobs_per_site=20))
+            scrapers.append(RemotiveAPIScraper(jobs_per_site=50))
             LOG.info("✓ [Phase 2] Remotive API scraper initialized")
-        else:
-            LOG.info(
-                "Phase 2 sources disabled. Set ENABLE_PHASE_2_SOURCES=true to enable "
-                "Jooble and Remotive scrapers."
-            )
 
         self.scrapers = scrapers
-        self.metrics.sites_scraped = {
-            getattr(s, "name", "unknown"): {"count": 0, "runtime_ms": 0.0, "errors": 0}
-            for s in scrapers
-        }
+        LOG.info("Scraper registration complete | total=%d", len(self.scrapers))
 
     # ------------------------------------------------------------------ #
-    # MAIN EXECUTION
+    # MAIN RUN
     # ------------------------------------------------------------------ #
 
     async def run(self) -> Tuple[List[Dict[str, Any]], ScrapeMetrics]:
-        """Run all scrapers and return normalized, filtered, scored jobs."""
+        """Orchestrate all scrapers, apply safety-net, normalise and score.
+
+        Flow:
+          1. Run all primary scrapers concurrently -> collect all_raw_jobs.
+          2. Safety-net: if len(all_raw_jobs) < 100, call search_google_jobs
+             exactly once to supplement results.
+          3. Normalisation loop: deduplicate, hard-filter, score every job.
+          4. Persist results + metrics.
+        """
         start_time = time.time()
-        LOG.info("🚀 Starting scrape run with %d scrapers", len(self.scrapers))
-
-        semaphore = asyncio.Semaphore(10)  # Global concurrency limit
-
-        async def _execute(scraper: Any) -> List[Dict[str, Any]]:
-            name = getattr(scraper, "name", "unknown")
-            metrics_entry = self.metrics.sites_scraped.get(
-                name, {"count": 0, "runtime_ms": 0.0, "errors": 0}
-            )
-
-            async with semaphore:
-                t0 = time.time()
-                try:
-                    LOG.info("Running %s...", name)
-
-                    # Browser-based scrapers MAY accept proxy_url; JobSpy & API scrapers ignore it.
-                    proxy_url = self.proxy_pool.get_next_proxy()
-                    run_sig = getattr(scraper, "run")
-                    if run_sig.__code__.co_argcount >= 2:
-                        raw_jobs = await run_sig(proxy_url)  # type: ignore[arg-type]
-                    else:
-                        raw_jobs = await run_sig()
-
-                    runtime_ms = (time.time() - t0) * 1000.0
-                    metrics_entry["runtime_ms"] = runtime_ms
-                    metrics_entry["count"] = len(raw_jobs)
-                    self.metrics.sites_scraped[name] = metrics_entry
-
-                    self.metrics.total_jobs_raw += len(raw_jobs)
-                    LOG.info("✅ %s: %d jobs (%.0f ms)", name, len(raw_jobs), runtime_ms)
-
-                    # Proxy success feedback (if applicable)
-                    if proxy_url:
-                        self.proxy_pool.report_success(proxy_url)
-
-                    return raw_jobs
-                except Exception as e:  # pragma: no cover
-                    runtime_ms = (time.time() - t0) * 1000.0
-                    metrics_entry["runtime_ms"] = runtime_ms
-                    metrics_entry["errors"] = metrics_entry.get("errors", 0) + 1
-                    self.metrics.sites_scraped[name] = metrics_entry
-
-                    LOG.error("❌ %s failed: %s", name, e, exc_info=True)
-                    self.metrics.scrapers_failed += 1
-
-                    # Proxy failure feedback
-                    proxy_url = locals().get("proxy_url")
-                    if proxy_url:
-                        self.proxy_pool.report_failure(proxy_url)
-
-                    return []
-
-        batches = await asyncio.gather(*[_execute(s) for s in self.scrapers])
-        self.metrics.scrapers_succeeded = len(self.scrapers) - self.metrics.scrapers_failed
-
-        # Process all raw jobs
         all_raw_jobs: List[Dict[str, Any]] = []
-        for batch in batches:
-            all_raw_jobs.extend(batch)
 
+        # ---- Step 1: Run all primary scrapers ---------------------------
+        tasks = [scraper.run() for scraper in self.scrapers]
+        scraper_results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        for scraper, result in zip(self.scrapers, scraper_results):
+            if isinstance(result, Exception):
+                LOG.error("Scraper '%s' raised: %s", scraper.name, result)
+                self.metrics.scrapers_failed += 1
+                self.metrics.sites_scraped[scraper.name] = {
+                    "count": 0,
+                    "runtime_ms": 0.0,
+                    "errors": 1,
+                }
+            else:
+                jobs_from_scraper = result or []
+                all_raw_jobs.extend(jobs_from_scraper)
+                self.metrics.scrapers_succeeded += 1
+                self.metrics.sites_scraped[scraper.name] = {
+                    "count": len(jobs_from_scraper),
+                    "runtime_ms": 0.0,
+                    "errors": 0,
+                }
+
+        self.metrics.total_jobs_raw = len(all_raw_jobs)
+        LOG.info(
+            "Primary scrapers done: %d raw jobs from %d scrapers",
+            len(all_raw_jobs),
+            self.metrics.scrapers_succeeded,
+        )
+
+        # ---- Step 2: SerpAPI safety-net (called ONCE, OUTSIDE loop) -----
+        # Triggered only when primary scrapers return fewer than 100 jobs.
+        if self.enable_safety_net and len(all_raw_jobs) < 100:
+            LOG.info(
+                "Safety-net triggered: only %d jobs from primary scrapers",
+                len(all_raw_jobs),
+            )
+            serp_query = os.getenv(
+                "SERPAPI_DEFAULT_QUERY",
+                "AI engineer OR machine learning engineer OR "
+                "data scientist remote",
+            )
+            serp_json_str = search_google_jobs(
+                query=serp_query,
+                location="Remote",
+                num_results=20,
+            )
+            serp_jobs = json.loads(serp_json_str)
+            if isinstance(serp_jobs, list):
+                LOG.info(
+                    "SerpAPI safety-net returned %d additional jobs",
+                    len(serp_jobs),
+                )
+                all_raw_jobs.extend(serp_jobs)
+                self.metrics.sites_scraped["serpapi_safety_net"] = {
+                    "count": len(serp_jobs),
+                    "runtime_ms": 0.0,
+                    "errors": 0,
+                }
+            elif isinstance(serp_jobs, dict) and "error" in serp_jobs:
+                LOG.warning(
+                    "SerpAPI safety-net failed: %s", serp_jobs["error"]
+                )
+
+        # ---- Step 3: Normalisation loop — iterate all_raw_jobs ONCE -----
         for raw_job in all_raw_jobs:
             normalized = self.normalizer.normalize(raw_job)
             if not normalized:
@@ -1610,7 +1387,7 @@ class ScraperEngine:
             if self.filter_engine.should_exclude(normalized):
                 continue
 
-            # YAML-driven static pre-filter scoring (0–100 internal, 0.0–1.0 output)
+            # YAML-driven static pre-filter scoring (0-100 internal, 0.0-1.0 output)
             score = self.scoring_engine.calculate_score(normalized)
             if score < self.scoring_engine.min_application_score:
                 continue
@@ -1619,24 +1396,6 @@ class ScraperEngine:
             normalized["static_score"] = round(static_score, 2)
 
             self.results.append(normalized)
-
-        # ---- Safety-net activation check --------------------------------
-        # If fewer jobs than min_jobs_target passed all filters + scoring,
-        # supplemental Playwright-based scrapers (Nodesk, Toptal) should be
-        # triggered to top up the result pool.
-        #
-        # TODO (Step 3): Wire Nodesk and Toptal Playwright scrapers here.
-        # When this block is filled in, run their scrape coroutines,
-        # extend all_raw_jobs (or re-run the normalization/filter/score loop
-        # on their output), then merge into self.results.
-        if self.enable_safety_net and len(self.results) < self.min_jobs_target:
-            LOG.warning(
-                "Safety-net triggered: only %d/%d jobs collected after primary scrape. "
-                "Nodesk/Toptal Playwright scrapers should run here (not yet wired).",
-                len(self.results),
-                self.min_jobs_target,
-            )
-            # TODO: instantiate and await NodeskScraper / ToptalScraper here.
 
         # ---- Enforce unified schema completeness ------------------------
         # Every job dict reaching here must expose all keys from the unified
@@ -1693,10 +1452,8 @@ class ScraperEngine:
                 score_ranges["0-49"] += 1
         self.metrics.score_distribution = score_ranges
 
-        self.metrics.resource_usage = self.resource_manager.get_status()
-
         LOG.info(
-            "🎉 Scrape completed: %d filtered jobs (from %d raw, %d deduped) in %.0f ms (%.1f jobs/min)",
+            "Scrape completed: %d filtered jobs (from %d raw, %d deduped) in %.0f ms (%.1f jobs/min)",
             self.metrics.total_jobs_filtered,
             self.metrics.total_jobs_raw,
             self.metrics.deduped_jobs,
@@ -1735,8 +1492,8 @@ class ScraperEngine:
     # PUBLIC ACCESSORS
     # ------------------------------------------------------------------ #
 
-    def get_dataframe(self) -> pd.DataFrame:
-        """Get results as Pandas DataFrame."""
+    def get_dataframe(self):
+        """Get results as a pandas DataFrame."""
         if not self.results:
             return pd.DataFrame()
         return pd.DataFrame(self.results)
@@ -1749,11 +1506,9 @@ class ScraperEngine:
         """Get results as ingestion-ready payload."""
         return {
             "jobs": self.results,
-            "metadata": {
-                "total_jobs": len(self.results),
-                "scraped_at": datetime.now(timezone.utc).isoformat(),
-                "metrics": self.metrics.to_dict(),
-            },
+            "total_jobs": len(self.results),
+            "scraped_at": datetime.now(timezone.utc).isoformat(),
+            "metrics": self.metrics.to_dict(),
         }
 
     def run_sync(self) -> Tuple[List[Dict[str, Any]], ScrapeMetrics]:

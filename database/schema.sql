@@ -1,3 +1,14 @@
+-- ============================================================
+-- Schema Version: 001
+-- Last Modified: 2026-03-03
+-- Migration Policy: Manual versioned SQL in migrations/ dir
+--   Apply in order: v001 -> v002 -> ...
+--   Naming: v{NNN}_{description}.sql
+--   Apply: psql $LOCAL_POSTGRES_URL -f migrations/vNNN.sql
+-- NEVER modify this file after first deployment.
+-- All schema changes go through migrations/ only.
+-- ============================================================
+
 -- AI Job Application Agent — Postgres Schema
 -- Run: psql $LOCAL_POSTGRES_URL -f database/schema.sql
 
@@ -135,3 +146,11 @@ CREATE INDEX IF NOT EXISTS idx_queued_jobs_priority ON queued_jobs(priority DESC
 CREATE INDEX IF NOT EXISTS idx_logs_events_run_batch_id ON logs_events(run_batch_id);
 CREATE INDEX IF NOT EXISTS idx_logs_events_level ON logs_events(level);
 CREATE INDEX IF NOT EXISTS idx_config_limits_platform ON config_limits(platform);
+
+-- =============================================================================
+-- TABLE 10: schema_versions
+-- =============================================================================
+CREATE TABLE IF NOT EXISTS schema_versions (
+    version     VARCHAR(16) PRIMARY KEY,
+    applied_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);

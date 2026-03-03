@@ -419,6 +419,18 @@ STEP 5: After completing any change — APPEND row to CHANGE_LOG before closing
 | L069 | 2026-03-02T01:13+05:30 | CLAUDE | auto_apply/platforms/arc_dev.py | CREATE | create:arc_dev:modal_steps_empty_only_fill_resume_check_proof_dry_run | DONE |
 | L070 | 2026-03-02T01:17+05:30 | CLAUDE | agents/developer_agent.py | CREATE | create:developer_agent:6_analysis_methods_llm_fallback_chain_dedup_budget_guard_agentops | DONE |
 | L071 | 2026-03-02T01:27+05:30 | CODEX | .github/workflows/ci.yml | BUGFIX | fix:ci_lint_typcheck_job_fail_mypy_strict_no_tests_no_playwright_always_run | DONE |
+| L072 | 2026-03-02T01:30:00+05:30 | GITHUB_COPILOT | tools/serpapi_tool.py | CREATE | create:serpapi_tool:thread_safe_4_key_round_robin_fallback_tool | DONE |
+| L073 | 2026-03-02T01:30:00+05:30 | GITHUB_COPILOT | scrapers/scraper_engine.py | REFACTOR | refactor:scraper_engine:remove_inline_serpapi_replace_with_tool_call | DONE |
+| L074 | 2026-03-03T15:34+05:30 | CLAUDE | scrapers/scraper_engine.py | BUGFIX | fix:remove_serpapi_from_loop_delete_SerpAPIGoogleJobsScraper_class | DONE |
+| L075 | 2026-03-03T15:34+05:30 | CLAUDE | tools/serpapi_tool.py | BUGFIX | fix:verify_complete_serpapi_tool_4key_rotation_agentops_failsoft | DONE |
+| L076 | 2026-03-03T15:42+05:30 | CLAUDE | auto_apply/platforms/base_platform.py | BUGFIX | fix:resolve_resume_path_remove_hardcode_use_env_vars_only | DONE |
+| L077 | 2026-03-03T15:42+05:30 | CLAUDE | integrations/llm_interface.py | BUGFIX | fix:add_retry_backoff_unavailable_tracking_all_6_providers | DONE |
+| L078 | 2026-03-03T17:28+05:30 | CLAUDE | agents/master_agent.py | BUGFIX | fix:add_run_batch_dedup_filter_before_analyser_handoff_failsoft | DONE |
+| L079 | 2026-03-03T17:28+05:30 | CLAUDE | config/platforms.json,agents/scraper_agent.py,tools/scraper_tools.py,scrapers/scraper_engine.py | BUGFIX | fix:add_jobs_per_scrape_daily_job_cap_fields_all_15_platforms | DONE |
+| L080 | 2026-03-03T17:28+05:30 | CLAUDE | scrapers/scraper_engine.py | BUGFIX | fix:wire_proxy_ratelimiter_into_rest_api_calls_via_make_proxied_request | DONE |
+| L081 | 2026-03-03T17:34+05:30 | CLAUDE | database/schema.sql,database/migrations/ | BUGFIX | fix:add_schema_versions_table_migration_readme_v001_baseline | DONE |
+| L082 | 2026-03-03T17:34+05:30 | CLAUDE | utils/normalise_dedupe.py | BUGFIX | fix:clean_description_bs4_word_boundary_truncate_regex_fallback | DONE |
+| L083 | 2026-03-03T17:34+05:30 | CLAUDE | .gitignore,README.md,extension/ | BUGFIX | fix:consolidate_dual_extension_dirs_gitignore_chrome_extension | DONE |
 
 
 ## 2-WEEK SPRINT PLAN

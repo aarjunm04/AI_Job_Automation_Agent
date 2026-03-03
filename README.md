@@ -519,7 +519,7 @@ AI_Job_Automation_Agent/
 ├── api/                            # Slim FastAPI server
 │   └── server.py                   # 3 endpoints: /extension · /rag-proxy · /manual-log
 │
-├── chrome_extension/               # Chrome Extension v1
+├── extension/                      # Chrome Extension v1 (canonical)
 │   ├── manifest.json
 │   ├── popup.html
 │   ├── popup.js

@@ -1,3 +1,4 @@
+// Merged from chrome_extension/ — 2026-03-03
 /**
  * =============================================================================
  * AI JOB AUTOMATION AGENT - SIDEBAR UI CONTROLLER

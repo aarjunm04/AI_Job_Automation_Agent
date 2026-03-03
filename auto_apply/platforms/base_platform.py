@@ -132,42 +132,56 @@ class BasePlatformApply(ABC):
             3. First ``.pdf`` found in ``RESUME_DIR``.
 
         Returns:
-            Absolute path string. May point to a non-existent file if no
-            PDF is found — the upload step will handle the error.
+            Absolute path string. Empty string if DEFAULT_RESUME is unset
+            and no PDF can be found — the upload step will handle the error.
         """
         resume_dir: str = os.getenv("RESUME_DIR", "app/resumes")
-        suggested: str = self.job_meta.get(
-            "resume_suggested",
-            os.getenv("DEFAULT_RESUME", "AarjunGen.pdf"),
-        )
-        full_path: str = os.path.join(resume_dir, suggested)
-        if os.path.exists(full_path):
-            return full_path
+        default_resume: str = os.getenv("DEFAULT_RESUME", "")
 
-        # Fallback to default resume
-        default: str = os.path.join(
-            resume_dir, os.getenv("DEFAULT_RESUME", "AarjunGen.pdf")
-        )
-        if os.path.exists(default):
+        # Priority 1: job_meta suggested resume, resolved inside RESUME_DIR
+        suggested: str = self.job_meta.get("resume_suggested", "")
+        if suggested:
+            full_path: str = os.path.join(resume_dir, suggested)
+            if os.path.exists(full_path):
+                return full_path
             self.logger.warning(
-                "Suggested resume %s not found, using default: %s",
+                "Suggested resume '%s' not found at %s — falling back to default",
                 suggested,
-                default,
+                full_path,
             )
-            return default
 
-        # Last resort: find any PDF in resume_dir
+        # Priority 2: DEFAULT_RESUME from env
+        if not default_resume:
+            self.logger.warning(
+                "DEFAULT_RESUME env var not set — "
+                "resume upload will fail if no path provided"
+            )
+        else:
+            resolved: str = os.path.join(resume_dir, default_resume)
+            if os.path.isfile(resolved):
+                return resolved
+            self.logger.warning(
+                "Default resume not found at %s — "
+                "verify RESUME_DIR and DEFAULT_RESUME in narad.env",
+                resolved,
+            )
+
+        # Priority 3 (last resort): first PDF in resume_dir
         try:
-            pdfs: list[str] = [
+            pdfs: list[str] = sorted(
                 f for f in os.listdir(resume_dir) if f.endswith(".pdf")
-            ]
+            )
             if pdfs:
-                return os.path.join(resume_dir, pdfs[0])
+                fallback: str = os.path.join(resume_dir, pdfs[0])
+                self.logger.warning(
+                    "Using first available PDF as resume fallback: %s", fallback
+                )
+                return fallback
         except OSError:
             pass
 
         self.logger.error("No resume PDF found in %s", resume_dir)
-        return default
+        return ""
 
     # ------------------------------------------------------------------
     # Field Filling Helpers

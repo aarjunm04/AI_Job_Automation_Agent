@@ -1,3 +1,4 @@
+// Merged from chrome_extension/ — 2026-03-03
 /**
  * utils/notion_api.js
  * Notion logging helper for AI Job Automation Agent (Chrome extension)

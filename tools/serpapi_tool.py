@@ -1,0 +1,140 @@
+"""SerpAPI Google Jobs tool for supplementary job discovery.
+
+Implements 4-key round-robin rotation across SERPAPI_KEY_1..4.
+Used as fallback when primary scrapers return < 100 jobs per run.
+READ-ONLY discovery tool — never modifies any data.
+"""
+
+from __future__ import annotations
+
+import threading
+import json
+import logging
+import os
+import agentops
+from serpapi import GoogleSearch
+from typing import List, Dict, Any, Optional
+
+logger = logging.getLogger(__name__)
+
+# Load all 4 keys at import time, filter empty strings
+_SERPAPI_KEYS: List[str] = [
+    k for k in [
+        os.getenv("SERPAPI_KEY_1", ""),
+        os.getenv("SERPAPI_KEY_2", ""),
+        os.getenv("SERPAPI_KEY_3", ""),
+        os.getenv("SERPAPI_KEY_4", ""),
+    ] if k.strip()
+]
+_key_lock = threading.Lock()
+_key_index: int = 0
+
+if not _SERPAPI_KEYS:
+    logger.warning(
+        "serpapi_tool: no SERPAPI_KEY_* env vars set — "
+        "SerpAPI discovery disabled"
+    )
+
+def _get_next_key() -> Optional[str]:
+    """Thread-safe round-robin key rotation across _SERPAPI_KEYS.
+
+    Returns:
+        Next available API key string, or None if pool is empty.
+    """
+    global _key_index
+    with _key_lock:
+        if not _SERPAPI_KEYS:
+            return None
+        key = _SERPAPI_KEYS[_key_index % len(_SERPAPI_KEYS)]
+        _key_index += 1
+        return key
+
+@agentops.track_tool
+def search_google_jobs(
+    query: str,
+    location: str,
+    num_results: int = 20
+) -> str:
+    """Search Google Jobs via SerpAPI with 4-key round-robin rotation.
+
+    Queries the Google Jobs engine via SerpAPI. Rotates across up to
+    4 API keys to maximise monthly credit budget. Returns normalised
+    job list as JSON string. Called as supplementary discovery only
+    when primary scrapers return fewer than 100 jobs in a run.
+
+    Args:
+        query: Job search query e.g. "ML Engineer remote India".
+        location: Location filter e.g. "Remote" or "India".
+        num_results: Max results to fetch per call. Default 20.
+
+    Returns:
+        JSON string — list of normalised job dicts on success:
+          [{"title", "company", "job_url", "location",
+            "description", "platform", "source"}, ...]
+        JSON string — error dict on total failure:
+          {"error": "<reason>"}
+    """
+    if not _SERPAPI_KEYS:
+        return json.dumps({"error": "no_serpapi_keys_configured"})
+
+    max_attempts = min(3, len(_SERPAPI_KEYS))
+    for attempt in range(max_attempts):
+        key = _get_next_key()
+        if not key:
+            break
+        try:
+            params = {
+                "engine": "google_jobs",
+                "q": query,
+                "location": location,
+                "num": num_results,
+                "api_key": key
+            }
+            results = GoogleSearch(params).get_dict()
+
+            if "error" in results:
+                err_msg = str(results["error"]).lower()
+                if "out of searches" in err_msg or "quota" in err_msg:
+                    logger.warning(
+                        "SerpAPI key #%d quota exceeded, rotating",
+                        attempt + 1
+                    )
+                    continue
+                logger.warning(
+                    "SerpAPI error on attempt %d: %s",
+                    attempt + 1, results["error"]
+                )
+                continue
+
+            raw_jobs = results.get("jobs_results", [])
+            normalised = []
+            for job in raw_jobs:
+                related = job.get("related_links") or [{}]
+                normalised.append({
+                    "title":       job.get("title", ""),
+                    "company":     job.get("company_name", ""),
+                    "job_url":     related[0].get("link", ""),
+                    "location":    job.get("location", location),
+                    "description": job.get("description", "")[:500],
+                    "platform":    "serpapi",
+                    "source":      "google_jobs"
+                })
+            logger.info(
+                "SerpAPI: %d jobs returned for query='%s'",
+                len(normalised), query
+            )
+            return json.dumps(normalised)
+
+        except Exception as e:
+            logger.warning(
+                "SerpAPI attempt %d exception: %s", attempt + 1, str(e)
+            )
+            continue
+
+    logger.error(
+        "SerpAPI: all %d key attempts failed for query='%s'",
+        max_attempts, query
+    )
+    return json.dumps({"error": "serpapi_all_keys_failed"})
+
+__all__ = ["search_google_jobs"]
