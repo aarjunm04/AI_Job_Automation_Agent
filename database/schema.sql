@@ -38,9 +38,9 @@ CREATE TABLE IF NOT EXISTS resumes (
 );
 
 -- =============================================================================
--- TABLE 3: run_batches
+-- TABLE 3: run_sessions
 -- =============================================================================
-CREATE TABLE IF NOT EXISTS run_batches (
+CREATE TABLE IF NOT EXISTS run_sessions (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     run_date DATE NOT NULL DEFAULT CURRENT_DATE,
     run_index_in_week INTEGER NOT NULL,
@@ -63,11 +63,11 @@ CREATE TABLE IF NOT EXISTS config_limits (
 );
 
 -- =============================================================================
--- TABLE 5: job_posts
+-- TABLE 5: jobs
 -- =============================================================================
-CREATE TABLE IF NOT EXISTS job_posts (
+CREATE TABLE IF NOT EXISTS jobs (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    run_batch_id UUID NOT NULL REFERENCES run_batches(id) ON DELETE CASCADE,
+    run_batch_id UUID NOT NULL REFERENCES run_sessions(id) ON DELETE CASCADE,
     source_platform TEXT NOT NULL,
     title TEXT NOT NULL,
     company TEXT NOT NULL,
@@ -83,7 +83,7 @@ CREATE TABLE IF NOT EXISTS job_posts (
 -- =============================================================================
 CREATE TABLE IF NOT EXISTS job_scores (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    job_post_id UUID NOT NULL REFERENCES job_posts(id) ON DELETE CASCADE,
+    job_post_id UUID NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
     resume_id UUID REFERENCES resumes(id) ON DELETE SET NULL,
     fit_score FLOAT NOT NULL DEFAULT 0.0,
     eligibility_pass BOOLEAN DEFAULT FALSE,
@@ -96,7 +96,7 @@ CREATE TABLE IF NOT EXISTS job_scores (
 -- =============================================================================
 CREATE TABLE IF NOT EXISTS applications (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    job_post_id UUID NOT NULL REFERENCES job_posts(id) ON DELETE CASCADE,
+    job_post_id UUID NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
     resume_id UUID REFERENCES resumes(id) ON DELETE SET NULL,
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     mode TEXT NOT NULL CHECK (mode IN ('auto', 'manual')),
@@ -112,20 +112,20 @@ CREATE TABLE IF NOT EXISTS applications (
 CREATE TABLE IF NOT EXISTS queued_jobs (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     application_id UUID NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
-    job_post_id UUID NOT NULL REFERENCES job_posts(id) ON DELETE CASCADE,
+    job_post_id UUID NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
     priority INTEGER NOT NULL DEFAULT 5,
     notes TEXT,
     queued_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- =============================================================================
--- TABLE 9: logs_events
+-- TABLE 9: audit_logs
 -- =============================================================================
-CREATE TABLE IF NOT EXISTS logs_events (
+CREATE TABLE IF NOT EXISTS audit_logs (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    run_batch_id UUID NOT NULL REFERENCES run_batches(id) ON DELETE CASCADE,
+    run_batch_id UUID NOT NULL REFERENCES run_sessions(id) ON DELETE CASCADE,
     application_id UUID REFERENCES applications(id) ON DELETE SET NULL,
-    job_post_id UUID REFERENCES job_posts(id) ON DELETE SET NULL,
+    job_post_id UUID REFERENCES jobs(id) ON DELETE SET NULL,
     level TEXT NOT NULL CHECK (level IN ('INFO', 'WARNING', 'ERROR', 'CRITICAL')),
     event_type TEXT NOT NULL,
     message TEXT NOT NULL,
@@ -135,16 +135,16 @@ CREATE TABLE IF NOT EXISTS logs_events (
 -- =============================================================================
 -- INDEXES
 -- =============================================================================
-CREATE INDEX IF NOT EXISTS idx_job_posts_run_batch_id ON job_posts(run_batch_id);
-CREATE INDEX IF NOT EXISTS idx_job_posts_source_platform ON job_posts(source_platform);
+CREATE INDEX IF NOT EXISTS idx_jobs_run_batch_id ON jobs(run_batch_id);
+CREATE INDEX IF NOT EXISTS idx_jobs_source_platform ON jobs(source_platform);
 CREATE INDEX IF NOT EXISTS idx_job_scores_job_post_id ON job_scores(job_post_id);
 CREATE INDEX IF NOT EXISTS idx_job_scores_fit_score ON job_scores(fit_score DESC);
 CREATE INDEX IF NOT EXISTS idx_applications_job_post_id ON applications(job_post_id);
 CREATE INDEX IF NOT EXISTS idx_applications_user_id ON applications(user_id);
 CREATE INDEX IF NOT EXISTS idx_applications_status ON applications(status);
 CREATE INDEX IF NOT EXISTS idx_queued_jobs_priority ON queued_jobs(priority DESC);
-CREATE INDEX IF NOT EXISTS idx_logs_events_run_batch_id ON logs_events(run_batch_id);
-CREATE INDEX IF NOT EXISTS idx_logs_events_level ON logs_events(level);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_run_batch_id ON audit_logs(run_batch_id);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_level ON audit_logs(level);
 CREATE INDEX IF NOT EXISTS idx_config_limits_platform ON config_limits(platform);
 
 -- =============================================================================
