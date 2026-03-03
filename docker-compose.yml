@@ -6,7 +6,7 @@
 #
 # CRITICAL NOTES:
 # - n8n runs SEPARATELY as standalone infrastructure (not included)
-# - All services use env_file pointing to ~/narad.env (secrets management)
+# - All services use env_file pointing to ~/java.env (secrets management)
 # - Services communicate via internal docker network (service names as hostnames)
 # - Chrome extension & n8n reach services via localhost on host
 # - Data persistence: ./postgres_data/, ./dump.rdb, ./.chroma/, ./logs/

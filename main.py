@@ -25,9 +25,9 @@ from dotenv import load_dotenv
 # MODULE-LEVEL SETUP  (runs at import time)
 # ---------------------------------------------------------------------------
 
-# ~/narad.env is the single source of truth for all secrets/config.
+# ~/java.env is the single source of truth for all secrets/config.
 # override=False so values already in the process environment win.
-load_dotenv(dotenv_path=os.path.expanduser("~/narad.env"), override=False)
+load_dotenv(dotenv_path=os.path.expanduser("~/java.env"), override=False)
 
 # Ensure logs/ directory exists before any FileHandler is created.
 os.makedirs("logs", exist_ok=True)
@@ -86,6 +86,12 @@ def parse_args() -> argparse.Namespace:
         "--health-check",
         action="store_true",
         help="Run boot health check and exit without running pipeline",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        default=False,
+        help="Fill all forms but skip final submit. No real applications sent.",
     )
     return parser.parse_args()
 
@@ -205,13 +211,17 @@ def main() -> int:
 
     if missing:
         logger.critical("Missing required env vars: %s", missing)
-        logger.critical("Cannot start pipeline. Fill ~/narad.env and retry.")
+        logger.critical("Cannot start pipeline. Fill ~/java.env and retry.")
         print(f"❌ MISSING ENV VARS: {missing}")
         return 1
 
     # ------------------------------------------------------------------
     # Instantiate and run pipeline
     # ------------------------------------------------------------------
+    if args.dry_run:
+        os.environ["DRY_RUN"] = "true"
+        logger.info("DRY RUN MODE ACTIVE — no real submissions")
+
     try:
         agent: MasterAgent = MasterAgent.from_cli(mode=args.mode)
         result: dict = agent.run()

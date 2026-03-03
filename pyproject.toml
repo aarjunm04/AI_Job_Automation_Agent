@@ -10,7 +10,7 @@ build-backend = "hatchling.build"
 
 # ── Project Metadata ─────────────────────────────────────────────────────────
 [project]
-name        = "narad-job-agent"
+name        = "java-job-agent"
 version     = "0.1.0"
 description = "Autonomous AI job application pipeline — scrape, score, apply"
 readme      = "README.md"
@@ -37,7 +37,7 @@ dependencies = [
 
     # ── Config & Secrets ──────────────────────────────────────────────────────
     "pydantic>=2.11.4,<3.0",             # shared v2 baseline — no v1 backcompat
-    "pydantic-settings>=2.9.1,<3.0",     # reads ~/narad.env via BaseSettings
+    "pydantic-settings>=2.9.1,<3.0",     # reads ~/java.env via BaseSettings
     "python-dotenv>=1.1.0,<2.0",         # fallback .env loader
 
     # ── Database ──────────────────────────────────────────────────────────────
