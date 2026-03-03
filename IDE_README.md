@@ -452,6 +452,21 @@ STEP 5: After completing any change — APPEND row to CHANGE_LOG before closing
 | L102 | 2026-03-03T19:33+05:30 | CLAUDE | tools/scraper_tools.py, scrapers/__init__.py | BUGFIX | fix:remove_dead_SerpAPIGoogleJobsScraper_import_wire_serpapi_tool | DONE |
 | L103 | 2026-03-03T19:39+05:30 | CLAUDE | rag_systems/chromadb_store.py, rag_systems/resume_engine.py | BUGFIX | fix:chromadb_store_missing_module_fully_qualified_import_path | DONE |
 | L104 | 2026-03-03T19:52+05:30 | CLAUDE | FULL CODEBASE | BUGFIX | fix:full_import_chain_audit_all_broken_imports_fixed_one_pass | DONE |
+| L105 | 2026-03-03T20:02+05:30 | CLAUDE | Dockerfile, docker-compose.yml, .dockerignore | REBUILD | rebuild:docker_from_scratch_correct_context_all_5_services_playwright | DONE |
+| L106 | 2026-03-03T20:20+05:30 | CLAUDE | database/schema.sql, database/migrations/v002_rename_tables.sql | BUGFIX | fix:rename_job_posts_to_jobs_logs_events_to_audit_logs_run_batches_to_run_sessions | DONE |
+| L107 | 2026-03-03T20:20+05:30 | CLAUDE | rag_systems/ingestion.py | BUGFIX | fix:create_missing_ingestion_py_pdf_extract_embed_chromadb_upsert | DONE |
+| L108 | 2026-03-03T23:00+05:30 | CLAUDE | .dockerignore | CREATE | create_dockerignore_exclude_venv_git_secrets_node_chroma | DONE |
+| L109 | 2026-03-03T23:00+05:30 | CLAUDE | rag_systems/Dockerfile | MODIFY | refactor_multistage_build_builder_runtime_no_playwright_pythonpath | DONE |
+| L110 | 2026-03-03T23:00+05:30 | CLAUDE | Dockerfile | MODIFY | use_ms_playwright_base_image_python311_overlay_pythonpath_layerorder | DONE |
+| L111 | 2026-03-03T23:00+05:30 | CLAUDE | rag_systems/ingestion.py | BUGFIX | fix_embed_resolution_7pattern_hasattr_chain_failsoft_fulllog | DONE |
+| L112 | 2026-03-03T23:30+05:30 | CLAUDE | requirements.txt | BUGFIX | fix:pin_playwright_1.50_chromadb_1.x_remove_sentence_transformers_pyPDF2 | DONE |
+| L113 | 2026-03-03T23:30+05:30 | CLAUDE | requirements-dev.txt | CREATE | create:requirements_dev_txt_split_dev_tools_from_production | DONE |
+| L114 | 2026-03-03T23:30+05:30 | CLAUDE | docker-compose.yml | BUGFIX | fix:remove_version_chromadb_healthcheck_rag_dockerfile_path_pythonpath | DONE |
+| L115 | 2026-03-03T23:30+05:30 | CLAUDE | rag_systems/chromadb_store.py | BUGFIX | fix:persistent_client_to_http_client_env_host_port_retry_backoff | DONE |
+| L116 | 2026-03-03T23:30+05:30 | CLAUDE | rag_systems/rag_pipeline.py | BUGFIX | fix:gemini_768_to_1024_dim_validation_guard_in_embed_service | DONE |
+| L117 | 2026-03-03T23:30+05:30 | CLAUDE | rag_systems/ingestion.py | BUGFIX | fix:remove_agentops_import_fix_store_add_to_chroma_upsert_chunks | DONE |
+| L118 | 2026-03-03T23:30+05:30 | CLAUDE | rag_systems/production_server.py | BUGFIX | fix:trusted_hosts_env_api_key_redact_4char_uuid_request_id | DONE |
+| L119 | 2026-03-03T23:30+05:30 | CLAUDE | config/settings.py | BUGFIX | fix:chromadb_path_to_chromadb_host_port_for_http_client | DONE |
 
 
 ## 2-WEEK SPRINT PLAN
