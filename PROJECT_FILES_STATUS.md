@@ -14,7 +14,7 @@ _Current snapshot: 2026-03-01 (Phase 2 · Implementation Completed)._
     - **Configuration:** `config/platform_config.json` is empty, which may block the scraper agent.
     - **Testing:** `test_scripts/` are still empty placeholders.
 - **Blockers:** 
-    - **Env Config:** `docker-compose.yml` references `~/java.env` while `master_run.py` uses `~/narad.env`.
+    - **Env Config:** `docker-compose.yml` references `~/java.env` while `master_run.py` uses `~/java.env`.
     - **Resume Config:** `rag_systems/resume_config.json` still points to local paths outside the repo.
 
 ## File & Directory Status

@@ -1489,7 +1489,7 @@ Master: Log pattern for Developer Agent
 ### Credential Management
 
 ```
-Storage: ~/narad.env file (600 permissions, git-ignored)
+Storage: ~/java.env file (600 permissions, git-ignored)
 
 Format:
 # LLM APIs
@@ -1511,7 +1511,7 @@ POSTGRES_PASSWORD=***
 REDIS_PASSWORD=***
 
 Loading:
-Docker Compose: env_file: ~/narad.env
+Docker Compose: env_file: ~/java.env
 Master Agent: Loads on startup, injects to workers
 Workers: Receive credentials via Master (not direct access)
 ```
@@ -1547,7 +1547,7 @@ Schedule:
 Rotation Process:
 1. Developer Agent detects expiration (weekly check)
 2. Generate new key/token
-3. Update narad.env file
+3. Update java.env file
 4. Restart affected services (zero-downtime)
 5. Revoke old key after 24-hour grace period
 ```

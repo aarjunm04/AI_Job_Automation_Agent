@@ -1,6 +1,6 @@
 """SerpAPI Google Jobs tool for supplementary job discovery.
 
-Implements 4-key round-robin rotation across SERPAPI_KEY_1..4.
+Implements 4-key round-robin rotation across SERPAPI_API_KEY_1..4.
 Used as fallback when primary scrapers return < 100 jobs per run.
 READ-ONLY discovery tool — never modifies any data.
 """
@@ -18,12 +18,12 @@ from typing import List, Dict, Any, Optional
 logger = logging.getLogger(__name__)
 
 # Load all 4 keys at import time, filter empty strings
-_SERPAPI_KEYS: List[str] = [
+_SERPAPI_KEYS: list[str] = [
     k for k in [
-        os.getenv("SERPAPI_KEY_1", ""),
-        os.getenv("SERPAPI_KEY_2", ""),
-        os.getenv("SERPAPI_KEY_3", ""),
-        os.getenv("SERPAPI_KEY_4", ""),
+        os.getenv("SERPAPI_API_KEY_1", ""),
+        os.getenv("SERPAPI_API_KEY_2", ""),
+        os.getenv("SERPAPI_API_KEY_3", ""),
+        os.getenv("SERPAPI_API_KEY_4", ""),
     ] if k.strip()
 ]
 _key_lock = threading.Lock()
@@ -31,7 +31,7 @@ _key_index: int = 0
 
 if not _SERPAPI_KEYS:
     logger.warning(
-        "serpapi_tool: no SERPAPI_KEY_* env vars set — "
+        "serpapi_tool: no SERPAPI_API_KEY_* env vars set — "
         "SerpAPI discovery disabled"
     )
 

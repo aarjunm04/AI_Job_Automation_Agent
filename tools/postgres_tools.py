@@ -59,7 +59,7 @@ def _get_conn() -> PgConnection:
     """
     if not DB_URL:
         raise RuntimeError(
-            "Database URL not configured. Set LOCAL_POSTGRES_URL or SUPABASE_URL in narad.env"
+            "Database URL not configured. Set LOCAL_POSTGRES_URL or SUPABASE_URL in java.env"
         )
 
     try:

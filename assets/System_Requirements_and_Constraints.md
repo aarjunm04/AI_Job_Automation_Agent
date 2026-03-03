@@ -446,10 +446,10 @@ Comprehensive logging, metrics export (Prometheus format), and real-time monitor
 **Status:** Planned
 
 **Description:**  
-All credentials encrypted and stored locally in `narad.env`. Personal data (resumes, contact info) never sent to cloud LLMs. Audit logs immutable.
+All credentials encrypted and stored locally in `java.env`. Personal data (resumes, contact info) never sent to cloud LLMs. Audit logs immutable.
 
 **Acceptance Criteria:**
-- `narad.env` file: 600 permissions (owner read/write only)
+- `java.env` file: 600 permissions (owner read/write only)
 - API keys: Groq, Perplexity, Notion, LinkedIn session
 - Resume files stored locally in encrypted Docker volume
 - No PII in LLM prompts (use placeholders like "USER_NAME")
@@ -490,7 +490,7 @@ Full system runs in Docker containers orchestrated by Docker Compose. Reproducib
 - Single command deployment: `docker-compose up -d`
 - Health checks configured for all services
 - Persistent volumes for: PostgreSQL data, resumes, n8n workflows
-- Environment variables via `narad.env` (bind mount)
+- Environment variables via `java.env` (bind mount)
 - Zero-downtime updates via rolling restart strategy
 
 **Validation Method:** Fresh deployment on new machine completes successfully in <10 minutes
@@ -766,7 +766,7 @@ Architecture supports scaling from 150 jobs/week to 500+ jobs/week without major
 - `agents.yaml` - Agent role definitions
 - `tasks.yaml` - Task descriptions and expected outputs
 - `docker-compose.yml` - Infrastructure configuration
-- `narad.env` - Environment variables and secrets (git-ignored)
+- `java.env` - Environment variables and secrets (git-ignored)
 
 ### C. Contact & Support
 - **Developer:** Solo (vibe coding with AI assistant)

@@ -8,7 +8,7 @@ Playwright infrastructure + site-specific scrapers for the AI Job Automation
 Agent.
 
 Responsibilities:
-├── Load Webshare static proxies from ~/narad.env
+├── Load Webshare static proxies from ~/java.env
 ├── Round-robin proxy rotation + 1 GB bandwidth accounting per proxy
 ├── Single shared Chromium browser with stealth hardening
 ├── Site scrapers (Phase 1 + safety-net):
@@ -93,10 +93,10 @@ class ProxyNode:
 
 
 class ProxyManager:
-    """Manages static Webshare proxies loaded from ~/narad.env."""
+    """Manages static Webshare proxies loaded from ~/java.env."""
 
     def __init__(self) -> None:
-        load_dotenv(Path.home() / "narad.env")
+        load_dotenv(Path.home() / "java.env")
         self.proxies: List[ProxyNode] = []
         self._proxy_index: int = 0
         self._lock = asyncio.Lock()

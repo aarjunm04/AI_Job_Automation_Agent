@@ -396,7 +396,7 @@ STEP 5: After completing any change — APPEND row to CHANGE_LOG before closing
 | L046 | 2026-03-01T19:30:00+05:30 | CODEX | requirements.txt | FIX | fix:requirements:add_5_missing_remove_30_bloat_fix_crewai_version | DONE |
 | L047 | 2026-03-01T19:10:00+05:30 | CODEX | rag_systems/rag_api.py | FIX | fix:bare_import_to_fully_qualified_rag_systems_package_path | DONE |
 | L048 | 2026-03-01T22:43:08+05:30 | CODEX | docker-compose.yml, .github/workflows/run_pipeline.yml, .github/workflows/ci.yml, .gitignore, IDE_README.md | FEATURE DELTA | renameEnvFile:java.env→java.env across all infra files | DONE |
-| L049 | 2026-03-01T22:52:49+05:30 | CODEX | README.md, IDE_README.md | FEATURE DELTA | renameEnvFile:narad.env→java.env in readmes | DONE |
+| L049 | 2026-03-01T22:52:49+05:30 | CODEX | README.md, IDE_README.md | FEATURE DELTA | renameEnvFile:env-file-to-java.env in readmes | DONE |
 | L050 | 2026-03-02T00:23:00+05:30 | PERPLEXITY | IDE_README.md | UPDATE | session-start:add-chrome-ext-specs-platform-apply-specs-developer-agent-specs-session-handoff | DONE |
 | L051 | 2026-03-02T00:30+05:30 | CLAUDE | extension/manifest.json | CREATE | create:manifest_v3:mv3_permissions_content_script_service_worker_options | DONE |
 | L052 | 2026-03-02T00:30+05:30 | CLAUDE | extension/options/options.html | CREATE | create:options_html:self_contained_fastapi_host_apikey_config_test_connection | DONE |
@@ -432,18 +432,23 @@ STEP 5: After completing any change — APPEND row to CHANGE_LOG before closing
 | L082 | 2026-03-03T17:34+05:30 | CLAUDE | utils/normalise_dedupe.py | BUGFIX | fix:clean_description_bs4_word_boundary_truncate_regex_fallback | DONE |
 | L083 | 2026-03-03T17:34+05:30 | CLAUDE | .gitignore,README.md,extension/ | BUGFIX | fix:consolidate_dual_extension_dirs_gitignore_chrome_extension | DONE |
 | L084 | 2026-03-03T{HH:MM}+05:30 | GEMINI | FULL CODEBASE | AUDIT | sweep002_postbugfix_javaenv_consistency_predryrun_final_audit | DONE |
-| L085 | 2026-03-03T18:10+05:30 | CLAUDE | pyproject.toml, agents/analyser_agent.py, agents/apply_agent.py, agents/developer_agent.py, auto_apply/form_filler.py, config/settings.py, docker-compose.yml, main.py, scrapers/scraper_engine.py, tools/serpapi_tool.py | BUGFIX | fix:rename_narad_to_java_env_all_10_missed_files | DONE |
+| L085 | 2026-03-03T18:10+05:30 | CLAUDE | pyproject.toml, agents/analyser_agent.py, agents/apply_agent.py, agents/developer_agent.py, auto_apply/form_filler.py, config/settings.py, docker-compose.yml, main.py, scrapers/scraper_engine.py, tools/serpapi_tool.py | BUGFIX | fix:rename_env_file_to_java_env_all_10_missed_files | DONE |
 | L086 | 2026-03-03T18:16+05:30 | CLAUDE | auto_apply/platforms/base_platform.py | BUGFIX | fix:create_missing_base_platform_abc_applyresult_dryrungating | DONE |
 | L087 | 2026-03-03T18:16+05:30 | CLAUDE | main.py | BUGFIX | fix:add_dryrun_argparse_flag_pass_dryrun_to_masteragent | DONE |
 | L088 | 2026-03-03T18:16+05:30 | CLAUDE | auto_apply/form_filler.py | BUGFIX | fix:gate_submit_actions_with_dryrun_check_4_methods | DONE |
 | L089 | 2026-03-03T18:20+05:30 | CLAUDE | scrapers/scraper_engine.py | BUGFIX | fix:wrap_serpapi_call_in_safety_net_threshold_guard | DONE |
 | L090 | 2026-03-03T18:20+05:30 | CLAUDE | scrapers/scraper_engine.py | BUGFIX | fix:replace_httpx_with_make_proxied_request_in_fetch_retry | DONE |
 | L091 | 2026-03-03T18:30+05:30 | CLAUDE | agents/master_agent.py | BUGFIX | fix:add_original_removed_tracking_to_run_batch_id_dedup_block | DONE |
-| L092 | 2026-03-03T18:30+05:30 | CLAUDE | integrations/llm_interface.py | BUGFIX | fix:rename_narad_to_java_env_in_get_llm_runtimeerror_message | DONE |
+| L092 | 2026-03-03T18:30+05:30 | CLAUDE | integrations/llm_interface.py | BUGFIX | fix:rename_env_file_to_java_env_in_get_llm_runtimeerror_message | DONE |
 | L093 | 2026-03-03T18:30+05:30 | CLAUDE | agents/analyser_agent.py, agents/apply_agent.py, agents/developer_agent.py | BUGFIX | fix:add_3attempt_retry_exponential_backoff_to_resolve_resume_id_platform_apply_counts_deduplicate_suggestions | DONE |
 | L094 | 2026-03-03T18:30+05:30 | CLAUDE | tools/scraper_tools.py | BUGFIX | fix:add_3attempt_retry_exponential_backoff_to_get_scrape_summary | DONE |
 | L095 | 2026-03-03T18:45+05:30 | CLAUDE | scrapers/scraper_engine.py, tools/scraper_tools.py, tools/serpapi_tool.py | BUGFIX | fix:replace_all_print_statements_with_structured_logging | DONE |
 | L096 | 2026-03-03T18:45+05:30 | CLAUDE | utils/db_utils.py, agents/analyser_agent.py, agents/apply_agent.py | BUGFIX | fix:centralise_get_db_conn_into_utils_db_utils_remove_duplicates | DONE |
+| L097 | 2026-03-03T19:00+05:30 | CLAUDE | tools/serpapi_tool.py + all .py files | BUGFIX | fix:serpapi_key_names_SERPAPI_KEY_to_SERPAPI_API_KEY_correct | DONE |
+| L098 | 2026-03-03T19:00+05:30 | CLAUDE | utils/proxy_ratelimit.py + all files | BUGFIX | fix:webshare_proxy_keys_fix_wenshare_typo_java_env_final_purge | DONE |
+| L099 | 2026-03-03T19:15+05:30 | CLAUDE | utils/__init__.py + all package __init__.py files | BUGFIX | fix:create_missing_package_init_files_utils_agents_tools | DONE |
+| L0100 | 2026-03-03T19:15+05:30 | CLAUDE | utils/proxy_ratelimit.py | BUGFIX | fix:add_module_level_get_proxy_dict_get_next_proxy_reset_cycle_functions | DONE |
+| L0101 | 2026-03-03T19:30+05:30 | CLAUDE | Utils/ → utils/ (directory rename) | BUGFIX | fix:rename_Utils_dir_to_lowercase_utils_resolve_ModuleNotFoundError_on_case_sensitive_fs | DONE |
 
 
 ## 2-WEEK SPRINT PLAN

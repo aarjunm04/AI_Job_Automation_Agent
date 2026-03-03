@@ -142,8 +142,8 @@ dev = [
 
 # ── Entry Points ──────────────────────────────────────────────────────────────
 [project.scripts]
-narad-agent  = "app.main:start"          # starts FastAPI server via uvicorn
-narad-worker = "app.scheduler:start"     # starts APScheduler process
+java-agent  = "app.main:start"           # starts FastAPI server via uvicorn
+java-worker = "app.scheduler:start"      # starts APScheduler process
 
 # ── Hatchling Build Config ────────────────────────────────────────────────────
 [tool.hatch.build.targets.wheel]

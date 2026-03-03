@@ -43,7 +43,7 @@ class NotionClient:
         """Initialize the Notion client."""
         if not NOTION_API_KEY:
             raise RuntimeError(
-                "NOTION_API_KEY not configured. Set it in narad.env to use Notion integration."
+                "NOTION_API_KEY not configured. Set it in java.env to use Notion integration."
             )
         logger.info("NotionClient initialized")
 
