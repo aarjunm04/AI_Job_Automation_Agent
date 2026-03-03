@@ -148,7 +148,7 @@ def upsert_job_post(
 
             cursor.execute(
                 """
-                INSERT INTO job_posts (run_batch_id, source_platform, title, company, url, location, posted_at)
+                INSERT INTO jobs (run_batch_id, source_platform, title, company, url, location, posted_at)
                 VALUES (%s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (url) DO UPDATE SET
                     title = EXCLUDED.title,
@@ -460,7 +460,7 @@ def create_run_batch(run_index_in_week: int) -> str:
 
             cursor.execute(
                 """
-                INSERT INTO run_batches (run_index_in_week)
+                INSERT INTO run_sessions (run_index_in_week)
                 VALUES (%s)
                 RETURNING id, run_date
                 """,
@@ -526,7 +526,7 @@ def update_run_batch_stats(
 
             cursor.execute(
                 """
-                UPDATE run_batches
+                UPDATE run_sessions
                 SET jobs_discovered = %s,
                     jobs_auto_applied = %s,
                     jobs_queued = %s,
@@ -578,7 +578,7 @@ def log_event(
     job_post_id: str = "",
 ) -> str:
     """
-    Log an event to the logs_events table.
+    Log an event to the audit_logs table.
 
     This function never retries and silently swallows errors to prevent
     logging failures from disrupting the pipeline.
@@ -604,7 +604,7 @@ def log_event(
 
         cursor.execute(
             """
-            INSERT INTO logs_events (run_batch_id, level, event_type, message, application_id, job_post_id)
+            INSERT INTO audit_logs (run_batch_id, level, event_type, message, application_id, job_post_id)
             VALUES (%s, %s, %s, %s, %s, %s)
             RETURNING id
             """,
@@ -662,7 +662,7 @@ def get_queued_jobs(limit: int = 50) -> str:
                     qj.notes,
                     qj.queued_at
                 FROM queued_jobs qj
-                JOIN job_posts jp ON qj.job_post_id = jp.id
+                JOIN jobs jp ON qj.job_post_id = jp.id
                 JOIN applications a ON qj.application_id = a.id
                 ORDER BY qj.priority ASC, qj.queued_at ASC
                 LIMIT %s
@@ -795,7 +795,7 @@ def get_run_stats(run_batch_id: str) -> str:
                 """
                 SELECT id, run_date, run_index_in_week, jobs_discovered,
                        jobs_auto_applied, jobs_queued, started_at, closed_at
-                FROM run_batches
+                FROM run_sessions
                 WHERE id = %s
                 """,
                 (run_batch_id,),
@@ -811,7 +811,7 @@ def get_run_stats(run_batch_id: str) -> str:
             cursor.execute(
                 """
                 SELECT COUNT(*) AS error_count
-                FROM logs_events
+                FROM audit_logs
                 WHERE run_batch_id = %s AND level = 'ERROR'
                 """,
                 (run_batch_id,),

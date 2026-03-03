@@ -69,7 +69,7 @@ def _log_to_db(
         cursor = conn.cursor()
         cursor.execute(
             """
-            INSERT INTO logs_events
+            INSERT INTO audit_logs
                 (run_batch_id, level, event_type, message, job_post_id, application_id)
             VALUES (%s, %s, %s, %s, %s, %s)
             """,

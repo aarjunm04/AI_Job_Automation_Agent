@@ -72,7 +72,7 @@ def _log_to_db(
 
         cursor.execute(
             """
-            INSERT INTO logs_events (run_batch_id, level, event_type, message)
+            INSERT INTO audit_logs (run_batch_id, level, event_type, message)
             VALUES (%s, %s, %s, %s)
             """,
             (run_batch_id, level, event_type, message),
@@ -247,7 +247,7 @@ def check_monthly_budget(run_batch_id: str) -> str:
         cursor.execute(
             """
             SELECT COALESCE(SUM(jobs_auto_applied * 0.0025), 0) AS estimated_monthly_spend
-            FROM run_batches
+            FROM run_sessions
             WHERE run_date >= DATE_TRUNC('month', CURRENT_DATE)
             """
         )

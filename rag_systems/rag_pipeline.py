@@ -39,7 +39,7 @@ class GeminiEmbedder(EmbeddingProvider):
     """
     api_key: str = field(default_factory=lambda: os.getenv("GEMINI_API_KEY", ""))
     model: str = field(default_factory=lambda: os.getenv("GEMINI_EMBEDDING_MODEL", "models/text-embedding-004"))
-    output_dimensionality: int = 768  # Recommended for storage efficiency
+    output_dimensionality: int = 1024  # Match NVIDIA NIM dimension for consistent vector space
     task_type: str = "RETRIEVAL_DOCUMENT"  # For resume indexing
     timeout_seconds: float = 30
 
@@ -249,6 +249,10 @@ class EmbeddingService:
                         vector = provider.embed_query(text)
                     else:
                         vector = provider.embed_text(text)
+                    if len(vector) != 1024:
+                        raise ValueError(
+                            f"{provider_name} returned {len(vector)}-dim vector, expected 1024"
+                        )
                     return vector
                 except Exception as exc:  # noqa: BLE001
                     last_error = exc

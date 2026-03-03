@@ -60,6 +60,7 @@ import time
 import asyncio
 import hashlib
 import traceback
+import uuid
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -782,16 +783,20 @@ app.add_middleware(
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 # Trusted Host Middleware (security)
+_trusted_hosts = os.getenv(
+    "TRUSTED_HOSTS",
+    "localhost,127.0.0.1,*.local,rag-server,ai_rag_server,agentrunner,ai_agentrunner"
+).split(",")
 app.add_middleware(
     TrustedHostMiddleware,
-    allowed_hosts=["localhost", "127.0.0.1", "*.local"]
+    allowed_hosts=[h.strip() for h in _trusted_hosts]
 )
 
 
 @app.middleware("http")
 async def request_logging_middleware(request: Request, call_next):
     """Log all requests with timing"""
-    request_id = hashlib.md5(f"{time.time()}{request.url}".encode()).hexdigest()[:16]
+    request_id = uuid.uuid4().hex[:16]
     request.state.request_id = request_id
     
     start_time = time.time()
@@ -860,10 +865,10 @@ async def verify_api_key(
         valid_keys.add(ServerConfig.MASTER_API_KEY)
     
     if x_rag_api_key in valid_keys:
-        logger.debug(f"API key validated: {x_rag_api_key[:10]}...")
+        logger.debug(f"API key validated: {x_rag_api_key[:4]}***")
         return x_rag_api_key
     
-    logger.warning(f"Invalid API key attempted: {x_rag_api_key[:10]}...")
+    logger.warning(f"Invalid API key attempted: {x_rag_api_key[:4]}***")
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Invalid API key",
@@ -1330,7 +1335,7 @@ def main():
     logger.info("API key configuration:")
     server_key = os.getenv("RAG_SERVER_API_KEY", "")
     if server_key:
-        logger.info("  ✓ RAG_SERVER_API_KEY configured: %s...", server_key[:15])
+        logger.info("  ✓ RAG_SERVER_API_KEY configured: %s***", server_key[:4])
     else:
         logger.warning("  ✗ RAG_SERVER_API_KEY is not configured")
     

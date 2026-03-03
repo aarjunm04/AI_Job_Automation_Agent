@@ -663,7 +663,7 @@ def normalise_and_dedup(run_batch_id: str) -> str:
         cursor.execute(
             """
             SELECT url, COUNT(*) as count, ARRAY_AGG(id ORDER BY created_at DESC) as ids
-            FROM job_posts
+            FROM jobs
             WHERE run_batch_id = %s
             GROUP BY url
             HAVING COUNT(*) > 1
@@ -680,7 +680,7 @@ def normalise_and_dedup(run_batch_id: str) -> str:
             if ids_to_delete:
                 cursor.execute(
                     """
-                    DELETE FROM job_posts
+                    DELETE FROM jobs
                     WHERE id = ANY(%s)
                     """,
                     (ids_to_delete,),
@@ -691,7 +691,7 @@ def normalise_and_dedup(run_batch_id: str) -> str:
         cursor.execute(
             """
             SELECT COUNT(*) as count
-            FROM job_posts
+            FROM jobs
             WHERE run_batch_id = %s
             """,
             (run_batch_id,),
@@ -765,7 +765,7 @@ def get_scrape_summary(run_batch_id: str) -> str:
             cursor.execute(
                 """
                 SELECT source_platform, COUNT(*) as count
-                FROM job_posts
+                FROM jobs
                 WHERE run_batch_id = %s
                 GROUP BY source_platform
                 ORDER BY count DESC

@@ -920,7 +920,7 @@ def get_apply_summary(run_batch_id: str) -> str:
             """
             SELECT a.status, COUNT(*) AS cnt
             FROM applications a
-            JOIN job_posts jp ON jp.id = a.job_post_id
+            JOIN jobs jp ON jp.id = a.job_post_id
             WHERE jp.run_batch_id = %s
             GROUP BY a.status
             """,
