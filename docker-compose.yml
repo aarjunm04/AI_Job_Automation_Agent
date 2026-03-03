@@ -7,8 +7,6 @@
 # Volumes  : named volumes for postgres / redis / chromadb (no bind-mount data dirs)
 # =============================================================================
 
-version: "3.8"
-
 networks:
   ai_job_network:
     driver: bridge
@@ -28,24 +26,33 @@ services:
   # PostgreSQL 15 — primary relational store for jobs, applications, state
   # ---------------------------------------------------------------------------
   postgres:
-    image: postgres:15-alpine
+    image: pgvector/pgvector:pg15
     container_name: ai_postgres
     restart: unless-stopped
+
     env_file:
       - ~/java.env
+
     environment:
+      POSTGRES_USER: ${LOCAL_POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${LOCAL_POSTGRES_PASSWORD:-localdev123}
+      POSTGRES_DB: ${LOCAL_POSTGRES_DB:-ai_job_db}
       POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
       PGDATA: /var/lib/postgresql/data/pgdata
+
     volumes:
       - postgres_data:/var/lib/postgresql/data
+
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-postgres}"]
+      test: ["CMD-SHELL", "pg_isready -U ${LOCAL_POSTGRES_USER:-postgres} -d ${LOCAL_POSTGRES_DB:-ai_job_db} || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 6
       start_period: 15s
+
     networks:
       - ai_job_network
+
 
   # ---------------------------------------------------------------------------
   # Redis 7 — in-memory cache and session store (AOF persistence)
@@ -80,6 +87,12 @@ services:
       - chromadb_data:/chroma/chroma
     environment:
       ANONYMIZED_TELEMETRY: "false"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/heartbeat"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
     networks:
       - ai_job_network
 
@@ -91,7 +104,7 @@ services:
   rag-server:
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: rag_systems/Dockerfile
     container_name: ai_rag_server
     restart: unless-stopped
     env_file:
@@ -102,6 +115,7 @@ services:
       CHROMADB_PORT: "8000"
       REDIS_URL: redis://redis:6379/0
       RESUME_DIR: /app/resumes
+      PYTHONPATH: /app
     command:
       - uvicorn
       - rag_systems.production_server:app
@@ -115,7 +129,7 @@ services:
       redis:
         condition: service_healthy
       chromadb:
-        condition: service_started
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8090/health"]
       interval: 15s
@@ -153,7 +167,8 @@ services:
       RESUME_DIR: /app/resumes
       DRY_RUN: ${DRY_RUN:-false}
       ACTIVE_DB: ${ACTIVE_DB:-local}
-      LOCAL_POSTGRES_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-ai_job_db}
+      LOCAL_POSTGRES_URL: postgresql://${LOCAL_POSTGRES_USER:-postgres}:${LOCAL_POSTGRES_PASSWORD:-localdev123}@postgres:5432/${LOCAL_POSTGRES_DB:-ai_job_db}
+      PYTHONPATH: /app
     command: ["python", "main.py"]
     depends_on:
       postgres:
@@ -161,7 +176,7 @@ services:
       redis:
         condition: service_healthy
       chromadb:
-        condition: service_started
+        condition: service_healthy
       rag-server:
         condition: service_healthy
     volumes:
