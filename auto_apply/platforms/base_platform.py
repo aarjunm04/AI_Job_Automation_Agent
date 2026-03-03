@@ -11,9 +11,10 @@ from __future__ import annotations
 import os
 import logging
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional, Dict, Any, List
 
+import agentops
 from playwright.async_api import Page, TimeoutError as PlaywrightTimeoutError
 
 logger = logging.getLogger(__name__)
@@ -82,6 +83,7 @@ class ApplyError:
 # ---------------------------------------------------------------------------
 
 
+@agentops.track_agent(name="BasePlatformApply")
 class BasePlatformApply(ABC):
     """Abstract base for all ATS-specific Playwright apply modules.
 
@@ -162,7 +164,7 @@ class BasePlatformApply(ABC):
                 return resolved
             self.logger.warning(
                 "Default resume not found at %s — "
-                "verify RESUME_DIR and DEFAULT_RESUME in narad.env",
+                "verify RESUME_DIR and DEFAULT_RESUME in java.env",
                 resolved,
             )
 
@@ -489,11 +491,49 @@ class BasePlatformApply(ABC):
         )
 
     # ------------------------------------------------------------------
+    # Dry-run Helpers
+    # ------------------------------------------------------------------
+
+    def _gate_dry_run_submit(self) -> bool:
+        """Check if the final form submission should be skipped.
+
+        Returns:
+            ``True`` if submit must be skipped (dry_run is active).
+            ``False`` if real submission should proceed.
+        """
+        if self.dry_run:
+            self.logger.info(
+                "[DRY RUN] %s — skipping form submit",
+                self.PLATFORM_NAME,
+            )
+            return True
+        return False
+
+    def _dry_run_result(self, steps_completed: int = 0) -> "ApplyResult":
+        """Build a successful dry-run ApplyResult.
+
+        Args:
+            steps_completed: Number of form steps completed before
+                the submit gate was triggered.
+
+        Returns:
+            ApplyResult with ``proof_value="DRY_RUN"`` and
+            ``success=True``.
+        """
+        self.steps_completed = steps_completed
+        return self._build_result(
+            success=True,
+            proof_type="dry_run",
+            proof_value="DRY_RUN",
+            proof_confidence=1.0,
+        )
+
+    # ------------------------------------------------------------------
     # Abstract Interface
     # ------------------------------------------------------------------
 
     @abstractmethod
-    async def apply(self) -> ApplyResult:
+    async def apply(self) -> "ApplyResult":
         """Execute the full application flow for this platform.
 
         Returns:

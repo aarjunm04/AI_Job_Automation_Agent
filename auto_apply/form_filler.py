@@ -19,7 +19,7 @@ Inspired by battle-tested patterns from:
   handling, time-delay humanisation.
 
 All user profile data is sourced exclusively from environment variables
-loaded via ``~/narad.env``.
+loaded via ``~/java.env``.
 """
 
 from __future__ import annotations
@@ -127,7 +127,7 @@ class FillResult:
 class UserProfile:
     """Candidate profile sourced exclusively from environment variables.
 
-    All values originate from ``~/narad.env``.  No values are ever
+    All values originate from ``~/java.env``.  No values are ever
     hard-coded.
     """
 
@@ -192,6 +192,7 @@ class FormFiller:
         company: str,
         resume_filename: str,
         ats_type: str = "unknown",
+        dry_run: bool = False,
     ) -> None:
         self.page: Page = page
         self.job_title: str = job_title
@@ -199,6 +200,9 @@ class FormFiller:
         self.company: str = company
         self.resume_path: Path = RESUME_DIR / resume_filename
         self.ats_type: str = ats_type
+        self.dry_run: bool = (
+            dry_run or os.getenv("DRY_RUN", "false").lower() == "true"
+        )
 
         self.profile: UserProfile = UserProfile.from_env()
         self.llm = LLMInterface().get_llm("APPLY_AGENT")
@@ -257,7 +261,7 @@ class FormFiller:
         Returns:
             ``True`` if any strategy succeeded, ``False`` if all failed.
         """
-        if DRY_RUN:
+        if self.dry_run:
             self.logger.debug("dry_run: would fill %s → '%s'", selector, value)
             return True
 
@@ -313,7 +317,7 @@ class FormFiller:
         Returns:
             ``True`` on success, ``False`` on failure.
         """
-        if DRY_RUN:
+        if self.dry_run:
             self.logger.debug(
                 "dry_run: would select '%s' on %s", preferred_value, selector
             )
@@ -372,7 +376,7 @@ class FormFiller:
         Returns:
             ``True`` on click, ``False`` if nothing found.
         """
-        if DRY_RUN:
+        if self.dry_run:
             self.logger.debug(
                 "dry_run: would select radio '%s' for '%s'",
                 preferred_answer,
@@ -460,7 +464,7 @@ class FormFiller:
         Returns:
             ``True`` on success, ``False`` on failure.
         """
-        if DRY_RUN:
+        if self.dry_run:
             action: str = "check" if should_check else "uncheck"
             self.logger.debug("dry_run: would %s %s", action, selector)
             return True
