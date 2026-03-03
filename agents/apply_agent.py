@@ -56,45 +56,12 @@ from tools.agentops_tools import (
     record_fallback_event,
 )
 from tools.notion_tools import queue_job_to_applications_db
+from utils.db_utils import get_db_conn
 
 # Module-level logger
 logger = logging.getLogger(__name__)
 
 __all__ = ["ApplyAgent"]
-
-# ---------------------------------------------------------------------------
-# Module-level helpers
-# ---------------------------------------------------------------------------
-
-_DB_URL: Optional[str] = (
-    os.getenv("LOCAL_POSTGRES_URL")
-    if os.getenv("ACTIVE_DB", "local") == "local"
-    else os.getenv("SUPABASE_URL")
-)
-
-
-def _get_db_conn() -> psycopg2.extensions.connection:
-    """Open and return a psycopg2 connection to the active Postgres instance.
-
-    Returns:
-        Database connection with ``autocommit=False``.
-
-    Raises:
-        RuntimeError: If the DB URL environment variable is not set, or if
-            the connection attempt fails.
-    """
-    if not _DB_URL:
-        raise RuntimeError(
-            "Database URL is not configured.  "
-            "Set LOCAL_POSTGRES_URL or SUPABASE_URL in narad.env and "
-            "ACTIVE_DB=local|supabase."
-        )
-    try:
-        conn = psycopg2.connect(_DB_URL)
-        conn.autocommit = False
-        return conn
-    except Exception as exc:
-        raise RuntimeError(f"Postgres connection failed: {exc}") from exc
 
 
 # ---------------------------------------------------------------------------
@@ -179,39 +146,47 @@ class ApplyAgent:
             Dict mapping ``source_platform`` → count of ``status='applied'``
             applications for the current ``run_batch_id``.
         """
-        conn: Optional[psycopg2.extensions.connection] = None
-        try:
-            conn = _get_db_conn()
-            cursor = conn.cursor(
-                cursor_factory=psycopg2.extras.RealDictCursor
-            )
-            cursor.execute(
-                """
-                SELECT jp.source_platform, COUNT(*) AS cnt
-                FROM applications a
-                JOIN job_posts jp ON jp.id = a.job_post_id
-                WHERE jp.run_batch_id = %s
-                  AND a.status = 'applied'
-                GROUP BY jp.source_platform
-                """,
-                (self.run_batch_id,),
-            )
-            rows = cursor.fetchall()
-            return {
-                str(row["source_platform"]): int(str(row["cnt"]))
-                for row in rows
-            }
-        except Exception as exc:  # noqa: BLE001
-            self.logger.warning(
-                "_platform_apply_counts: query failed (proceeding): %s", exc
-            )
-            return {}
-        finally:
-            if conn:
-                try:
-                    conn.close()
-                except Exception:  # noqa: BLE001
-                    pass
+        for attempt in range(1, 4):
+            conn: Optional[psycopg2.extensions.connection] = None
+            try:
+                conn = get_db_conn()
+                cursor = conn.cursor(
+                    cursor_factory=psycopg2.extras.RealDictCursor
+                )
+                cursor.execute(
+                    """
+                    SELECT jp.source_platform, COUNT(*) AS cnt
+                    FROM applications a
+                    JOIN job_posts jp ON jp.id = a.job_post_id
+                    WHERE jp.run_batch_id = %s
+                      AND a.status = 'applied'
+                    GROUP BY jp.source_platform
+                    """,
+                    (self.run_batch_id,),
+                )
+                rows = cursor.fetchall()
+                return {
+                    str(row["source_platform"]): int(str(row["cnt"]))
+                    for row in rows
+                }
+            except Exception as exc:  # noqa: BLE001
+                if attempt < 3:
+                    time.sleep(2 ** attempt)
+                    self.logger.warning(
+                        "_platform_apply_counts attempt %d/3 failed: %s — retrying",
+                        attempt, str(exc),
+                    )
+                else:
+                    self.logger.warning(
+                        "_platform_apply_counts: query failed (proceeding): %s", exc
+                    )
+            finally:
+                if conn:
+                    try:
+                        conn.close()
+                    except Exception:  # noqa: BLE001
+                        pass
+        return {}
 
     # ------------------------------------------------------------------
     # Internal: pre-apply safety check

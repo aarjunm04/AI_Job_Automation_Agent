@@ -38,6 +38,7 @@ from tools.rag_tools import query_resume_match, get_resume_context, embed_job_de
 from tools.postgres_tools import log_event, save_job_score, get_run_stats, get_platform_config
 from tools.budget_tools import check_xai_run_cap, record_llm_cost, get_cost_summary
 from tools.agentops_tools import record_agent_error, record_fallback_event
+from utils.db_utils import get_db_conn
 
 logger = logging.getLogger(__name__)
 
@@ -47,43 +48,12 @@ __all__ = ["AnalyserAgent"]
 # Module-level helpers
 # ---------------------------------------------------------------------------
 
-_DB_URL: Optional[str] = (
-    os.getenv("LOCAL_POSTGRES_URL")
-    if os.getenv("ACTIVE_DB", "local") == "local"
-    else os.getenv("SUPABASE_URL")
-)
-
 # LLM provider name map (model prefix → short name for cost recording)
 _PROVIDER_NAME: dict[str, str] = {
     "xai": "xai",
     "sambanova": "sambanova",
     "cerebras": "cerebras",
 }
-
-
-def _get_db_conn() -> psycopg2.extensions.connection:
-    """
-    Open and return a psycopg2 connection to the active Postgres instance.
-
-    Returns:
-        Database connection with ``autocommit=False``.
-
-    Raises:
-        RuntimeError: If the DB URL environment variable is not set, or if the
-            connection attempt fails.
-    """
-    if not _DB_URL:
-        raise RuntimeError(
-            "Database URL is not configured.  "
-            "Set LOCAL_POSTGRES_URL or SUPABASE_URL in narad.env and "
-            "ACTIVE_DB=local|supabase."
-        )
-    try:
-        conn = psycopg2.connect(_DB_URL)
-        conn.autocommit = False
-        return conn
-    except Exception as exc:
-        raise RuntimeError(f"Postgres connection failed: {exc}") from exc
 
 
 def _provider_from_model(model: str) -> str:
@@ -165,7 +135,7 @@ class AnalyserAgent:
         for attempt in range(max_retries):
             conn: Optional[psycopg2.extensions.connection] = None
             try:
-                conn = _get_db_conn()
+                conn = get_db_conn()
                 cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
                 cursor.execute(
                     """
@@ -240,33 +210,41 @@ class AnalyserAgent:
         if not resume_filename:
             return None
 
-        conn: Optional[psycopg2.extensions.connection] = None
-        try:
-            conn = _get_db_conn()
-            cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-            cursor.execute(
-                """
-                SELECT id FROM resumes
-                WHERE storage_path ILIKE %s OR label ILIKE %s
-                LIMIT 1
-                """,
-                (f"%{resume_filename}%", f"%{resume_filename}%"),
-            )
-            row = cursor.fetchone()
-            if row:
-                return str(row["id"])
-            return None
-        except Exception as exc:  # noqa: BLE001
-            self.logger.warning(
-                "_resolve_resume_id: lookup failed for '%s': %s", resume_filename, exc
-            )
-            return None
-        finally:
-            if conn:
-                try:
-                    conn.close()
-                except Exception:  # noqa: BLE001
-                    pass
+        for attempt in range(1, 4):
+            conn: Optional[psycopg2.extensions.connection] = None
+            try:
+                conn = get_db_conn()
+                cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+                cursor.execute(
+                    """
+                    SELECT id FROM resumes
+                    WHERE storage_path ILIKE %s OR label ILIKE %s
+                    LIMIT 1
+                    """,
+                    (f"%{resume_filename}%", f"%{resume_filename}%"),
+                )
+                row = cursor.fetchone()
+                if row:
+                    return str(row["id"])
+                return None
+            except Exception as exc:  # noqa: BLE001
+                if attempt < 3:
+                    time.sleep(2 ** attempt)
+                    self.logger.warning(
+                        "_resolve_resume_id attempt %d/3 failed: %s — retrying",
+                        attempt, str(exc),
+                    )
+                else:
+                    self.logger.error(
+                        "_resolve_resume_id failed after 3 attempts: %s", str(exc)
+                    )
+            finally:
+                if conn:
+                    try:
+                        conn.close()
+                    except Exception:  # noqa: BLE001
+                        pass
+        return None
 
     # ------------------------------------------------------------------
     # Internal: direct score persistence (bypasses @tool validation)
@@ -302,7 +280,7 @@ class AnalyserAgent:
         for attempt in range(max_retries):
             conn: Optional[psycopg2.extensions.connection] = None
             try:
-                conn = _get_db_conn()
+                conn = get_db_conn()
                 cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
                 cursor.execute(
                     """
@@ -1083,7 +1061,7 @@ JOB LIST (JSON)
         for attempt in range(max_retries):
             conn: Optional[psycopg2.extensions.connection] = None
             try:
-                conn = _get_db_conn()
+                conn = get_db_conn()
                 cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
                 cursor.execute(
                     """

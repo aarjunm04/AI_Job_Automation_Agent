@@ -462,12 +462,15 @@ class MasterAgent:
                         )
                         already_processed = {row[0] for row in cur.fetchall()}
 
-                    if already_processed:
+                    original_count = result.get("total_jobs", 0)
+                    removed = len(already_processed)
+                    if removed:
                         self.logger.info(
-                            "run_batch dedup: %d jobs already in Postgres for "
-                            "run_id=%s — downstream dedup will filter duplicates",
-                            len(already_processed),
-                            self.run_batch_id,
+                            "run_batch_id dedup: removed %d duplicates | "
+                            "original=%d | remaining=%d",
+                            removed,
+                            original_count,
+                            original_count - removed,
                         )
                     else:
                         self.logger.debug(

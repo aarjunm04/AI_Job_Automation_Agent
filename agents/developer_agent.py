@@ -1016,7 +1016,7 @@ class DeveloperAgent:
                             "lookback_days": self.lookback_days,
                         },
                         suggested_fix=(
-                            "1. Verify RESUME_DIR in ~/narad.env "
+                            "1. Verify RESUME_DIR in ~/java.env "
                             "points to correct path. "
                             "2. Confirm all resume PDFs exist. "
                             "3. Check DEFAULT_RESUME filename."
@@ -1046,29 +1046,42 @@ class DeveloperAgent:
         Returns:
             Tuple of ``(new_suggestions, skipped_count)``.
         """
-        try:
-            with self._conn.cursor() as cur:
-                cur.execute(
-                    """
-                    SELECT suggestion_type, platform, title
-                    FROM developer_suggestions
-                    WHERE status = 'pending'
-                      AND created_at >= NOW() - INTERVAL '30 days'
-                    """
-                )
-                existing = {
-                    (
-                        r["suggestion_type"],
-                        r["platform"],
-                        r["title"],
+        existing: set = set()
+        query_ok = False
+        for attempt in range(1, 4):
+            try:
+                with self._conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT suggestion_type, platform, title
+                        FROM developer_suggestions
+                        WHERE status = 'pending'
+                          AND created_at >= NOW() - INTERVAL '30 days'
+                        """
                     )
-                    for r in cur.fetchall()
-                }
-        except Exception as e:
-            logger.warning(
-                "Deduplication query failed: %s — skipping dedup",
-                str(e),
-            )
+                    existing = {
+                        (
+                            r["suggestion_type"],
+                            r["platform"],
+                            r["title"],
+                        )
+                        for r in cur.fetchall()
+                    }
+                query_ok = True
+                break
+            except Exception as e:
+                if attempt < 3:
+                    await asyncio.sleep(2 ** attempt)
+                    logger.warning(
+                        "_deduplicate_suggestions attempt %d/3 failed: %s — retrying",
+                        attempt, str(e),
+                    )
+                else:
+                    logger.error(
+                        "_deduplicate_suggestions failed after 3 attempts: %s", str(e)
+                    )
+
+        if not query_ok:
             return self._suggestions, 0
 
         new: List[Suggestion] = []
