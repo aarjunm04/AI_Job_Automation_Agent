@@ -431,6 +431,19 @@ STEP 5: After completing any change — APPEND row to CHANGE_LOG before closing
 | L081 | 2026-03-03T17:34+05:30 | CLAUDE | database/schema.sql,database/migrations/ | BUGFIX | fix:add_schema_versions_table_migration_readme_v001_baseline | DONE |
 | L082 | 2026-03-03T17:34+05:30 | CLAUDE | utils/normalise_dedupe.py | BUGFIX | fix:clean_description_bs4_word_boundary_truncate_regex_fallback | DONE |
 | L083 | 2026-03-03T17:34+05:30 | CLAUDE | .gitignore,README.md,extension/ | BUGFIX | fix:consolidate_dual_extension_dirs_gitignore_chrome_extension | DONE |
+| L084 | 2026-03-03T{HH:MM}+05:30 | GEMINI | FULL CODEBASE | AUDIT | sweep002_postbugfix_javaenv_consistency_predryrun_final_audit | DONE |
+| L085 | 2026-03-03T18:10+05:30 | CLAUDE | pyproject.toml, agents/analyser_agent.py, agents/apply_agent.py, agents/developer_agent.py, auto_apply/form_filler.py, config/settings.py, docker-compose.yml, main.py, scrapers/scraper_engine.py, tools/serpapi_tool.py | BUGFIX | fix:rename_narad_to_java_env_all_10_missed_files | DONE |
+| L086 | 2026-03-03T18:16+05:30 | CLAUDE | auto_apply/platforms/base_platform.py | BUGFIX | fix:create_missing_base_platform_abc_applyresult_dryrungating | DONE |
+| L087 | 2026-03-03T18:16+05:30 | CLAUDE | main.py | BUGFIX | fix:add_dryrun_argparse_flag_pass_dryrun_to_masteragent | DONE |
+| L088 | 2026-03-03T18:16+05:30 | CLAUDE | auto_apply/form_filler.py | BUGFIX | fix:gate_submit_actions_with_dryrun_check_4_methods | DONE |
+| L089 | 2026-03-03T18:20+05:30 | CLAUDE | scrapers/scraper_engine.py | BUGFIX | fix:wrap_serpapi_call_in_safety_net_threshold_guard | DONE |
+| L090 | 2026-03-03T18:20+05:30 | CLAUDE | scrapers/scraper_engine.py | BUGFIX | fix:replace_httpx_with_make_proxied_request_in_fetch_retry | DONE |
+| L091 | 2026-03-03T18:30+05:30 | CLAUDE | agents/master_agent.py | BUGFIX | fix:add_original_removed_tracking_to_run_batch_id_dedup_block | DONE |
+| L092 | 2026-03-03T18:30+05:30 | CLAUDE | integrations/llm_interface.py | BUGFIX | fix:rename_narad_to_java_env_in_get_llm_runtimeerror_message | DONE |
+| L093 | 2026-03-03T18:30+05:30 | CLAUDE | agents/analyser_agent.py, agents/apply_agent.py, agents/developer_agent.py | BUGFIX | fix:add_3attempt_retry_exponential_backoff_to_resolve_resume_id_platform_apply_counts_deduplicate_suggestions | DONE |
+| L094 | 2026-03-03T18:30+05:30 | CLAUDE | tools/scraper_tools.py | BUGFIX | fix:add_3attempt_retry_exponential_backoff_to_get_scrape_summary | DONE |
+| L095 | 2026-03-03T18:45+05:30 | CLAUDE | scrapers/scraper_engine.py, tools/scraper_tools.py, tools/serpapi_tool.py | BUGFIX | fix:replace_all_print_statements_with_structured_logging | DONE |
+| L096 | 2026-03-03T18:45+05:30 | CLAUDE | utils/db_utils.py, agents/analyser_agent.py, agents/apply_agent.py | BUGFIX | fix:centralise_get_db_conn_into_utils_db_utils_remove_duplicates | DONE |
 
 
 ## 2-WEEK SPRINT PLAN
