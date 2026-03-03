@@ -3,11 +3,10 @@
 ChromaDB v1.x compatible store wrapper for the RAG subsystem.
 
 Changes from prior:
-- Robust metadata sanitization: convert None -> "", ensure only primitive types allowed
-- Uses PersistentClient (chroma >=1.x)
-- Auto-creates CHROMA_DIR if missing
-- Retry logic on add/query/delete
-- Clear logging for production
+- Uses HttpClient to connect to the shared ChromaDB Docker container
+- Reads CHROMADB_HOST / CHROMADB_PORT from environment
+- Retry logic with exponential backoff on init/add/query/delete
+- Robust metadata sanitization: convert None -> "", ensure only primitive types
 - Fixed empty where={} handling for ChromaDB v1.x
 - Added query_anchor() method for resume-level embeddings
 """
@@ -20,21 +19,28 @@ from typing import Any, Dict, List, Optional
 from dataclasses import dataclass, field
 import math
 
+__all__ = [
+    "ChromaStore",
+    "ChromaStoreConfig",
+    "CHROMADB_AVAILABLE",
+]
+
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
-# try chromadb import for v1.x (PersistentClient)
+# HttpClient for connecting to ChromaDB container over HTTP
 try:
-    from chromadb import PersistentClient
+    from chromadb import HttpClient
     CHROMADB_AVAILABLE = True
 except Exception:  # pragma: no cover - env dependent
-    PersistentClient = None  # type: ignore
+    HttpClient = None  # type: ignore
     CHROMADB_AVAILABLE = False
 
 
 @dataclass
 class ChromaStoreConfig:
-    persist_dir: str = field(default_factory=lambda: os.getenv("CHROMA_DIR", "./.chroma"))
+    host: str = field(default_factory=lambda: os.getenv("CHROMADB_HOST", "chromadb"))
+    port: int = field(default_factory=lambda: int(os.getenv("CHROMADB_PORT", "8000")))
     collection_name: str = field(default_factory=lambda: os.getenv("CHROMA_COLLECTION", "resumes"))
     retry_attempts: int = 3
     retry_delay_seconds: float = 0.5
@@ -42,7 +48,8 @@ class ChromaStoreConfig:
 
 class ChromaStore:
     """
-    Production-ready Chroma wrapper (v1.x API).
+    Production-ready Chroma wrapper (v1.x HttpClient API).
+    Connects to a shared ChromaDB container over HTTP.
     """
 
     def __init__(self, config: Optional[ChromaStoreConfig] = None):
@@ -51,35 +58,34 @@ class ChromaStore:
         self._collection = None
         self._fallback_store: Dict[str, Dict[str, Any]] = {"documents": {}}
 
-        # Ensure persist_dir exists
-        persist_dir = os.path.abspath(self.config.persist_dir)
-        if not os.path.exists(persist_dir):
-            try:
-                os.makedirs(persist_dir, exist_ok=True)
-                logger.info("Created Chroma persist directory at: %s", persist_dir)
-            except Exception as e:
-                logger.exception("Failed to create CHROMA_DIR (%s): %s", persist_dir, e)
-                raise
-
         if CHROMADB_AVAILABLE:
-            self._init_chromadb(persist_dir)
+            self._init_chromadb()
         else:
             logger.warning("chromadb package not available. Using deterministic in-memory fallback store.")
 
-    def _init_chromadb(self, persist_dir: str) -> None:
+    def _init_chromadb(self) -> None:
         attempts = 0
         while True:
             try:
-                self._client = PersistentClient(path=persist_dir)
+                self._client = HttpClient(host=self.config.host, port=self.config.port)
                 self._collection = self._client.get_or_create_collection(name=self.config.collection_name)
-                logger.info("Chroma PersistentClient initialized at %s, collection=%s", persist_dir, self.config.collection_name)
+                logger.info(
+                    "Chroma HttpClient connected to %s:%d, collection=%s",
+                    self.config.host, self.config.port, self.config.collection_name,
+                )
                 return
             except Exception as e:
                 attempts += 1
-                logger.exception("Failed to initialize Chroma PersistentClient (attempt %d): %s", attempts, e)
+                logger.exception(
+                    "Failed to connect to ChromaDB at %s:%d (attempt %d): %s",
+                    self.config.host, self.config.port, attempts, e,
+                )
                 if attempts >= self.config.retry_attempts:
-                    raise RuntimeError("ChromaDB (v1.x) initialization failed. See logs.") from e
-                time.sleep(self.config.retry_delay_seconds)
+                    raise RuntimeError(
+                        f"ChromaDB connection to {self.config.host}:{self.config.port} "
+                        f"failed after {attempts} attempts. See logs."
+                    ) from e
+                time.sleep(self.config.retry_delay_seconds * (2 ** (attempts - 1)))
 
     # -------------------------
     # Metadata sanitization helpers
@@ -90,8 +96,8 @@ class ChromaStore:
         Convert a metadata value into a Chroma-compatible primitive:
         - None -> ""
         - bool, int, float, str -> kept
-        - list/tuple -> converted to string (comma-joined) or left as list of primitives if safe
-        - dict -> JSON-ish string
+        - list/tuple -> converted to string (comma-joined)
+        - dict -> JSON string
         - other types -> string representation
         """
         if v is None:
@@ -99,7 +105,6 @@ class ChromaStore:
         if isinstance(v, (bool, int, float, str)):
             return v
         if isinstance(v, (list, tuple)):
-            # convert nested primitives; if non-primitive found, stringify element
             sanitized = []
             for item in v:
                 if item is None:
@@ -108,16 +113,13 @@ class ChromaStore:
                     sanitized.append(item)
                 else:
                     sanitized.append(str(item))
-            # return as string to avoid nested non-primitive issues
             return ",".join(map(str, sanitized))
         if isinstance(v, dict):
-            # shallow stringify to avoid nested structures
             try:
                 import json
                 return json.dumps({k: (v2 if isinstance(v2, (bool, int, float, str)) else str(v2)) for k, v2 in v.items()})
             except Exception:
                 return str(v)
-        # fallback
         return str(v)
 
     @classmethod
@@ -129,7 +131,6 @@ class ChromaStore:
                 continue
             sanitized: Dict[str, Any] = {}
             for k, v in md.items():
-                # keys must be strings
                 key = str(k)
                 sanitized[key] = cls._sanitize_value(v)
             sanitized_list.append(sanitized)
@@ -152,7 +153,6 @@ class ChromaStore:
         if metadatas is None:
             metadatas = [{} for _ in chunk_ids]
 
-        # ensure resume_id present and sanitize
         for md in metadatas:
             if md is None:
                 continue
@@ -188,7 +188,6 @@ class ChromaStore:
         metadata = metadata or {}
         metadata.setdefault("anchor", True)
         metadata.setdefault("resume_id", metadata.get("resume_id", anchor_id))
-        # sanitize metadata
         sanitized = self._sanitize_metadata_list([metadata])[0]
 
         documents = [anchor_text or ""]
@@ -221,36 +220,35 @@ class ChromaStore:
     ) -> List[Dict[str, Any]]:
         """
         Query ChromaDB with optional metadata filters.
-        
+
         Args:
             query_embeddings: List of query vectors
             n_results: Number of results to return
             where: Optional metadata filter dict (must have content or be None)
-        
+
         Returns:
             List of matching documents with metadata and distances
         """
         # ChromaDB v1.x doesn't accept empty where={}, must be None
         if where is not None and len(where) == 0:
             where = None
-        
+
         if CHROMADB_AVAILABLE and self._collection is not None:
             attempts = 0
             while True:
                 try:
-                    # Only pass where if it has values
                     if where:
                         resp = self._collection.query(
-                            query_embeddings=query_embeddings, 
-                            n_results=n_results, 
+                            query_embeddings=query_embeddings,
+                            n_results=n_results,
                             where=where
                         )
                     else:
                         resp = self._collection.query(
-                            query_embeddings=query_embeddings, 
+                            query_embeddings=query_embeddings,
                             n_results=n_results
                         )
-                    
+
                     hits: List[Dict[str, Any]] = []
                     if resp and "ids" in resp and resp["ids"]:
                         ids = resp["ids"][0]
@@ -259,13 +257,13 @@ class ChromaStore:
                         docs = resp["documents"][0]
                         for idx, _id in enumerate(ids):
                             hits.append({
-                                "id": _id, 
-                                "distance": dists[idx], 
-                                "metadata": metas[idx], 
+                                "id": _id,
+                                "distance": dists[idx],
+                                "metadata": metas[idx],
                                 "document": docs[idx]
                             })
                     return hits
-                    
+
                 except Exception as e:
                     attempts += 1
                     logger.exception("Chroma query failed (attempt %d): %s", attempts, e)
@@ -273,7 +271,6 @@ class ChromaStore:
                         raise
                     time.sleep(self.config.retry_delay_seconds)
         else:
-            # fallback simple similarity
             q = query_embeddings[0]
             hits = []
             for _id, rec in self._fallback_store["documents"].items():
@@ -281,21 +278,20 @@ class ChromaStore:
                 sim = self._cosine_sim(q, emb)
                 distance = 1.0 - sim
                 hits.append({
-                    "id": _id, 
-                    "distance": distance, 
-                    "metadata": rec["metadata"], 
+                    "id": _id,
+                    "distance": distance,
+                    "metadata": rec["metadata"],
                     "document": rec["document"]
                 })
-            
-            # apply where filter (equality for keys)
+
             if where:
-                def match(m: Dict[str, Any], where: Dict[str, Any]) -> bool:
-                    for k, v in where.items():
+                def match(m: Dict[str, Any], w: Dict[str, Any]) -> bool:
+                    for k, v in w.items():
                         if str(m.get(k, "")) != str(v):
                             return False
                     return True
                 hits = [h for h in hits if match(h["metadata"], where)]
-            
+
             hits.sort(key=lambda x: x["distance"])
             return hits[:n_results]
 
@@ -303,17 +299,17 @@ class ChromaStore:
         """
         Query for anchor vectors (resume-level embeddings).
         Anchors have metadata key 'anchor'=True
-        
+
         Args:
             query_embedding: Single query vector
             n_results: Number of anchor results to return
-            
+
         Returns:
             List of anchor matches with metadata
         """
         return self.query(
-            query_embeddings=[query_embedding], 
-            n_results=n_results, 
+            query_embeddings=[query_embedding],
+            n_results=n_results,
             where={"anchor": True}
         )
 
@@ -377,7 +373,6 @@ class ChromaStore:
                 "section_heading": c.get("section_heading") if c.get("section_heading") is not None else ""
             }
             metadatas.append(md)
-        # sanitize prior to adding
         metadatas = self._sanitize_metadata_list(metadatas)
         self.upsert_chunks(resume_id=resume_id, chunk_ids=chunk_ids, embeddings=embeddings, documents=docs, metadatas=metadatas)
 
@@ -391,17 +386,6 @@ class ChromaStore:
         norm_b = math.sqrt(sum(x * x for x in b)) or 1.0
         return dot / (norm_a * norm_b)
 
-    def persist(self) -> None:
-        if CHROMADB_AVAILABLE and self._client is not None:
-            try:
-                if hasattr(self._client, "persist"):
-                    self._client.persist()
-                    logger.debug("Chroma client persist() called.")
-            except Exception:
-                logger.exception("Chroma persist failed.")
-
     def close(self) -> None:
-        try:
-            self.persist()
-        except Exception:
-            pass
+        """Close the ChromaDB connection (no-op for HttpClient)."""
+        pass
