@@ -39,7 +39,8 @@ class DBConfig:
         supabase_url: Supabase project URL (production DB).
         supabase_key: Supabase service-role key.
         redis_url: Redis connection URL used for caching / queuing.
-        chromadb_path: Filesystem path to the ChromaDB data directory.
+        chromadb_host: Hostname of the ChromaDB container (default: chromadb).
+        chromadb_port: Port of the ChromaDB container (default: 8000).
     """
 
     active_db: str = field(
@@ -57,8 +58,11 @@ class DBConfig:
     redis_url: str = field(
         default_factory=lambda: os.getenv("REDIS_URL", "redis://localhost:6379")
     )
-    chromadb_path: str = field(
-        default_factory=lambda: os.getenv("CHROMADB_PATH", "app/chromadb")
+    chromadb_host: str = field(
+        default_factory=lambda: os.getenv("CHROMADB_HOST", "chromadb")
+    )
+    chromadb_port: int = field(
+        default_factory=lambda: int(os.getenv("CHROMADB_PORT", "8000"))
     )
 
     @property
