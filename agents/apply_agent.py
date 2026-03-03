@@ -157,7 +157,7 @@ class ApplyAgent:
                     """
                     SELECT jp.source_platform, COUNT(*) AS cnt
                     FROM applications a
-                    JOIN job_posts jp ON jp.id = a.job_post_id
+                    JOIN jobs jp ON jp.id = a.job_post_id
                     WHERE jp.run_batch_id = %s
                       AND a.status = 'applied'
                     GROUP BY jp.source_platform

@@ -146,7 +146,7 @@ class AnalyserAgent:
                         source_platform,
                         url,
                         location
-                    FROM job_posts
+                    FROM jobs
                     WHERE run_batch_id = %s
                     ORDER BY created_at ASC
                     """,
@@ -1074,7 +1074,7 @@ JOB LIST (JSON)
                         js.fit_score,
                         js.resume_id,
                         js.eligibility_pass
-                    FROM job_posts jp
+                    FROM jobs jp
                     JOIN job_scores js ON js.job_post_id = jp.id
                     WHERE jp.run_batch_id = %s
                       AND js.eligibility_pass = TRUE

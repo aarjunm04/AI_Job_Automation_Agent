@@ -174,7 +174,7 @@ class TrackerAgent:
                 COALESCE(jp.location, '')    AS location,
                 COALESCE(js.fit_score, 0.0)  AS fit_score
             FROM applications a
-            JOIN job_posts jp ON jp.id = a.job_post_id
+            JOIN jobs jp ON jp.id = a.job_post_id
             LEFT JOIN resumes r ON r.id = a.resume_id
             LEFT JOIN LATERAL (
                 SELECT fit_score FROM job_scores
