@@ -7,7 +7,7 @@ singletons (``db_config``, ``run_config``, ``budget_config``,
 directly.
 
 Secrets are loaded exclusively from environment variables (typically
-injected via ``--env-file ~/narad.env``). No values are hard-coded.
+injected via ``--env-file ~/java.env``). No values are hard-coded.
 """
 
 import logging
@@ -217,7 +217,7 @@ class APIConfig:
 def get_settings() -> tuple[DBConfig, RunConfig, BudgetConfig, APIConfig]:
     """Initialise logging and build all configuration singletons.
 
-    Reads environment variables (typically sourced from ``~/narad.env``)
+    Reads environment variables (typically sourced from ``~/java.env``)
     and returns a tuple of frozen dataclass instances representing every
     subsystem's configuration.  This function is called once at module
     import time; the results are stored as module-level singletons.

@@ -233,7 +233,7 @@ class LLMInterface:
 
         raise RuntimeError(
             f"All LLM providers unavailable for agent '{agent_type}'. "
-            "Check API keys in narad.env."
+            "Check API keys in java.env."
         )
 
     def get_fallback_llm(self, agent_type: str, level: int = 1) -> Optional[LLM]:

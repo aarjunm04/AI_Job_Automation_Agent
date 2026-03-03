@@ -1208,7 +1208,7 @@ class ScraperEngine:
         min_jobs_target: int = 100,
         enable_safety_net: bool = True,
     ):
-        load_dotenv(Path.home() / "narad.env")
+        load_dotenv(Path.home() / "java.env")
 
         self.min_jobs_target = min_jobs_target
         self.enable_safety_net = enable_safety_net
@@ -1291,6 +1291,33 @@ class ScraperEngine:
         LOG.info("Scraper registration complete | total=%d", len(self.scrapers))
 
     # ------------------------------------------------------------------ #
+    # HTTP HELPERS
+    # ------------------------------------------------------------------ #
+
+    def _fetch_with_proxy_and_retry(
+        self,
+        url: str,
+        method: str = "GET",
+        **kwargs: Any,
+    ) -> Any:
+        """Fetch a URL through the shared proxy pool with automatic retry.
+
+        Delegates entirely to the module-level :func:`_make_proxied_request`
+        helper which handles round-robin proxy rotation (up to 3 attempts)
+        and falls back to a direct request if all proxies fail.
+
+        Args:
+            url: Target URL string.
+            method: HTTP method ``"GET"`` or ``"POST"``.
+            **kwargs: Additional kwargs forwarded to
+                ``requests.get`` / ``requests.post``.
+
+        Returns:
+            ``requests.Response`` object.
+        """
+        return _make_proxied_request(url, method=method, **kwargs)
+
+    # ------------------------------------------------------------------ #
     # MAIN RUN
     # ------------------------------------------------------------------ #
 
@@ -1338,38 +1365,51 @@ class ScraperEngine:
         )
 
         # ---- Step 2: SerpAPI safety-net (called ONCE, OUTSIDE loop) -----
-        # Triggered only when primary scrapers return fewer than 100 jobs.
-        if self.enable_safety_net and len(all_raw_jobs) < 100:
+        # Safety-net: only trigger SerpAPI if primary scrapers
+        # returned fewer than the minimum job threshold
+        SAFETY_NET_THRESHOLD = int(os.getenv("JOBS_PER_RUN_MINIMUM", "100"))
+        if self.enable_safety_net and len(all_raw_jobs) < SAFETY_NET_THRESHOLD:
             LOG.info(
-                "Safety-net triggered: only %d jobs from primary scrapers",
-                len(all_raw_jobs),
+                "Safety-net triggered: %d jobs from primary scrapers "
+                "(threshold: %d) — activating SerpAPI",
+                len(all_raw_jobs), SAFETY_NET_THRESHOLD,
             )
             serp_query = os.getenv(
                 "SERPAPI_DEFAULT_QUERY",
                 "AI engineer OR machine learning engineer OR "
                 "data scientist remote",
             )
-            serp_json_str = search_google_jobs(
-                query=serp_query,
-                location="Remote",
-                num_results=20,
-            )
-            serp_jobs = json.loads(serp_json_str)
-            if isinstance(serp_jobs, list):
-                LOG.info(
-                    "SerpAPI safety-net returned %d additional jobs",
-                    len(serp_jobs),
+            try:
+                serp_json_str = search_google_jobs(
+                    query=serp_query,
+                    location="Remote",
+                    num_results=20,
                 )
-                all_raw_jobs.extend(serp_jobs)
-                self.metrics.sites_scraped["serpapi_safety_net"] = {
-                    "count": len(serp_jobs),
-                    "runtime_ms": 0.0,
-                    "errors": 0,
-                }
-            elif isinstance(serp_jobs, dict) and "error" in serp_jobs:
+                serp_jobs = json.loads(serp_json_str)
+                if isinstance(serp_jobs, list):
+                    LOG.info(
+                        "SerpAPI safety-net returned %d additional jobs",
+                        len(serp_jobs),
+                    )
+                    all_raw_jobs.extend(serp_jobs)
+                    self.metrics.sites_scraped["serpapi_safety_net"] = {
+                        "count": len(serp_jobs),
+                        "runtime_ms": 0.0,
+                        "errors": 0,
+                    }
+                elif isinstance(serp_jobs, dict) and "error" in serp_jobs:
+                    LOG.warning(
+                        "SerpAPI safety-net failed: %s", serp_jobs["error"]
+                    )
+            except Exception as e:
                 LOG.warning(
-                    "SerpAPI safety-net failed: %s", serp_jobs["error"]
+                    "SerpAPI safety-net exception: %s", str(e)
                 )
+        else:
+            LOG.info(
+                "Safety-net not needed: %d jobs collected from "
+                "primary scrapers", len(all_raw_jobs),
+            )
 
         # ---- Step 3: Normalisation loop — iterate all_raw_jobs ONCE -----
         for raw_job in all_raw_jobs:
@@ -1525,15 +1565,15 @@ async def main() -> None:
     """Main entry point."""
     engine = ScraperEngine()
     jobs, metrics = await engine.run()
-    print("\n" + "=" * 60)
-    print("SCRAPER COMPLETED")
-    print(f"📊 {metrics.total_jobs_filtered} FILTERED JOBS")
-    print(f"📥 {metrics.total_jobs_raw} RAW JOBS")
-    print(f"🔄 {metrics.deduped_jobs} DEDUPED")
-    print(f"⏱️ {metrics.execution_time_ms:.0f}ms")
-    print("=" * 60)
-    print(f"Results saved to: {LATEST_RUN_PATH}")
-    print(f"Metrics saved to: {LATEST_METRICS_PATH}")
+    LOG.info("=" * 60)
+    LOG.info("SCRAPER COMPLETED")
+    LOG.info("FILTERED JOBS: %d", metrics.total_jobs_filtered)
+    LOG.info("RAW JOBS: %d", metrics.total_jobs_raw)
+    LOG.info("DEDUPED: %d", metrics.deduped_jobs)
+    LOG.info("EXECUTION TIME: %.0fms", metrics.execution_time_ms)
+    LOG.info("=" * 60)
+    LOG.info("Results saved to: %s", LATEST_RUN_PATH)
+    LOG.info("Metrics saved to: %s", LATEST_METRICS_PATH)
 
 
 if __name__ == "__main__":

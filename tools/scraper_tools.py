@@ -816,55 +816,65 @@ def get_scrape_summary(run_batch_id: str) -> str:
             }
         )
 
-    conn = None
-    try:
-        conn = psycopg2.connect(DB_URL)
-        cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    last_exc: Optional[Exception] = None
+    for attempt in range(1, 4):
+        conn = None
+        try:
+            conn = psycopg2.connect(DB_URL)
+            cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
-        # Get platform breakdown
-        cursor.execute(
-            """
-            SELECT source_platform, COUNT(*) as count
-            FROM job_posts
-            WHERE run_batch_id = %s
-            GROUP BY source_platform
-            ORDER BY count DESC
-            """,
-            (run_batch_id,),
-        )
+            # Get platform breakdown
+            cursor.execute(
+                """
+                SELECT source_platform, COUNT(*) as count
+                FROM job_posts
+                WHERE run_batch_id = %s
+                GROUP BY source_platform
+                ORDER BY count DESC
+                """,
+                (run_batch_id,),
+            )
 
-        platform_results = cursor.fetchall()
-        by_platform = {row["source_platform"]: row["count"] for row in platform_results}
+            platform_results = cursor.fetchall()
+            by_platform = {row["source_platform"]: row["count"] for row in platform_results}
 
-        total_jobs = sum(by_platform.values())
-        minimum = int(os.getenv("JOBS_PER_RUN_MINIMUM", "100"))
-        minimum_met = total_jobs >= minimum
+            total_jobs = sum(by_platform.values())
+            minimum = int(os.getenv("JOBS_PER_RUN_MINIMUM", "100"))
+            minimum_met = total_jobs >= minimum
 
-        logger.info(
-            f"Scrape summary: {total_jobs} total jobs across {len(by_platform)} platforms"
-        )
+            logger.info(
+                f"Scrape summary: {total_jobs} total jobs across {len(by_platform)} platforms"
+            )
 
-        return json.dumps(
-            {
-                "run_batch_id": run_batch_id,
-                "total_jobs": total_jobs,
-                "by_platform": by_platform,
-                "minimum_met": minimum_met,
-                "minimum_target": minimum,
-            }
-        )
+            return json.dumps(
+                {
+                    "run_batch_id": run_batch_id,
+                    "total_jobs": total_jobs,
+                    "by_platform": by_platform,
+                    "minimum_met": minimum_met,
+                    "minimum_target": minimum,
+                }
+            )
 
-    except Exception as e:
-        logger.error(f"Failed to get scrape summary: {e}")
-        return json.dumps(
-            {
-                "run_batch_id": run_batch_id,
-                "total_jobs": 0,
-                "by_platform": {},
-                "minimum_met": False,
-                "error": str(e),
-            }
-        )
-    finally:
-        if conn:
-            conn.close()
+        except Exception as e:
+            last_exc = e
+            if attempt < 3:
+                time.sleep(2 ** attempt)
+                logger.warning(
+                    f"get_scrape_summary attempt {attempt}/3 failed: {e} — retrying"
+                )
+            else:
+                logger.error(f"Failed to get scrape summary: {e}")
+        finally:
+            if conn:
+                conn.close()
+
+    return json.dumps(
+        {
+            "run_batch_id": run_batch_id,
+            "total_jobs": 0,
+            "by_platform": {},
+            "minimum_met": False,
+            "error": str(last_exc),
+        }
+    )
