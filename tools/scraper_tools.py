@@ -24,9 +24,8 @@ from scrapers.scraper_engine import (
     ScraperEngine,
     RemoteOKAPIScraper,
     HimalayasAPIScraper,
-    SerpAPIGoogleJobsScraper,
-    ResourceManager,
 )
+from tools.serpapi_tool import search_google_jobs
 from scrapers.scraper_service import (
     GLOBAL_PLAYWRIGHT_MANAGER,
     WellfoundScraper,
@@ -455,43 +454,40 @@ def run_serpapi_scrape(
     Returns:
         JSON string with scraping results and statistics.
     """
-    global _serpapi_key_index
-
     try:
-        # Collect available SerpAPI keys
-        serpapi_keys = []
-        for i in range(1, 5):
-            key = os.getenv(f"SERPAPI_API_KEY_{i}")
-            if key:
-                serpapi_keys.append((f"SERPAPI_API_KEY_{i}", key))
-
-        if not serpapi_keys:
-            return json.dumps(
-                {
-                    "jobs_found": 0,
-                    "jobs_upserted": 0,
-                    "api_key_used": "none",
-                    "errors": ["No SerpAPI keys configured"],
-                }
-            )
-
-        # Round-robin key selection
-        key_name, key_value = serpapi_keys[_serpapi_key_index % len(serpapi_keys)]
-        _serpapi_key_index += 1
-
-        # Initialize ResourceManager and scraper
-        resource_manager = ResourceManager(monthly_quota=250)
-        scraper = SerpAPIGoogleJobsScraper(
-            jobs_per_site=results_wanted,
-            resource_manager=resource_manager,
+        # Delegate to serpapi_tool — handles key rotation, AgentOps tracking,
+        # credit tracking, and fail-soft error handling internally.
+        result_str = search_google_jobs(
             query=search_query,
+            location=location,
+            num_results=results_wanted,
         )
-
-        @_with_retry
-        def scrape_sync():
-            return asyncio.run(scraper.run())
-
-        raw_jobs = scrape_sync()
+        raw_jobs: list = []
+        try:
+            parsed = json.loads(result_str)
+            if isinstance(parsed, list):
+                raw_jobs = parsed
+            elif isinstance(parsed, dict) and "error" in parsed:
+                logger.warning(
+                    "SerpAPI scrape returned error: %s", parsed["error"]
+                )
+                log_event(
+                    run_batch_id=run_batch_id,
+                    level="WARNING",
+                    event_type="serpapi_scrape_failed",
+                    message=f"SerpAPI error: {parsed['error']}",
+                )
+                return json.dumps(
+                    {
+                        "jobs_found": 0,
+                        "jobs_upserted": 0,
+                        "api_key_used": "none",
+                        "errors": [parsed["error"]],
+                    }
+                )
+        except (json.JSONDecodeError, TypeError) as parse_err:
+            logger.error("SerpAPI result parse failed: %s", parse_err)
+            raw_jobs = []
 
         jobs_upserted = 0
         errors = []
@@ -512,91 +508,33 @@ def run_serpapi_scrape(
                     jobs_upserted += 1
                 else:
                     errors.append(result_data["error"])
-            except Exception as e:
-                logger.error(f"Failed to upsert job: {e}")
-                errors.append(str(e))
+            except Exception as upsert_err:
+                logger.error("Failed to upsert job: %s", upsert_err)
+                errors.append(str(upsert_err))
 
         logger.info(
-            f"SerpAPI scrape completed: {len(raw_jobs)} jobs found, {jobs_upserted} upserted"
+            "SerpAPI scrape completed: %d jobs found, %d upserted",
+            len(raw_jobs),
+            jobs_upserted,
         )
-
-        # Extract key index for reporting
-        key_index = key_name.split("_")[-1]
 
         return json.dumps(
             {
                 "jobs_found": len(raw_jobs),
                 "jobs_upserted": jobs_upserted,
-                "api_key_used": f"key_{key_index}",
+                "api_key_used": "serpapi_tool",
                 "errors": errors[:10],
             }
         )
 
     except Exception as e:
-        error_msg = str(e).lower()
-
-        # Check for quota errors and retry with next key
-        if "429" in error_msg or "quota" in error_msg:
-            log_event(
-                run_batch_id=run_batch_id,
-                level="WARNING",
-                event_type="serpapi_quota_exceeded",
-                message=f"SerpAPI quota exceeded, rotating to next key: {str(e)}",
-            )
-
-            # Try next key once
-            if len(serpapi_keys) > 1:
-                try:
-                    key_name, key_value = serpapi_keys[
-                        _serpapi_key_index % len(serpapi_keys)
-                    ]
-                    _serpapi_key_index += 1
-
-                    resource_manager = ResourceManager(monthly_quota=250)
-                    scraper = SerpAPIGoogleJobsScraper(
-                        jobs_per_site=results_wanted,
-                        resource_manager=resource_manager,
-                        query=search_query,
-                    )
-
-                    raw_jobs = asyncio.run(scraper.run())
-
-                    jobs_upserted = 0
-                    for job in raw_jobs:
-                        result = upsert_job_post(
-                            run_batch_id=run_batch_id,
-                            source_platform="google_jobs",
-                            title=job.get("title", ""),
-                            company=job.get("company", ""),
-                            url=job.get("job_url", ""),
-                            location=job.get("location", location),
-                            posted_at=job.get("posted_date", ""),
-                        )
-                        result_data = json.loads(result)
-                        if "error" not in result_data:
-                            jobs_upserted += 1
-
-                    key_index = key_name.split("_")[-1]
-                    return json.dumps(
-                        {
-                            "jobs_found": len(raw_jobs),
-                            "jobs_upserted": jobs_upserted,
-                            "api_key_used": f"key_{key_index}",
-                            "errors": [],
-                        }
-                    )
-                except Exception as retry_error:
-                    logger.error(f"SerpAPI retry also failed: {retry_error}")
-
         log_event(
             run_batch_id=run_batch_id,
             level="ERROR",
             event_type="serpapi_scrape_failed",
             message=f"SerpAPI scrape failed: {str(e)}",
         )
-
-        logger.error(f"SerpAPI scrape failed: {e}")
-
+        logger.error("SerpAPI scrape failed: %s", e)
         return json.dumps(
             {
                 "jobs_found": 0,
