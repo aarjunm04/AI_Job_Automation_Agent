@@ -1,7 +1,6 @@
 # ===== Core Async & Networking =====
 aiofiles==24.1.0
 aiohttp==3.10.5
-asyncpg==0.29.0
 httpx[http2]==0.27.2
 websockets==12.0
 redis==5.0.8
@@ -10,18 +9,17 @@ redis==5.0.8
 fastapi==0.115.0
 uvicorn[standard]==0.31.1
 
-# ===== CrewAI — let it own its own deps =====
-crewai>=0.95.0,<2.0
-crewai-tools>=0.36.0,<2.0
+# ===== CrewAI — EXACT pin, owns openai/litellm/dotenv internally =====
+crewai==0.95.0
+# crewai-tools intentionally excluded — conflicts with crewai 0.95.0 above 0.36.0
+# All tool functionality is implemented natively in tools/ directory
 
-# ===== AI / LLM — DO NOT PIN, crewai owns these =====
-# openai        ← removed — crewai pins this internally
-# litellm       ← removed — crewai pins this internally
+# ===== AI / LLM — DO NOT PIN independently, crewai owns these =====
 anthropic>=0.34.2
 tiktoken>=0.7.0
 
 # ===== Data / ML =====
-numpy>=1.26.3,<2.0
+numpy==1.26.3
 pandas>=2.1.0,<3.0
 scikit-learn>=1.5.0,<2.0
 
@@ -66,7 +64,6 @@ configparser==7.1.0
 email-validator==2.2.0
 python-multipart==0.0.12
 python-decouple==3.8
-python-dotenv>=1.0.1
 notion-client==2.2.1
 requests==2.32.3
 requests-oauthlib==2.0.0
@@ -76,9 +73,10 @@ requests-toolbelt==1.0.0
 setuptools>=70.0.0
 wheel==0.44.0
 
-# ===== Added Dependencies =====
+# ===== Project Dependencies =====
 python-jobspy==1.1.82
-agentops>=0.4.0
+agentops>=0.3.0
 supabase>=2.5.0
+psycopg2-binary>=2.9.9
 chromadb>=0.5.23,<2.0
 serpapi>=0.1.5
