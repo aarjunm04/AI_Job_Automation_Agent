@@ -142,26 +142,27 @@ class ResumeEngine:
     # PDF → TEXT EXTRACTION
     # ============================================================
     def _extract_pdf_text(self, path: str) -> str:
-        try:
-            import PyPDF2
-            text_list = []
-            with open(path, "rb") as f:
-                reader = PyPDF2.PdfReader(f)
-                for page in reader.pages:
-                    try:
-                        text = page.extract_text() or ""
-                    except Exception:
-                        text = ""
-                    if text.strip():
-                        text_list.append(text)
-            full = "\n".join(text_list).strip()
-            if not full:
-                raise RuntimeError(f"No text extracted from PDF: {path}")
-            return full
+        """Extract plain text from a PDF resume using pdfplumber.
 
-        except Exception as e:
-            logger.exception("PDF extract failed: %s", e)
-            raise RuntimeError("Install PyPDF2 or ensure resume PDF is valid") from e
+        Args:
+            path: Absolute or relative path to the PDF file.
+
+        Returns:
+            Extracted text as a single string. Empty string on any failure.
+        """
+        try:
+            import pdfplumber
+            with pdfplumber.open(path) as pdf:
+                text = " ".join(
+                    page.extract_text() or "" for page in pdf.pages
+                )
+            return text.strip()
+        except Exception as exc:
+            logger.error(
+                "PDF text extraction failed for %s: %s",
+                path, exc
+            )
+            return ""
 
     # ============================================================
     # BUILD ANCHOR TEXT

@@ -80,17 +80,21 @@ class GeminiEmbedder(EmbeddingProvider):
             if "embedding" in data and "values" in data["embedding"]:
                 embedding = data["embedding"]["values"]
                 
-                # Validate embedding dimension
+                # Validate embedding dimension — discard and signal None on mismatch
                 if len(embedding) != self.output_dimensionality:
-                    logger.warning(
-                        f"Expected {self.output_dimensionality} dims, got {len(embedding)}"
+                    logger.error(
+                        "Embedding dimension mismatch from Gemini: got %d, "
+                        "expected %d — discarding, will not write to ChromaDB",
+                        len(embedding),
+                        self.output_dimensionality,
                     )
-                
+                    return None
+
                 # Normalize for smaller dimensions (768, 1536)
                 if self.output_dimensionality < 3072:
                     embedding = self._normalize(embedding)
-                
-                logger.debug(f"Generated {len(embedding)}-dim embedding")
+
+                logger.debug("Generated %d-dim Gemini embedding", len(embedding))
                 return embedding
             else:
                 raise RuntimeError(f"Unexpected API response structure: {data}")
@@ -194,11 +198,13 @@ class NVIDIANIMEmbedder(EmbeddingProvider):
 
             embedding: List[float] = embeddings[0]["embedding"]
             if len(embedding) != self.dimensions:
-                logger.warning(
-                    "NVIDIA NIM embedding dimension mismatch: expected %d, got %d",
-                    self.dimensions,
+                logger.error(
+                    "Embedding dimension mismatch from NVIDIA NIM: got %d, "
+                    "expected %d — discarding, will not write to ChromaDB",
                     len(embedding),
+                    self.dimensions,
                 )
+                return None
 
             logger.debug("Generated %d-dim NVIDIA NIM embedding", len(embedding))
             return embedding
@@ -249,6 +255,10 @@ class EmbeddingService:
                         vector = provider.embed_query(text)
                     else:
                         vector = provider.embed_text(text)
+                    if vector is None:
+                        raise ValueError(
+                            f"{provider_name} embed returned None (dimension mismatch at provider level)"
+                        )
                     if len(vector) != 1024:
                         raise ValueError(
                             f"{provider_name} returned {len(vector)}-dim vector, expected 1024"

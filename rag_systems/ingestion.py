@@ -51,22 +51,22 @@ def _get_embedding(engine: object, text: str) -> Optional[list[float]]:
     Returns:
         List of floats (embedding vector) or None on any failure.
     """
-    # Pattern 1 — EmbeddingService (full retry+fallback chain, confirmed)
-    embedding_service = getattr(engine, "embedding_service", None)
-    if embedding_service is not None:
-        if hasattr(embedding_service, "embed_text"):
-            try:
-                result = embedding_service.embed_text(text)
-                if result and len(result) == EXPECTED_EMBEDDING_DIM:
-                    return result
-                elif result:
-                    logger.warning(
-                        "embedding_service.embed_text() returned %d dims, expected %d",
-                        len(result), EXPECTED_EMBEDDING_DIM,
-                    )
-                    return result
-            except Exception as exc:
-                logger.debug("embedding_service.embed_text() failed: %s", exc)
+    # Pattern 1 — CONFIRMED by deep audit: engine.embedder.embed_text()
+    if hasattr(engine, "embedder") and hasattr(engine.embedder, "embed_text"):
+        try:
+            result = engine.embedder.embed_text(text)
+            if result and len(result) == EXPECTED_EMBEDDING_DIM:
+                return result
+            elif result:
+                logger.error(
+                    "engine.embedder.embed_text() returned %d dims, "
+                    "expected %d \u2014 discarding embedding, file will be skipped",
+                    len(result),
+                    EXPECTED_EMBEDDING_DIM,
+                )
+                return None
+        except Exception as exc:
+            logger.error("engine.embedder.embed_text() failed: %s", exc)
 
     # Pattern 2 — direct primary embedder (confirmed: NVIDIANIMEmbedder)
     embedder = getattr(engine, "embedder", None)

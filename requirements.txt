@@ -16,7 +16,7 @@ anthropic==0.34.2
 tiktoken==0.7.0
 
 # ===== CrewAI (Strict Compatible) =====
-crewai>=0.95.0,<2.0
+crewai==0.95.0
 crewai-tools>=0.20.0,<2.0
 
 # ===== Data / ML =====
@@ -75,7 +75,7 @@ wheel==0.44.0
 
 # ===== Added Dependencies =====
 python-jobspy==1.1.82
-agentops>=0.4.0
+agentops==0.4.0
 litellm>=1.35.0
 supabase>=2.5.0
 psycopg2-binary>=2.9.9

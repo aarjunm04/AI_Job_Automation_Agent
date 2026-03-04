@@ -36,28 +36,20 @@ from __future__ import annotations
 
 from fastapi import FastAPI, Depends, Header, HTTPException, Request, Response, status
 from pydantic import BaseModel, Field, field_validator, model_validator
-from typing import Optional, Dict, Any, List, Set, Callable
+from typing import Any, Callable, Dict, List, Optional, Set
 import os
 import sys
 import json
 import time
 import asyncio
 import logging
-from dataclasses import dataclass, field
-from datetime import datetime, timedelta
-from typing import Dict, Any, List, Optional, Set, Callable
 from dataclasses import dataclass, field, asdict
+from datetime import datetime, timedelta
 from collections import defaultdict, deque
 from threading import Lock, RLock
 from functools import wraps
 from enum import Enum
 from contextlib import asynccontextmanager
-from datetime import datetime
-
-
-import json
-import time
-import asyncio
 import hashlib
 import traceback
 import uuid
@@ -121,7 +113,7 @@ class ServerConfig:
     """Centralized server configuration"""
     
     # Server Settings
-    HOST: str = os.getenv("RAG_SERVER_HOST", "localhost")
+    HOST: str = os.getenv("RAG_SERVER_HOST", "0.0.0.0")
     PORT: int = int(os.getenv("RAG_SERVER_PORT", "8090"))
     RELOAD: bool = os.getenv("RAG_SERVER_RELOAD", "false").lower() == "true"
     WORKERS: int = int(os.getenv("RAG_SERVER_WORKERS", "1"))

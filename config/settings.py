@@ -120,7 +120,7 @@ class RunConfig:
         default_factory=lambda: os.getenv("DRY_RUN", "false").lower() == "true"
     )
     resume_dir: str = field(
-        default_factory=lambda: os.getenv("RESUME_DIR", "resumes")
+        default_factory=lambda: os.getenv("RESUME_DIR", "app/resumes")
     )
     default_resume: str = field(
         default_factory=lambda: os.getenv("DEFAULT_RESUME", "AarjunGen.pdf")
