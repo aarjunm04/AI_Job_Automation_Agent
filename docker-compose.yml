@@ -85,14 +85,12 @@ services:
       - "8001:8000"
     volumes:
       - chromadb_data:/chroma/chroma
-    environment:
-      ANONYMIZED_TELEMETRY: "false"
     healthcheck:
-      test: [ "CMD", "curl", "-f", "http://localhost:8000/api/v1/heartbeat" ]
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/localhost/8000'"]
       interval: 10s
       timeout: 5s
-      retries: 6
-      start_period: 15s
+      retries: 10
+      start_period: 30s
     networks:
       - ai_job_network
 

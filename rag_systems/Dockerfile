@@ -1,7 +1,7 @@
 # ============================================================
 # Stage 1: builder — install all Python deps into /opt/venv
 # ============================================================
-FROM python:3.11-slim AS builder
+FROM python:3.11-slim-bookworm AS builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
@@ -18,7 +18,7 @@ RUN pip install --no-cache-dir --upgrade pip && \
 # ============================================================
 # Stage 2: runtime — lean final image, no build tools
 # ============================================================
-FROM python:3.11-slim AS runtime
+FROM python:3.11-slim-bookworm AS runtime
 
 # Runtime-only system deps — libpq5 for psycopg2, curl for healthcheck
 RUN apt-get update && apt-get install -y --no-install-recommends \
