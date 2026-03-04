@@ -5,7 +5,7 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-__all__ = ["ingest_all_resumes", "ingest_single_resume"]
+__all__ = ["ingest_all_resumes", "ingest_single_resume", "chunk_text"]
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +33,65 @@ def _extract_pdf_text(pdf_path: str) -> str:
 
 
 # ─────────────────────────────────────────────────────────────
+# TEXT CHUNKER
+# NVIDIA NIM enforces a 512-token hard limit per request.
+# chunk_text() splits text into ≤400-word windows so every
+# chunk lands safely under that ceiling.
+# ─────────────────────────────────────────────────────────────
+def chunk_text(text: str, max_tokens: int = 400) -> list[str]:
+    """Split *text* into chunks of at most *max_tokens* words.
+
+    Uses simple whitespace splitting — no sentence boundary awareness.
+    Designed to keep each chunk under NVIDIA NIM's 512-token limit.
+
+    Args:
+        text: Plain text to split.
+        max_tokens: Maximum number of words per chunk (default 400).
+
+    Returns:
+        List of non-empty chunk strings.  Empty list if text is blank.
+    """
+    words = text.split()
+    if not words:
+        return []
+    chunks: list[str] = []
+    for i in range(0, len(words), max_tokens):
+        chunk = " ".join(words[i : i + max_tokens])
+        if chunk:
+            chunks.append(chunk)
+    return chunks
+
+
+def _average_vectors(vectors: list[list[float]]) -> Optional[list[float]]:
+    """Compute the element-wise mean of a list of embedding vectors.
+
+    Args:
+        vectors: List of equal-length float lists.
+
+    Returns:
+        Averaged vector, or None if *vectors* is empty or dimensions
+        are irreconcilable.
+    """
+    if not vectors:
+        return None
+    dim = len(vectors[0])
+    # Filter out any vectors with unexpected dimensions (fail-soft)
+    consistent = [v for v in vectors if len(v) == dim]
+    if len(consistent) < len(vectors):
+        logger.warning(
+            "_average_vectors: dropped %d/%d vectors with unexpected dims",
+            len(vectors) - len(consistent),
+            len(vectors),
+        )
+    if not consistent:
+        return None
+    avg: list[float] = [
+        sum(v[i] for v in consistent) / len(consistent) for i in range(dim)
+    ]
+    return avg
+
+
+# ─────────────────────────────────────────────────────────────
 # EMBEDDING RESOLVER
 # Resolves correct embed method at runtime — confirmed chain first
 # ─────────────────────────────────────────────────────────────
@@ -51,6 +110,54 @@ def _get_embedding(engine: object, text: str) -> Optional[list[float]]:
     Returns:
         List of floats (embedding vector) or None on any failure.
     """
+    # ── CHUNKING GATE ────────────────────────────────────────────────────────
+    # NVIDIA NIM hard-limits requests to 512 tokens (~400 words with safety
+    # margin).  When the text is longer we chunk, embed each chunk, then
+    # average the vectors into a single representative embedding.
+    # Wrapped in try/except so a chunking failure falls through to the
+    # full-text single-shot embed below (fail-soft).
+    words = text.split()
+    if len(words) > 400:
+        try:
+            chunks = chunk_text(text, max_tokens=400)
+            logger.debug(
+                "Text has %d words — split into %d chunks (max_tokens=400)",
+                len(words),
+                len(chunks),
+            )
+            chunk_vectors: list[list[float]] = []
+            for idx, chunk in enumerate(chunks):
+                vec = _get_embedding(engine, chunk)  # chunk ≤400w → no recurse
+                if vec is not None:
+                    chunk_vectors.append(vec)
+                else:
+                    logger.warning(
+                        "Chunk %d/%d returned None — skipping in average",
+                        idx + 1,
+                        len(chunks),
+                    )
+            if chunk_vectors:
+                averaged = _average_vectors(chunk_vectors)
+                if averaged is not None:
+                    logger.debug(
+                        "Chunked embed: averaged %d/%d vectors → dim=%d",
+                        len(chunk_vectors),
+                        len(chunks),
+                        len(averaged),
+                    )
+                    return averaged
+            logger.warning(
+                "Chunked embed produced no valid vectors — "
+                "falling back to single-shot full-text embed"
+            )
+        except Exception as _chunk_exc:
+            logger.warning(
+                "Chunking step raised %s — "
+                "falling back to single-shot full-text embed",
+                _chunk_exc,
+            )
+    # ── END CHUNKING GATE ────────────────────────────────────────────────────
+
     # Pattern 1 — CONFIRMED by deep audit: engine.embedder.embed_text()
     if hasattr(engine, "embedder") and hasattr(engine.embedder, "embed_text"):
         try:
