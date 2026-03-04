@@ -383,3 +383,9 @@ Aarjun_Gen.pdfpostgres_data/
 pgdata/
 *.chroma/
 rag_systems/.chroma/
+
+# Local configuration files that might contain sensitive data
+postgres_data/
+pgdata/
+rag_systems/.chroma/
+.chroma/
