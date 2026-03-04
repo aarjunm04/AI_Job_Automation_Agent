@@ -379,4 +379,7 @@ java.env
 #resumes dir 
 resumes/
 .pdf 
-Aarjun_Gen.pdf
+Aarjun_Gen.pdfpostgres_data/
+pgdata/
+*.chroma/
+rag_systems/.chroma/
