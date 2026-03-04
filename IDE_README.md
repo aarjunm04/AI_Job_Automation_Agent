@@ -467,6 +467,14 @@ STEP 5: After completing any change — APPEND row to CHANGE_LOG before closing
 | L117 | 2026-03-03T23:30+05:30 | CLAUDE | rag_systems/ingestion.py | BUGFIX | fix:remove_agentops_import_fix_store_add_to_chroma_upsert_chunks | DONE |
 | L118 | 2026-03-03T23:30+05:30 | CLAUDE | rag_systems/production_server.py | BUGFIX | fix:trusted_hosts_env_api_key_redact_4char_uuid_request_id | DONE |
 | L119 | 2026-03-03T23:30+05:30 | CLAUDE | config/settings.py | BUGFIX | fix:chromadb_path_to_chromadb_host_port_for_http_client | DONE |
+| L120 | 2026-03-04T13:40:00+0530 | CLAUDE | rag_systems/resume_engine.py | BUGFIX | fix_extract_pdf_replace_pypdf2_with_pdfplumber_failsoft | DONE |
+| L121 | 2026-03-04T13:40:00+0530 | CLAUDE | requirements.txt | MODIFY | pin_crewai_0.95.0_agentops_0.4.0_exact_no_range | DONE |
+| L122 | 2026-03-04T13:40:00+0530 | CLAUDE | rag_systems/rag_pipeline.py | BUGFIX | fix_dim_guard_return_none_not_wrong_vector_log_error | DONE |
+| L123 | 2026-03-04T13:40:00+0530 | CLAUDE | rag_systems/ingestion.py | BUGFIX | fix_pattern1_engine_embedder_embed_text_dim_mismatch_return_none | DONE |
+| L124 | 2026-03-04T13:40:00+0530 | CLAUDE | rag_systems/production_server.py | MODIFY | fix_host_default_0.0.0.0_remove_duplicate_imports | DONE |
+| L125 | 2026-03-04T13:40:00+0530 | CLAUDE | config/settings.py | MODIFY | align_resume_dir_default_app_resumes | DONE |
+| L126 | 2026-03-04T13:40:00+0530 | CLAUDE | agents/master_agent.py | MODIFY | replace_agent_decorator_with_agentops_track_agent | DONE |
+| L069 | 2026-03-04T14:15:00+0530 | GEMINI | PROJECT_FILE_STATUS.md | CREATE | create_project_file_status_from_raw_scan | DONE |
 
 
 ## 2-WEEK SPRINT PLAN
