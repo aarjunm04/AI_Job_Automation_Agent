@@ -203,6 +203,11 @@ def ingest_all_resumes() -> dict[str, int]:
     Returns:
         Dict: {total: int, success: int, failed: int, skipped: int}
     """
+    dry_run: bool = os.getenv("DRY_RUN", "false").strip().lower() == "true"
+    if dry_run:
+        logger.warning("INGESTION SKIPPED — DRY_RUN=true")
+        return {"total": 0, "success": 0, "failed": 0, "skipped": 0}
+
     resume_dir = os.getenv("RESUME_DIR", "app/resumes")
     resume_path = Path(resume_dir)
     results = {

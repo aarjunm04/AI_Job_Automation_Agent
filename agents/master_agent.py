@@ -279,17 +279,22 @@ class MasterAgent:
         self.logger.info("Boot step 1 PASSED — all critical env vars present")
 
         # Step 2 — Test database connection
-        db_ok: bool = False
-        try:
-            conn = psycopg2.connect(db_config.connection_url)
-            conn.close()
-            db_ok = True
-            self.logger.info("Boot step 2 PASSED — database connection OK")
-        except Exception as exc:  # noqa: BLE001
-            self.logger.critical(
-                "Boot step 2 FAILED — database connection error: %s", exc
+        dry_run: bool = os.getenv("DRY_RUN", "false").strip().lower() == "true"
+        if dry_run:
+            self.logger.warning(
+                "Boot step 2 SKIPPED — DRY_RUN=true, "
+                "database connectivity not required"
             )
-            return False
+        else:
+            try:
+                conn = psycopg2.connect(db_config.connection_url)
+                conn.close()
+                self.logger.info("Boot step 2 PASSED — database connection OK")
+            except Exception as exc:  # noqa: BLE001
+                self.logger.critical(
+                    "Boot step 2 FAILED — database connection error: %s", exc
+                )
+                return False
 
         # Step 3 — Test LLM connections (non-critical)
         for agent_type in ("MASTER_AGENT", "SCRAPER_AGENT"):

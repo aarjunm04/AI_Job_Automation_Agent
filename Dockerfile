@@ -45,4 +45,7 @@ RUN pip install --no-cache-dir --upgrade pip && \
 COPY . /app
 
 # Default entrypoint — overridden by docker-compose run commands
+RUN useradd -m appuser && chown -R appuser:appuser /app
+USER appuser
+
 CMD ["python", "main.py"]

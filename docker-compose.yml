@@ -42,9 +42,10 @@ services:
 
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
 
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${LOCAL_POSTGRES_USER:-postgres} -d ${LOCAL_POSTGRES_DB:-ai_job_db} || exit 1"]
+      test: [ "CMD-SHELL", "pg_isready -U ${LOCAL_POSTGRES_USER:-postgres} -d ${LOCAL_POSTGRES_DB:-ai_job_db} || exit 1" ]
       interval: 10s
       timeout: 5s
       retries: 6
@@ -52,7 +53,6 @@ services:
 
     networks:
       - ai_job_network
-
 
   # ---------------------------------------------------------------------------
   # Redis 7 — in-memory cache and session store (AOF persistence)
@@ -65,7 +65,7 @@ services:
     volumes:
       - redis_data:/data
     healthcheck:
-      test: ["CMD-SHELL", "redis-cli ping | grep PONG"]
+      test: [ "CMD-SHELL", "redis-cli ping | grep PONG" ]
       interval: 10s
       timeout: 5s
       retries: 6
@@ -88,7 +88,7 @@ services:
     environment:
       ANONYMIZED_TELEMETRY: "false"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/heartbeat"]
+      test: [ "CMD", "curl", "-f", "http://localhost:8000/api/v1/heartbeat" ]
       interval: 10s
       timeout: 5s
       retries: 6
@@ -131,7 +131,7 @@ services:
       chromadb:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8090/health"]
+      test: [ "CMD", "curl", "-f", "http://localhost:8090/health" ]
       interval: 15s
       timeout: 5s
       retries: 5
@@ -169,7 +169,8 @@ services:
       ACTIVE_DB: ${ACTIVE_DB:-local}
       LOCAL_POSTGRES_URL: postgresql://${LOCAL_POSTGRES_USER:-postgres}:${LOCAL_POSTGRES_PASSWORD:-localdev123}@postgres:5432/${LOCAL_POSTGRES_DB:-ai_job_db}
       PYTHONPATH: /app
-    command: ["python", "main.py"]
+      RAG_SERVER_URL: http://rag-server:8090
+    command: [ "python", "main.py" ]
     depends_on:
       postgres:
         condition: service_healthy
