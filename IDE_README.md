@@ -486,6 +486,35 @@ STEP 5: After completing any change — APPEND row to CHANGE_LOG before closing
 | L136 | 2026-03-04T16:30:00+0530 | GEMINI | requirements.txt | MODIFY | remove_duplicate_psycopg2_binary_line_80 | DONE |
 | L137 | 2026-03-04T16:30:00+0530 | GEMINI | docker-compose.yml | MODIFY | mount_init_sql_postgres_add_rag_server_url_agentrunner | DONE |
 | L138 | 2026-03-04T17:00:00+0530 | CLAUDE | rag_systems/ingestion.py | BUGFIX | fix:chunk_text400token_NIM_limit_average_vectors_chunked_embed_failsoft | DONE |
+| L139 | 2026-03-05T17:30:59+05:30 | ANTIGRAVITY | docker-compose.yml | BUGFIX | fix:add_schema_sql_volume_mount_postgres_init_sql_broken_ref | DONE |
+| L140 | 2026-03-05T17:30:59+05:30 | ANTIGRAVITY | docker-compose.yml | CONFIG | fix:pin_chromadb_image_latest_to_0.6.3_prevent_silent_breaking_change | DONE |
+| L141 | 2026-03-05T17:30:59+05:30 | ANTIGRAVITY | Dockerfile | REFACTOR | refactor:root_dockerfile_single_to_multistage_builder_runtime_strip_gcc | DONE |
+| L142 | 2026-03-05T17:30:59+05:30 | ANTIGRAVITY | docker-compose.yml | CONFIG | fix:add_resource_limits_agentrunner_cpus_2_memory_4g_playwright_oom | DONE |
+| L143 | 2026-03-05T17:30:59+05:30 | ANTIGRAVITY | rag_systems/Dockerfile | BUGFIX | fix:remove_dead_healthcheck_compose_overrides_dockerfile_one_source | DONE |
+| L144 | 2026-03-05T17:30:59+05:30 | ANTIGRAVITY | dockerise.sh | BUGFIX | fix:phase10_exec_to_run_rm_agentrunner_exits_after_run_no_restart | DONE |
+| L145 | 2026-03-05T17:30:59+05:30 | ANTIGRAVITY | dockerise.sh | CONFIG | fix:docker_compose_v1_cli_to_docker_compose_v2_eol_migration | DONE |
+| L146 | 2026-03-05T17:30:59+05:30 | ANTIGRAVITY | java.env.template | CREATE | create:java_env_template_all_keys_empty_values_safe_to_commit | DONE |
+| L147 | 2026-03-05T17:43:32+05:30 | USER | dockerise.sh | BUGFIX | fix:error_msg_typo_narad_env_to_java_env_phase0_preflight | DONE |
+| L148 | 2026-03-05T17:43:32+05:30 | ANTIGRAVITY | dockerise.sh | BUGFIX | fix:pguser_resolved_sed_url_parse_to_local_postgres_user_key_direct | DONE |
+| L149 | 2026-03-05T17:43:32+05:30 | ANTIGRAVITY | dockerise.sh | BUGFIX | fix:table_count_integer_safe_tr_grep_eo_guard_empty_string_comparison | DONE |
+| L150 | 2026-03-05T17:43:32+05:30 | ANTIGRAVITY | dockerise.sh | BUGFIX | fix:pdf_glob_ls_to_find_prevents_set_e_error_when_no_pdfs_exist | DONE |
+| L151 | 2026-03-05T17:43:32+05:30 | ANTIGRAVITY | dockerise.sh | BUGFIX | fix:phase8_compose_up_d_all_to_explicit_daemons_only_exclude_agentrunner | DONE |
+| L152 | 2026-03-05T17:43:32+05:30 | ANTIGRAVITY | dockerise.sh | BUGFIX | fix:chromadb_heartbeat_grep_nanosecond_to_nanosecond_heartbeat_key_name | DONE |
+| L153 | 2026-03-05T17:43:32+05:30 | ANTIGRAVITY | dockerise.sh | BUGFIX | fix:health_check_conditionals_and_or_chaining_to_if_else_safe_with_set_e | DONE |
+| L154 | 2026-03-05T17:48:42+05:30 | ANTIGRAVITY | Dockerfile | BUGFIX | fix:libasound2_to_libasound2t64_debian12_bookworm_package_rename_build_fail | DONE |
+| L155 | 2026-03-05T18:02:00+05:30 | ANTIGRAVITY | Dockerfile | BUGFIX | fix:replace_hardcoded_chromium_runtime_pkgs_with_playwright_install_deps_arm64_compat | DONE |
+| L156 | 2026-03-05T18:02:00+05:30 | ANTIGRAVITY | Dockerfile | BUGFIX | fix:reorder_runtime_stage_copy_venv_before_playwright_install_deps_run | DONE |
+| L157 | 2026-03-05T18:16:55+05:30 | ANTIGRAVITY | requirements.txt | BUGFIX | fix:pin_chromadb_0.6.3_exact_match_server_version_resolve_type_keyerror | DONE |
+| L158 | 2026-03-05T18:16:55+05:30 | ANTIGRAVITY | rag_systems/chromadb_store.py | BUGFIX | fix:add_embedding_function_none_get_or_create_collection_suppress_type_serialization | DONE |
+| L159 | 2026-03-05T18:39:51+05:30 | ANTIGRAVITY | dockerise.sh | BUGFIX | fix:phase9_grep_c_to_grep_q_if_else_eliminates_0_newline_0_syntax_error | DONE |
+| L160 | 2026-03-05T18:39:51+05:30 | ANTIGRAVITY | Dockerfile | BUGFIX | fix:add_chown_appuser_app_after_workdir_allows_log_file_creation_at_runtime | DONE |
+| L161 | 2026-03-05T18:47:54+05:30 | ANTIGRAVITY | rag_systems/ingestion.py | BUGFIX | fix:chunk_gate_and_chunk_text_max_tokens_400_to_370_words_482_tokens_30_below_nim_512_limit | DONE |
+| L162 | 2026-03-05T18:47:54+05:30 | ANTIGRAVITY | rag_systems/rag_pipeline.py | BUGFIX | fix:gemini_embed_url_v1beta_to_v1_text_embedding_004_not_available_on_v1beta | DONE |
+| L163 | 2026-03-05T18:47:54+05:30 | ANTIGRAVITY | rag_systems/rag_pipeline.py | BUGFIX | fix:nvidia_nim_truncate_none_to_end_prevents_400_on_oversize_chunks | DONE |
+| L164 | 2026-03-05T18:55:11+05:30 | ANTIGRAVITY | rag_systems/rag_pipeline.py | BUGFIX | fix:revert_gemini_url_v1_back_to_v1beta_confirmed_correct_per_google_docs | DONE |
+| L165 | 2026-03-05T18:55:11+05:30 | ANTIGRAVITY | rag_systems/rag_pipeline.py | BUGFIX | fix:gemini_model_text_embedding_004_to_gemini_embedding_001_model_renamed | DONE |
+| L166 | 2026-03-05T19:40:00+05:30 | ANTIGRAVITY | agents/* | BUGFIX | fix:typeerror_tool_callable_func_wrapper_bypass_native_calls | DONE |
+| L167 | 2026-03-05T19:40:00+05:30 | ANTIGRAVITY | dockerise.sh | UPDATE | update:docker_fixes_complete_agentrunner_verified | DONE |
 
 
 ## 2-WEEK SPRINT PLAN
