@@ -68,7 +68,10 @@ class ChromaStore:
         while True:
             try:
                 self._client = HttpClient(host=self.config.host, port=self.config.port)
-                self._collection = self._client.get_or_create_collection(name=self.config.collection_name)
+                self._collection = self._client.get_or_create_collection(
+                    name=self.config.collection_name,
+                    embedding_function=None,  # We supply our own vectors — no default ef needed
+                )
                 logger.info(
                     "Chroma HttpClient connected to %s:%d, collection=%s",
                     self.config.host, self.config.port, self.config.collection_name,

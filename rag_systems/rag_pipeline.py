@@ -38,7 +38,8 @@ class GeminiEmbedder(EmbeddingProvider):
     Supports 768, 1536, or 3072 dimensions with MRL
     """
     api_key: str = field(default_factory=lambda: os.getenv("GEMINI_API_KEY", ""))
-    model: str = field(default_factory=lambda: os.getenv("GEMINI_EMBEDDING_MODEL", "models/text-embedding-004"))
+    # text-embedding-004 was renamed to gemini-embedding-001 (current per Google docs)
+    model: str = field(default_factory=lambda: os.getenv("GEMINI_EMBEDDING_MODEL", "models/gemini-embedding-001"))
     output_dimensionality: int = 1024  # Match NVIDIA NIM dimension for consistent vector space
     task_type: str = "RETRIEVAL_DOCUMENT"  # For resume indexing
     timeout_seconds: float = 30
@@ -163,7 +164,7 @@ class NVIDIANIMEmbedder(EmbeddingProvider):
     extra_body: Dict[str, Any] = field(
         default_factory=lambda: {
             "input_type": "query",
-            "truncate": "NONE",
+            "truncate": "END",  # Truncate at limit instead of hard-rejecting oversized input
         }
     )
 

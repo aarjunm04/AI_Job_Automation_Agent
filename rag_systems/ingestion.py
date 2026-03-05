@@ -110,18 +110,14 @@ def _get_embedding(engine: object, text: str) -> Optional[list[float]]:
     Returns:
         List of floats (embedding vector) or None on any failure.
     """
-    # ── CHUNKING GATE ────────────────────────────────────────────────────────
-    # NVIDIA NIM hard-limits requests to 512 tokens (~400 words with safety
-    # margin).  When the text is longer we chunk, embed each chunk, then
-    # average the vectors into a single representative embedding.
-    # Wrapped in try/except so a chunking failure falls through to the
-    # full-text single-shot embed below (fail-soft).
+    # NVIDIA NIM hard-limits requests to 512 tokens (~370 words with safety margin).
+    # 370 words × ~1.75 tokens/word ≈ 482 tokens — 30 below the 512 ceiling.
     words = text.split()
-    if len(words) > 400:
+    if len(words) > 370:
         try:
-            chunks = chunk_text(text, max_tokens=400)
+            chunks = chunk_text(text, max_tokens=370)
             logger.debug(
-                "Text has %d words — split into %d chunks (max_tokens=400)",
+                "Text has %d words — split into %d chunks (max_tokens=370)",
                 len(words),
                 len(chunks),
             )
