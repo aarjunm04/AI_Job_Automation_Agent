@@ -704,7 +704,7 @@ JOB LIST (JSON)
             # ----------------------------------------------------------
             # Step 1: log start
             # ----------------------------------------------------------
-            log_event(
+            log_event.func(
                 run_batch_id=self.run_batch_id,
                 level="INFO",
                 event_type="analyser_run_start",
@@ -727,7 +727,7 @@ JOB LIST (JSON)
                     "AnalyserAgent.run: no jobs found for batch %s — returning early",
                     self.run_batch_id,
                 )
-                log_event(
+                log_event.func(
                     run_batch_id=self.run_batch_id,
                     level="INFO",
                     event_type="analyser_run_complete",
@@ -929,7 +929,7 @@ JOB LIST (JSON)
                 f"budget_aborted={budget_aborted}"
             )
             self.logger.info("AnalyserAgent.run: %s", summary_msg)
-            log_event(
+            log_event.func(
                 run_batch_id=self.run_batch_id,
                 level="INFO",
                 event_type="analyser_run_complete",

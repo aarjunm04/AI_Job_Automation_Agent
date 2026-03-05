@@ -236,7 +236,7 @@ IMPORTANT:
         """
         try:
             # Log run start
-            log_event(
+            log_event.func(
                 run_batch_id=self.run_batch_id,
                 level="INFO",
                 event_type="scraper_run_start",
@@ -246,14 +246,14 @@ IMPORTANT:
             self.logger.info(f"Starting scraper run for batch: {self.run_batch_id}")
 
             # Check monthly budget before proceeding
-            budget_check = check_monthly_budget(run_batch_id=self.run_batch_id)
+            budget_check = check_monthly_budget.func(run_batch_id=self.run_batch_id)
             budget_result = json.loads(budget_check)
 
             if budget_result.get("abort", False):
                 self.logger.critical(
                     f"Monthly budget exceeded: {budget_result.get('reason')}"
                 )
-                log_event(
+                log_event.func(
                     run_batch_id=self.run_batch_id,
                     level="CRITICAL",
                     event_type="scraper_run_aborted",
@@ -301,7 +301,7 @@ IMPORTANT:
             jobs_queued = 0  # Will be set by Analyser Agent later
 
             # Update run batch stats
-            update_run_batch_stats(
+            update_run_batch_stats.func(
                 run_batch_id=self.run_batch_id,
                 jobs_discovered=total_jobs,
                 jobs_auto_applied=jobs_auto_applied,
@@ -309,7 +309,7 @@ IMPORTANT:
             )
 
             # Log completion
-            log_event(
+            log_event.func(
                 run_batch_id=self.run_batch_id,
                 level="INFO",
                 event_type="scraper_run_complete",
@@ -335,7 +335,7 @@ IMPORTANT:
             self.logger.error(f"Scraper run failed with exception: {e}", exc_info=True)
 
             # Log critical error
-            log_event(
+            log_event.func(
                 run_batch_id=self.run_batch_id,
                 level="CRITICAL",
                 event_type="scraper_run_failed",

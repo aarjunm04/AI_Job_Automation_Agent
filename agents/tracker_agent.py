@@ -382,7 +382,7 @@ If some Notion syncs failed, include them in the "errors" list as strings.
         """
         # Step 1 — log start
         try:
-            log_event(
+            log_event.func(
                 run_batch_id=self.run_batch_id,
                 level="INFO",
                 event_type="tracker_run_start",
@@ -466,7 +466,7 @@ If some Notion syncs failed, include them in the "errors" list as strings.
 
             # Step 6 — log completion
             try:
-                log_event(
+                log_event.func(
                     run_batch_id=self.run_batch_id,
                     level="INFO",
                     event_type="tracker_run_complete",
@@ -504,7 +504,7 @@ If some Notion syncs failed, include them in the "errors" list as strings.
 
             # Best-effort AgentOps error recording
             try:
-                record_agent_error(
+                record_agent_error.func(
                     agent_type="TrackerAgent",
                     error_message=str(exc),
                     run_batch_id=self.run_batch_id,

@@ -210,7 +210,7 @@ class ApplyAgent:
         """
         # Check 1 — Budget gate
         try:
-            cap_raw: str = check_xai_run_cap(
+            cap_raw: str = check_xai_run_cap.func(
                 run_batch_id=self.run_batch_id
             )
             cap_result: Dict[str, Any] = {}
@@ -377,7 +377,7 @@ class ApplyAgent:
                     job_title,
                     company,
                 )
-                log_event(
+                log_event.func(
                     run_batch_id=self.run_batch_id,
                     level="INFO",
                     event_type="dry_run_skip",
@@ -418,7 +418,7 @@ class ApplyAgent:
             # Step 6 — Handle result
             if result.get("applied", False):
                 self._applied_count += 1
-                log_event(
+                log_event.func(
                     run_batch_id=self.run_batch_id,
                     level="INFO",
                     event_type="job_applied",
@@ -443,7 +443,7 @@ class ApplyAgent:
                 )
             else:
                 self._failed_count += 1
-                log_event(
+                log_event.func(
                     run_batch_id=self.run_batch_id,
                     level="ERROR",
                     event_type="job_apply_failed",
@@ -477,7 +477,7 @@ class ApplyAgent:
             )
             self._failed_count += 1
             try:
-                record_agent_error(
+                record_agent_error.func(
                     agent_type="ApplyAgent",
                     error_message=str(exc),
                     run_batch_id=self.run_batch_id,
@@ -556,7 +556,7 @@ class ApplyAgent:
                     notion_exc,
                 )
 
-            log_event(
+            log_event.func(
                 run_batch_id=self.run_batch_id,
                 level="WARNING",
                 event_type="job_rerouted_to_manual",
@@ -604,7 +604,7 @@ class ApplyAgent:
             to_model: str = getattr(
                 self.fallback_llm_1, "model", "fallback_1"
             )
-            record_fallback_event(
+            record_fallback_event.func(
                 agent_type="ApplyAgent",
                 from_provider=failed_provider,
                 to_provider=str(to_model),
@@ -622,7 +622,7 @@ class ApplyAgent:
 
         if self._fallback_level == 1 and self.fallback_llm_2 is not None:
             to_model = getattr(self.fallback_llm_2, "model", "fallback_2")
-            record_fallback_event(
+            record_fallback_event.func(
                 agent_type="ApplyAgent",
                 from_provider=failed_provider,
                 to_provider=str(to_model),
@@ -925,7 +925,7 @@ ROUTING MANIFEST (JSON)
             # ----------------------------------------------------------
             # Step 1: log run start
             # ----------------------------------------------------------
-            log_event(
+            log_event.func(
                 run_batch_id=self.run_batch_id,
                 level="INFO",
                 event_type="apply_run_start",
@@ -962,7 +962,7 @@ ROUTING MANIFEST (JSON)
             try:
                 from tools.budget_tools import check_monthly_budget
 
-                budget_raw: str = check_monthly_budget(
+                budget_raw: str = check_monthly_budget.func(
                     run_batch_id=self.run_batch_id
                 )
                 budget_result: Dict[str, Any] = {}
@@ -1072,7 +1072,7 @@ ROUTING MANIFEST (JSON)
                             "ApplyAgent.run: fallback LLM also failed: %s",
                             fallback_exc,
                         )
-                        record_agent_error(
+                        record_agent_error.func(
                             agent_type="ApplyAgent",
                             error_message=str(fallback_exc),
                             run_batch_id=self.run_batch_id,
@@ -1085,7 +1085,7 @@ ROUTING MANIFEST (JSON)
                         "ApplyAgent.run: no fallback available — "
                         "proceeding with programmatic execution"
                     )
-                    record_agent_error(
+                    record_agent_error.func(
                         agent_type="ApplyAgent",
                         error_message=str(primary_exc),
                         run_batch_id=self.run_batch_id,
@@ -1139,7 +1139,7 @@ ROUTING MANIFEST (JSON)
                 # Periodic budget check every 5 jobs
                 if idx > 1 and idx % 5 == 1:
                     try:
-                        cap_raw: str = check_xai_run_cap(
+                        cap_raw: str = check_xai_run_cap.func(
                             run_batch_id=self.run_batch_id
                         )
                         cap_check: Dict[str, Any] = json.loads(cap_raw)
@@ -1203,7 +1203,7 @@ ROUTING MANIFEST (JSON)
             # ----------------------------------------------------------
             cost_summary: Dict[str, Any] = {}
             try:
-                cost_raw: str = get_cost_summary(
+                cost_raw: str = get_cost_summary.func(
                     run_batch_id=self.run_batch_id
                 )
                 cost_summary = json.loads(cost_raw)
@@ -1221,7 +1221,7 @@ ROUTING MANIFEST (JSON)
                 f"Failed={self._failed_count} | "
                 f"Budget_aborted={self._budget_aborted}"
             )
-            log_event(
+            log_event.func(
                 run_batch_id=self.run_batch_id,
                 level="INFO",
                 event_type="apply_run_complete",
@@ -1252,7 +1252,7 @@ ROUTING MANIFEST (JSON)
                 exc_info=True,
             )
             try:
-                record_agent_error(
+                record_agent_error.func(
                     agent_type="ApplyAgent",
                     error_message=str(exc),
                     run_batch_id=self.run_batch_id,
