@@ -47,12 +47,11 @@ USER appuser
 
 EXPOSE 8090
 
-# Health check — polls every 30s, 3 retries, marks unhealthy after 90s
-HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
-    CMD curl -sf http://localhost:8090/health || exit 1
+# HEALTHCHECK is defined in docker-compose.yml — Compose overrides Dockerfile HEALTHCHECK
+# Do not add a HEALTHCHECK here; it would be silently ignored when using Compose.
 
 # Production uvicorn — 1 worker (single-core Docker env)
 CMD ["uvicorn", "rag_systems.production_server:app", \
-     "--host", "0.0.0.0", "--port", "8090", \
-     "--workers", "1", "--log-level", "info", \
-     "--no-access-log"]
+    "--host", "0.0.0.0", "--port", "8090", \
+    "--workers", "1", "--log-level", "info", \
+    "--no-access-log"]

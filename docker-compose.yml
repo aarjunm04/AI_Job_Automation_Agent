@@ -43,6 +43,7 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - ./database/schema.sql:/docker-entrypoint-initdb.d/schema.sql:ro
 
     healthcheck:
       test: [ "CMD-SHELL", "pg_isready -U ${LOCAL_POSTGRES_USER:-postgres} -d ${LOCAL_POSTGRES_DB:-ai_job_db} || exit 1" ]
@@ -78,7 +79,7 @@ services:
   # Exposed on host at :8001 so devs can inspect via HTTP
   # ---------------------------------------------------------------------------
   chromadb:
-    image: chromadb/chroma:latest
+    image: chromadb/chroma:0.6.3
     container_name: ai_chromadb
     restart: unless-stopped
     ports:
@@ -86,7 +87,7 @@ services:
     volumes:
       - chromadb_data:/chroma/chroma
     healthcheck:
-      test: ["CMD-SHELL", "bash -c '</dev/tcp/localhost/8000'"]
+      test: [ "CMD-SHELL", "bash -c '</dev/tcp/localhost/8000'" ]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -183,3 +184,8 @@ services:
       - ./logs:/app/logs
     networks:
       - ai_job_network
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 4G
