@@ -223,6 +223,90 @@ IMPORTANT:
             agent=agent,
         )
 
+    def _fallback_scrape_sequence(self) -> Dict[str, Any]:
+        """
+        Hardcoded sequential fallback if LLM is unavailable or out of budget.
+        Mimics the exact steps given in the CrewAI task prompt.
+        """
+        self.logger.info("Initiating hardcoded fallback scrape sequence...")
+        
+        search_query = os.getenv("SEARCH_QUERY", "AI ML Data Science Automation Engineer")
+        min_jobs = int(os.getenv("JOBS_PER_RUN_MINIMUM", "100"))
+
+        try:
+            self.logger.info("Fallback Step 1: JobSpy Scrape")
+            run_jobspy_scrape.func(
+                run_batch_id=self.run_batch_id,
+                search_query=search_query,
+                location="Remote",
+                results_wanted=50
+            )
+        except Exception as e:
+            self.logger.error(f"Fallback JobSpy failed: {e}")
+
+        try:
+            self.logger.info("Fallback Step 2: REST API Scrape")
+            run_rest_api_scrape.func(
+                run_batch_id=self.run_batch_id,
+                platforms="remoteok,himalayas"
+            )
+        except Exception as e:
+            self.logger.error(f"Fallback REST API failed: {e}")
+
+        try:
+            self.logger.info("Fallback Step 3: SerpAPI Scrape")
+            run_serpapi_scrape.func(
+                run_batch_id=self.run_batch_id,
+                search_query=search_query,
+                location="Remote",
+                results_wanted=25
+            )
+        except Exception as e:
+            self.logger.error(f"Fallback SerpAPI failed: {e}")
+
+        platforms = ["wellfound", "weworkremotely", "ycombinator", "arc", "turing", "crossover"]
+        for p in platforms:
+            try:
+                self.logger.info(f"Fallback Step 4: Playwright Scrape - {p}")
+                run_playwright_scrape.func(
+                    run_batch_id=self.run_batch_id,
+                    platform=p,
+                    max_jobs=30
+                )
+            except Exception as e:
+                self.logger.error(f"Fallback Playwright ({p}) failed: {e}")
+
+        try:
+            self.logger.info("Fallback Step 5: Check Total Job Count")
+            summary_str = get_scrape_summary.func(run_batch_id=self.run_batch_id)
+            summary = json.loads(summary_str)
+            total_jobs = summary.get("total_jobs", 0)
+
+            if total_jobs < min_jobs:
+                self.logger.info("Fallback Step 6: Safety Net Activation")
+                run_safety_net_scrape.func(
+                    run_batch_id=self.run_batch_id,
+                    current_job_count=total_jobs
+                )
+        except Exception as e:
+            self.logger.error(f"Fallback Summary/Safety Net failed: {e}")
+
+        try:
+            self.logger.info("Fallback Step 7: Normalize and Deduplicate")
+            normalise_and_dedup.func(run_batch_id=self.run_batch_id)
+        except Exception as e:
+            self.logger.error(f"Fallback Deduplication failed: {e}")
+
+        try:
+            self.logger.info("Fallback Step 8: Final Summary")
+            final_summary_str = get_scrape_summary.func(run_batch_id=self.run_batch_id)
+            final_summary = json.loads(final_summary_str)
+        except Exception as e:
+            self.logger.error(f"Fallback Final Summary failed: {e}")
+            final_summary = {"total_jobs": 0, "by_platform": {}, "error": str(e)}
+
+        return final_summary
+
     @operation
     def run(self) -> Dict[str, Any]:
         """
@@ -249,53 +333,68 @@ IMPORTANT:
             budget_check = check_monthly_budget.func(run_batch_id=self.run_batch_id)
             budget_result = json.loads(budget_check)
 
+            used_fallback = False
+
             if budget_result.get("abort", False):
-                self.logger.critical(
-                    f"Monthly budget exceeded: {budget_result.get('reason')}"
+                self.logger.warning(
+                    f"Monthly budget exceeded: {budget_result.get('reason')}. "
+                    "Bypassing LLM orchestration and using fallback scrape sequence."
                 )
                 log_event.func(
                     run_batch_id=self.run_batch_id,
-                    level="CRITICAL",
-                    event_type="scraper_run_aborted",
-                    message=f"Monthly budget exceeded: {budget_result.get('reason')}",
+                    level="WARNING",
+                    event_type="scraper_llm_bypassed_budget",
+                    message="Budget exceeded. Using hardcoded scrape fallback.",
                 )
-                return {
-                    "success": False,
-                    "reason": "monthly_budget_exceeded",
-                    "run_batch_id": self.run_batch_id,
-                }
-
-            # Build agent and task
-            agent = self._build_agent()
-            task = self._build_task(agent)
-
-            # Create and execute crew
-            crew = Crew(
-                agents=[agent],
-                tasks=[task],
-                process=Process.sequential,
-                verbose=True,
-            )
-
-            self.logger.info("Executing CrewAI crew...")
-            result = crew.kickoff()
-
-            # Parse result - CrewAI may return string or dict
-            if isinstance(result, str):
-                try:
-                    result_data = json.loads(result)
-                except json.JSONDecodeError:
-                    self.logger.warning(
-                        f"Could not parse crew result as JSON: {result}"
-                    )
-                    result_data = {"raw_output": result}
+                result_data = self._fallback_scrape_sequence()
+                used_fallback = True
             else:
-                result_data = result if isinstance(result, dict) else {"result": str(result)}
+                # Build agent and task
+                agent = self._build_agent()
+                task = self._build_task(agent)
+
+                # Create and execute crew
+                crew = Crew(
+                    agents=[agent],
+                    tasks=[task],
+                    process=Process.sequential,
+                    verbose=True,
+                )
+
+                self.logger.info("Executing CrewAI crew...")
+                try:
+                    result = crew.kickoff()
+                except Exception as llm_e:
+                    self.logger.warning(
+                        f"LLM execution failed: {llm_e}. "
+                        "Bypassing LLM orchestration and using fallback scrape sequence."
+                    )
+                    log_event.func(
+                        run_batch_id=self.run_batch_id,
+                        level="WARNING",
+                        event_type="scraper_llm_bypassed_error",
+                        message=f"LLM failed ({llm_e}). Using hardcoded scrape fallback.",
+                    )
+                    result_data = self._fallback_scrape_sequence()
+                    used_fallback = True
+
+            if not used_fallback:
+                # Parse result - CrewAI may return string or dict
+                if isinstance(result, str):
+                    try:
+                        result_data = json.loads(result)
+                    except json.JSONDecodeError:
+                        self.logger.warning(
+                            f"Could not parse crew result as JSON: {result}"
+                        )
+                        result_data = {"raw_output": result}
+                else:
+                    result_data = result if isinstance(result, dict) else {"result": str(result)}
 
             # Extract metrics for database update
             total_jobs = result_data.get("total_jobs", 0)
             by_platform = result_data.get("by_platform", {})
-
+            
             # Calculate jobs by category
             jobs_auto_applied = 0  # Will be set by Apply Agent later
             jobs_queued = 0  # Will be set by Analyser Agent later
