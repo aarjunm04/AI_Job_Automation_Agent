@@ -7,19 +7,17 @@
 
 'use strict';
 
-// ==================== MCP / LLM CONFIG ====================
-export const MCP_CONFIG = {
-  BASE_URL: 'http://localhost:8080',
-  COMPLETE_ENDPOINT: '/llm/complete',
-  TIMEOUT_MS: 15000,
-  MAX_RETRIES: 2,
-  RETRY_BASE_DELAY_MS: 500,
-  API_KEY_STORAGE_KEY: 'mcp_api_key'
-};
-
-// ==================== BACKEND / RAG CONFIG ====================
+// ==================== FASTAPI CONFIG ====================
 export const API_CONFIG = {
-  RAG_RESUME_ENDPOINT: '/rag/dynamic_resume'
+  BASE_URL_STORAGE_KEY: 'api_base_url',
+  DEFAULT_BASE_URL: 'http://localhost:8000',
+  API_KEY_STORAGE_KEY: 'api_key',
+  ENDPOINTS: {
+    HEALTH: '/health',
+    MATCH: '/match',
+    AUTOFILL: '/autofill',
+    APPLY_MANUAL: '/apply/manual'
+  }
 };
 
 // ==================== STORAGE KEYS ====================
@@ -31,8 +29,7 @@ export const STORAGE_KEYS = {
   RESUME_BLOBS: 'resume_blobs',
   EXTENSION_STATE: 'extension_state',
   AI_ACTIVITY_LOG: 'ai_activity_log',
-  API_CONFIG: 'api_config',
-  MCP_SESSIONS: 'mcp_sessions'
+  API_CONFIG: 'api_config'
 };
 
 // ==================== DEFAULT USER SETTINGS ====================
@@ -52,8 +49,6 @@ export const DEFAULT_USER_SETTINGS = {
   match_threshold: 85,
   daily_limit: 15,
   preferred_platforms: ['linkedin', 'indeed', 'naukri'],
-  mcp_base_url: 'http://localhost:8080',
-  mcp_enabled: true,
   notion_webhook_url: ''
 };
 
@@ -68,11 +63,9 @@ export const TIMING = {
 
 // ==================== FEATURE FLAGS ====================
 export const FEATURES = {
-  ENABLE_MCP_CHAT: true,
-  ENABLE_DYNAMIC_RESUME: true,
-  ENABLE_AUTO_FILL: true,
-  ENABLE_NOTION_LOGGING: true,
-  ENABLE_TELEMETRY: false
+  ENABLE_AUTO_MATCH: true,
+  ENABLE_AUTOFILL: true,
+  ENABLE_NOTION_QUEUE: true
 };
 
 // ==================== CONTEXT MENU & COMMAND IDs ====================
@@ -98,16 +91,6 @@ export const SUPPORTED_PLATFORMS = [
   'simplyhired.com'
 ];
 
-// ==================== TASK TYPES FOR MCP ====================
-export const MCP_TASK_TYPES = {
-  JOB_ANALYSIS: 'job_analysis',
-  RESUME_HELP: 'resume_help',
-  AUTO_FILL_HELP: 'autofill_help',
-  GENERAL_ASSISTANT: 'general_assistant'
-};
-
-// ==================== MCP REQUEST SCHEMAS ====================
-export const MCP_REQUEST_SCHEMA_VERSION = 'mcp-llm-complete-1';
 export const EXTENSION_VERSION = '1.0.0';
 
 // ==================== STORAGE HELPER ====================
@@ -131,18 +114,19 @@ export const ConfigStorage = {
 // ==================== ENVIRONMENT LOADER ====================
 export async function loadRuntimeConfig() {
   const [apiKey, apiConfig] = await Promise.all([
-    ConfigStorage.get(MCP_CONFIG.API_KEY_STORAGE_KEY),
+    ConfigStorage.get(API_CONFIG.API_KEY_STORAGE_KEY),
     ConfigStorage.get(STORAGE_KEYS.API_CONFIG)
   ]);
-  
+
   return {
-    mcp: {
-      base_url: apiConfig?.mcp_base_url || MCP_CONFIG.BASE_URL,
-      api_key: apiKey || null,
-      enabled: FEATURES.ENABLE_MCP_CHAT
+    api: {
+      base_url: apiConfig?.api_base_url || API_CONFIG.DEFAULT_BASE_URL,
+      api_key: apiKey || null
     },
-    rag: {
-      enabled: FEATURES.ENABLE_DYNAMIC_RESUME
+    features: {
+      auto_match: FEATURES.ENABLE_AUTO_MATCH,
+      autofill: FEATURES.ENABLE_AUTOFILL,
+      notion_queue: FEATURES.ENABLE_NOTION_QUEUE
     },
     notion: {
       webhook_url: apiConfig?.notion_webhook_url || null

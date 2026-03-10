@@ -7,14 +7,23 @@
 
 'use strict';
 
+async function getApiBase() {
+  try {
+    const result = await chrome.storage.local.get('api_base_url');
+    const url = result.api_base_url;
+    return (url && typeof url === 'string' && url.trim()) ? url.trim().replace(/\/$/, '') : 'http://localhost:8000';
+  } catch (_) {
+    return 'http://localhost:8000';
+  }
+}
+
 class SidebarUI {
   constructor() {
     this.state = {
       currentJob: null,
       userProfile: null,
       activityLog: [],
-      chatHistory: [],
-      mcpConnected: false
+      chatHistory: []
     };
 
     this.init();
@@ -100,15 +109,15 @@ class SidebarUI {
       });
     }
 
-    // MCP config
-    const saveMcpBtn = document.getElementById('saveMcpConfig');
-    if (saveMcpBtn) {
-      saveMcpBtn.addEventListener('click', () => this.saveMcpConfig());
+    // API config
+    const saveApiBtn = document.getElementById('saveApiConfig');
+    if (saveApiBtn) {
+      saveApiBtn.addEventListener('click', () => this.saveApiConfig());
     }
 
-    const testMcpBtn = document.getElementById('testMcpConnection');
-    if (testMcpBtn) {
-      testMcpBtn.addEventListener('click', () => this.testMcpConnection());
+    const testApiBtn = document.getElementById('testApiConnection');
+    if (testApiBtn) {
+      testApiBtn.addEventListener('click', () => this.testApiConnection());
     }
 
     // Notion config
@@ -158,9 +167,14 @@ class SidebarUI {
         this.renderActivityLog();
       }
 
-      // Test MCP connection
-      const mcpRes = await this.sendMessage({ type: 'TEST_MCP_CONNECTION' });
-      this.updateConnectionStatus(mcpRes.success);
+      // Test FastAPI connection
+      try {
+        const apiBase = await getApiBase();
+        const healthRes = await fetch(`${apiBase}/health`, { method: 'GET', signal: AbortSignal.timeout(5000) });
+        this.updateConnectionStatus(healthRes.ok);
+      } catch (_) {
+        this.updateConnectionStatus(false);
+      }
 
       // Load Chrome version
       this.loadSystemInfo();
@@ -215,41 +229,28 @@ class SidebarUI {
       return;
     }
 
-    const prompt = `Analyze this job for my profile:
-
-Job: ${this.state.currentJob.title}
-Company: ${this.state.currentJob.company}
-Location: ${this.state.currentJob.location}
-
-Provide:
-1. Match score (0-100)
-2. Key skills match
-3. Missing skills
-4. Application tips`;
-
-    const result = await this.sendMessage({
-      type: 'MCP_COMPLETE',
-      payload: {
-        sessionName: 'job_analysis',
-        taskType: 'job_analysis',
-        prompt,
-        meta: { job_url: this.state.currentJob.url }
-      }
-    });
-
     const analysisContent = document.getElementById('analysisContent');
-    if (analysisContent) {
-      if (result.success) {
+    try {
+      const apiBase = await getApiBase();
+      const res = await fetch(`${apiBase}/match`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ job_url: this.state.currentJob.url }),
+        signal: AbortSignal.timeout(15000),
+      });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const data = await res.json();
+      if (analysisContent) {
         analysisContent.innerHTML = `
-          <div style="white-space: pre-wrap; line-height: 1.6;">${result.completion}</div>
+          <div style="white-space: pre-wrap; line-height: 1.6;">${data.match_reasoning || JSON.stringify(data, null, 2)}</div>
         `;
-        
-        // Switch to analysis tab
         const analysisTab = document.querySelector('[data-tab="analysis"]');
         if (analysisTab) analysisTab.click();
-      } else {
+      }
+    } catch (err) {
+      if (analysisContent) {
         analysisContent.innerHTML = `
-          <div style="color: #ef4444;">Analysis failed: ${result.error || 'Unknown error'}</div>
+          <div style="color: #ef4444;">Analysis failed: ${err.message || 'Unknown error'}</div>
         `;
       }
     }
@@ -269,24 +270,29 @@ Provide:
     // Show typing indicator
     const typingId = this.addChatMessage('assistant', '💭 Thinking...');
 
-    // Send to MCP
-    const result = await this.sendMessage({
-      type: 'MCP_COMPLETE',
-      payload: {
-        sessionName: 'sidebar_default',
-        taskType: 'general_assistant',
-        prompt: message
+    // Send to FastAPI /match
+    try {
+      const apiBase = await getApiBase();
+      const res = await fetch(`${apiBase}/match`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ job_url: this.state.currentJob?.url || '' }),
+        signal: AbortSignal.timeout(15000),
+      });
+
+      const typingEl = document.getElementById(typingId);
+      if (typingEl) typingEl.remove();
+
+      if (res.ok) {
+        const data = await res.json();
+        this.addChatMessage('assistant', data.match_reasoning || JSON.stringify(data));
+      } else {
+        this.addChatMessage('assistant', `❌ Error: HTTP ${res.status}`);
       }
-    });
-
-    // Remove typing indicator
-    const typingEl = document.getElementById(typingId);
-    if (typingEl) typingEl.remove();
-
-    if (result.success) {
-      this.addChatMessage('assistant', result.completion);
-    } else {
-      this.addChatMessage('assistant', `❌ Error: ${result.error || 'Unknown error'}`);
+    } catch (err) {
+      const typingEl = document.getElementById(typingId);
+      if (typingEl) typingEl.remove();
+      this.addChatMessage('assistant', `❌ Error: ${err.message || 'Unknown error'}`);
     }
   }
 
@@ -330,8 +336,8 @@ Provide:
     }
 
     this.sendMessage({
-      type: 'CLEAR_MCP_SESSION',
-      payload: { sessionName: 'sidebar_default' }
+      type: 'CLEAR_CHAT_HISTORY',
+      payload: {}
     });
   }
 
@@ -387,68 +393,64 @@ Provide:
     }
   }
 
-  async saveMcpConfig() {
-    const apiKey = document.getElementById('mcpApiKey')?.value;
+  async saveApiConfig() {
+    const apiBaseInput = document.getElementById('apiBaseUrl');
+    const apiBase = apiBaseInput?.value?.trim();
 
-    if (!apiKey) {
-      alert('Please enter an API key');
+    if (!apiBase) {
+      alert('Please enter an API base URL');
       return;
     }
 
-    const result = await this.sendMessage({
-      type: 'UPDATE_MCP_API_KEY',
-      payload: { apiKey }
-    });
-
-    if (result.success) {
-      alert('✅ MCP API key saved!');
-      const input = document.getElementById('mcpApiKey');
-      if (input) input.value = '';
-    } else {
-      alert('❌ Failed to save API key');
-    }
+    await chrome.storage.local.set({ api_base_url: apiBase });
+    alert('✅ API base URL saved!');
   }
 
-  async testMcpConnection() {
-    const btn = document.getElementById('testMcpConnection');
+  async testApiConnection() {
+    const btn = document.getElementById('testApiConnection');
     if (btn) {
       btn.textContent = 'Testing...';
       btn.disabled = true;
     }
 
-    const result = await this.sendMessage({ type: 'TEST_MCP_CONNECTION' });
+    let connected = false;
+    try {
+      const apiBase = await getApiBase();
+      const res = await fetch(`${apiBase}/health`, { method: 'GET', signal: AbortSignal.timeout(5000) });
+      connected = res.ok;
+    } catch (_) {
+      connected = false;
+    }
 
     if (btn) {
       btn.textContent = 'Test Connection';
       btn.disabled = false;
     }
 
-    this.updateConnectionStatus(result.success);
-    alert(result.success ? '✅ MCP Connected!' : '❌ Connection Failed: ' + result.message);
+    this.updateConnectionStatus(connected);
+    alert(connected ? '✅ API Connected!' : '❌ Connection Failed');
   }
 
   updateConnectionStatus(connected) {
     const statusDot = document.getElementById('statusDot');
     const statusText = document.getElementById('statusText');
-    const mcpStatus = document.getElementById('mcpStatus');
+    const apiStatus = document.getElementById('apiStatus');
 
     if (connected) {
       if (statusDot) statusDot.className = 'status-dot connected';
       if (statusText) statusText.textContent = 'Connected';
-      if (mcpStatus) {
-        mcpStatus.textContent = 'Connected';
-        mcpStatus.style.color = '#10b981';
+      if (apiStatus) {
+        apiStatus.textContent = 'Connected';
+        apiStatus.style.color = '#10b981';
       }
     } else {
       if (statusDot) statusDot.className = 'status-dot disconnected';
       if (statusText) statusText.textContent = 'Disconnected';
-      if (mcpStatus) {
-        mcpStatus.textContent = 'Disconnected';
-        mcpStatus.style.color = '#ef4444';
+      if (apiStatus) {
+        apiStatus.textContent = 'Disconnected';
+        apiStatus.style.color = '#ef4444';
       }
     }
-
-    this.state.mcpConnected = connected;
   }
 
   async saveNotionConfig() {
