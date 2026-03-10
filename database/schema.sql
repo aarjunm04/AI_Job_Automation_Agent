@@ -156,3 +156,8 @@ CREATE TABLE IF NOT EXISTS schema_versions (
     version     VARCHAR(16) PRIMARY KEY,
     applied_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- Migrations for single-source-of-truth JSONB settings
+ALTER TABLE users ADD COLUMN IF NOT EXISTS user_settings JSONB NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS platform_settings JSONB NOT NULL DEFAULT '{}'::jsonb;
+DROP TABLE IF EXISTS config_limits;

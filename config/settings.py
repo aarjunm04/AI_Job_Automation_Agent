@@ -90,47 +90,9 @@ class RunConfig:
             platforms if not reached.
         max_playwright_sessions: Maximum concurrent Playwright browser
             sessions.
-        auto_apply_enabled: When ``False``, all jobs are routed to the
-            manual queue regardless of score.
-        dry_run: When ``True``, form submissions are simulated and no real
-            applications are submitted.
-        resume_dir: Directory containing resume PDF variants.
-        default_resume: Filename of the general-purpose resume to use when
-            no domain-specific variant is selected.
-        search_query: Default job-search query string passed to scrapers.
         log_level: Python ``logging`` level string (e.g. ``"INFO"``).
     """
-
-    jobs_per_run_target: int = field(
-        default_factory=lambda: int(os.getenv("JOBS_PER_RUN_TARGET", "150"))
-    )
-    jobs_per_run_minimum: int = field(
-        default_factory=lambda: int(os.getenv("JOBS_PER_RUN_MINIMUM", "100"))
-    )
-    max_playwright_sessions: int = field(
-        default_factory=lambda: int(os.getenv("MAX_PLAYWRIGHT_SESSIONS", "5"))
-    )
-    auto_apply_enabled: bool = field(
-        default_factory=lambda: os.getenv(
-            "AUTO_APPLY_ENABLED", "true"
-        ).lower()
-        == "true"
-    )
-    dry_run: bool = field(
-        default_factory=lambda: os.getenv("DRY_RUN", "false").lower() == "true"
-    )
-    resume_dir: str = field(
-        default_factory=lambda: os.getenv("RESUME_DIR", "app/resumes")
-    )
-    default_resume: str = field(
-        default_factory=lambda: os.getenv("DEFAULT_RESUME", "AarjunGen.pdf")
-    )
-    search_query: str = field(
-        default_factory=lambda: os.getenv(
-            "SEARCH_QUERY",
-            "AI ML Data Science Automation Engineer remote",
-        )
-    )
+    
     log_level: str = field(
         default_factory=lambda: os.getenv("LOG_LEVEL", "INFO")
     )
