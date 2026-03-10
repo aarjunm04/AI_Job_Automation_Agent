@@ -1,22 +1,27 @@
 /* ══════════════════════════════════════════════════════════════════
-   popup.css — Job Agent Manual Apply  |  Chrome Extension v1
-   Full dark-mode stylesheet with CSS custom properties
+   popup.css — AI Job Agent Chrome Extension v1
+   Full-height right-side sidebar panel. Dark theme.
    ══════════════════════════════════════════════════════════════════ */
 
 /* ── Colour Tokens ── */
 :root {
-  --bg-primary: #1a1a2e;
-  --bg-card: #16213e;
-  --bg-hover: #0f3460;
-  --accent-green: #4ade80;
-  --accent-amber: #fbbf24;
-  --accent-red: #f87171;
-  --text-primary: #e0e0e0;
-  --text-secondary: #9ca3af;
-  --border: #2d3748;
-  --score-high: #4ade80;
-  --score-mid: #fbbf24;
-  --score-low: #f87171;
+  --bg-primary:    #1a1a2e;
+  --bg-card:       #16213e;
+  --bg-hover:      #0f3460;
+  --accent:        #7c3aed;
+  --accent-hover:  #6d28d9;
+  --btn-queue:     #2563eb;
+  --btn-queue-hov: #1d4ed8;
+  --btn-applied:   #16a34a;
+  --btn-applied-hov:#15803d;
+  --text-primary:  #e0e0e0;
+  --text-secondary:#9ca3af;
+  --border:        #2d3748;
+  --score-green:   #4ade80;
+  --score-amber:   #fbbf24;
+  --score-red:     #f87171;
+  --conn-green:    #22c55e;
+  --conn-red:      #ef4444;
 }
 
 /* ── Reset & Base ── */
@@ -28,441 +33,327 @@
 
 body {
   width: 380px;
-  min-height: 200px;
-  max-height: 580px;
-  overflow-y: auto;
+  min-height: 100vh;
   background: var(--bg-primary);
   color: var(--text-primary);
   font-family: system-ui, -apple-system, sans-serif;
   font-size: 13px;
   line-height: 1.5;
+  display: flex;
+  flex-direction: column;
 }
 
-/* ── Scrollbar ── */
-body::-webkit-scrollbar {
-  width: 6px;
-}
-
-body::-webkit-scrollbar-track {
-  background: var(--bg-primary);
-}
-
-body::-webkit-scrollbar-thumb {
-  background: var(--border);
-  border-radius: 3px;
-}
-
-body::-webkit-scrollbar-thumb:hover {
-  background: var(--bg-hover);
-}
+/* ── Custom Scrollbar ── */
+::-webkit-scrollbar        { width: 5px; }
+::-webkit-scrollbar-track  { background: var(--bg-primary); }
+::-webkit-scrollbar-thumb  { background: var(--border); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--bg-hover); }
 
 /* ══════════════════════════════════════════════════════════════════
-   1. POPUP HEADER
+   1. HEADER BAR
    ══════════════════════════════════════════════════════════════════ */
-.popup-header {
+.sidebar-header {
   display: flex;
-  flex-direction: row;
-  justify-content: space-between;
   align-items: center;
-  padding: 12px 16px;
+  justify-content: space-between;
+  padding: 14px 16px 12px;
   border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
 }
 
 .header-title {
   font-weight: 700;
   font-size: 14px;
-  color: var(--text-primary);
+  letter-spacing: 0.02em;
 }
 
-.queue-badge {
-  background: var(--accent-green);
-  color: #000;
-  padding: 2px 8px;
-  border-radius: 12px;
-  font-size: 11px;
-  font-weight: 700;
-  line-height: 1.4;
+/* Connection status dot */
+.conn-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--text-secondary);
+  display: inline-block;
+  flex-shrink: 0;
+  transition: background 0.3s ease, box-shadow 0.3s ease;
+}
+
+.conn-dot.connected {
+  background: var(--conn-green);
+  box-shadow: 0 0 6px var(--conn-green);
+}
+
+.conn-dot.disconnected {
+  background: var(--conn-red);
+  box-shadow: 0 0 6px var(--conn-red);
 }
 
 /* ══════════════════════════════════════════════════════════════════
-   2. POPUP BODY
+   2. JOB SCORE CARD
    ══════════════════════════════════════════════════════════════════ */
-.popup-body {
-  padding: 12px 16px;
+.score-card {
+  margin: 12px 12px 0;
+  background: var(--bg-card);
+  border-radius: 10px;
+  border-left: 4px solid var(--accent);
+  padding: 14px 14px 14px 12px;
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+  flex-shrink: 0;
+}
+
+.score-badge-wrap {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
 }
 
-/* ══════════════════════════════════════════════════════════════════
-   3. JOB INFO CARD
-   ══════════════════════════════════════════════════════════════════ */
-.job-info-card {
-  background: var(--bg-card);
-  border-radius: 8px;
-  padding: 10px 12px;
-}
-
-.job-url {
-  font-size: 11px;
+.score-badge {
+  font-size: 36px;
+  font-weight: 800;
+  line-height: 1;
   color: var(--text-secondary);
+}
+
+/* Fit score colour coding */
+.score-badge.high  { color: var(--score-green); }
+.score-badge.amber { color: var(--score-amber); }
+.score-badge.low   { color: var(--score-red);   }
+
+.score-badge-label {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-secondary);
+}
+
+.score-meta {
+  flex: 1;
+  min-width: 0;
+}
+
+.score-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 320px;
 }
 
-.job-platform {
+.score-company {
   font-size: 11px;
-  color: var(--accent-green);
+  color: var(--accent);
   font-weight: 600;
-  text-transform: uppercase;
-}
-
-/* ══════════════════════════════════════════════════════════════════
-   4. SCORE PANEL
-   ══════════════════════════════════════════════════════════════════ */
-.score-panel {
-  background: var(--bg-card);
-  border-radius: 8px;
-  padding: 12px;
-  text-align: center;
-}
-
-.score-number {
-  font-size: 48px;
-  font-weight: 800;
-  line-height: 1;
-}
-
-.score-high {
-  color: var(--score-high);
-}
-
-.score-mid {
-  color: var(--score-mid);
-}
-
-.score-low {
-  color: var(--score-low);
-}
-
-.score-label {
-  font-size: 11px;
-  color: var(--text-secondary);
-  margin-top: 2px;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
+  margin-top: 1px;
 }
 
 .score-reasoning {
-  font-size: 12px;
+  font-size: 11px;
   color: var(--text-secondary);
-  margin-top: 8px;
-  text-align: left;
+  margin-top: 6px;
   line-height: 1.5;
 }
 
 /* ══════════════════════════════════════════════════════════════════
-   5. RESUME CARD
+   3. RESUME SUGGESTION
    ══════════════════════════════════════════════════════════════════ */
-.resume-card {
+.resume-section {
+  margin: 10px 12px 0;
   background: var(--bg-card);
   border-radius: 8px;
   padding: 10px 12px;
-  display: flex;
-  align-items: center;
-  gap: 10px;
+  flex-shrink: 0;
 }
 
-.resume-icon {
-  font-size: 20px;
-  flex-shrink: 0;
+.resume-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+}
+
+.resume-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
 }
 
 .resume-name {
   font-weight: 600;
   font-size: 13px;
   color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.resume-score {
-  color: var(--accent-green);
-  font-size: 12px;
+.similarity-badge {
+  background: var(--bg-hover);
+  color: var(--score-green);
+  font-size: 10px;
   font-weight: 700;
-  margin-left: auto;
+  padding: 2px 7px;
+  border-radius: 10px;
   flex-shrink: 0;
 }
 
 /* ══════════════════════════════════════════════════════════════════
-   6. TALKING POINTS (Accordion)
+   4. TALKING POINTS
    ══════════════════════════════════════════════════════════════════ */
-.talking-points {
+.tp-section {
+  margin: 10px 12px 0;
   background: var(--bg-card);
   border-radius: 8px;
-  overflow: hidden;
+  padding: 10px 12px 12px;
+  flex-shrink: 0;
 }
 
 .tp-header {
-  padding: 10px 12px;
-  cursor: pointer;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  user-select: none;
-  transition: background 0.15s ease;
-}
-
-.tp-header:hover {
-  background: var(--bg-hover);
-}
-
-.tp-header-text {
-  font-weight: 600;
-  font-size: 13px;
-  color: var(--text-primary);
-}
-
-.tp-chevron {
-  transition: transform 0.2s ease;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
   color: var(--text-secondary);
-  font-size: 12px;
+  margin-bottom: 8px;
 }
 
-.tp-chevron.open {
-  transform: rotate(180deg);
-}
-
-.tp-body {
-  max-height: 0;
-  overflow: hidden;
-  transition: max-height 0.25s ease;
-  padding: 0 12px;
-}
-
-.tp-body.open {
-  max-height: 300px;
-  padding: 0 12px 12px 12px;
+.tp-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
 }
 
 .tp-item {
   font-size: 12px;
   color: var(--text-secondary);
-  padding: 4px 0;
-  border-bottom: 1px solid var(--border);
+  padding-left: 12px;
+  position: relative;
   line-height: 1.5;
 }
 
-.tp-item:last-child {
-  border-bottom: none;
-}
-
 .tp-item::before {
-  content: "→ ";
+  content: "→";
+  position: absolute;
+  left: 0;
+  color: var(--accent);
+}
+
+.tp-placeholder {
+  font-style: italic;
+}
+
+.tp-placeholder::before {
+  display: none;
 }
 
 /* ══════════════════════════════════════════════════════════════════
-   7. AUTOFILL SECTION
+   5. ACTION BUTTONS ROW
    ══════════════════════════════════════════════════════════════════ */
-.autofill-section {
+.actions-row {
+  margin: 12px 12px 0;
   display: flex;
-  flex-direction: column;
-  gap: 6px;
+  gap: 8px;
+  flex-shrink: 0;
 }
 
-.autofill-status {
-  font-size: 11px;
-  color: var(--text-secondary);
-  min-height: 16px;
-}
-
-/* ══════════════════════════════════════════════════════════════════
-   8. NOTES SECTION
-   ══════════════════════════════════════════════════════════════════ */
-.notes-section {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.notes-label {
-  font-size: 11px;
-  color: var(--text-secondary);
-}
-
-.notes-input {
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  color: var(--text-primary);
-  padding: 8px;
-  font-size: 12px;
-  font-family: inherit;
-  resize: vertical;
-  min-height: 60px;
-  width: 100%;
-  box-sizing: border-box;
-  outline: none;
-  transition: border-color 0.15s ease;
-}
-
-.notes-input:focus {
-  border-color: var(--accent-green);
-}
-
-.notes-input::placeholder {
-  color: var(--text-secondary);
-}
-
-/* ══════════════════════════════════════════════════════════════════
-   9. BUTTONS
-   ══════════════════════════════════════════════════════════════════ */
 .btn {
-  display: block;
-  width: 100%;
-  padding: 10px;
+  flex: 1;
+  padding: 9px 4px;
   border-radius: 8px;
-  font-size: 13px;
-  font-weight: 600;
+  font-size: 11px;
+  font-weight: 700;
   cursor: pointer;
   border: none;
-  transition: background 0.15s ease;
-  text-align: center;
   font-family: inherit;
-}
-
-.btn-primary {
-  background: var(--accent-green);
-  color: #000;
-}
-
-.btn-primary:hover {
-  background: #22c55e;
-}
-
-.btn-secondary {
-  background: var(--bg-card);
-  color: var(--text-primary);
-  border: 1px solid var(--border);
-}
-
-.btn-secondary:hover {
-  background: var(--bg-hover);
-}
-
-.btn-success {
-  background: #166534;
-  color: var(--accent-green);
-  border: 1px solid var(--accent-green);
+  text-align: center;
+  transition: background 0.15s ease, opacity 0.15s ease;
+  white-space: nowrap;
 }
 
 .btn:disabled {
-  opacity: 0.4;
+  opacity: 0.35;
   cursor: not-allowed;
-  pointer-events: none;
+}
+
+.btn-autofill {
+  background: var(--accent);
+  color: #fff;
+}
+
+.btn-autofill:not(:disabled):hover {
+  background: var(--accent-hover);
+}
+
+.btn-queue {
+  background: var(--btn-queue);
+  color: #fff;
+}
+
+.btn-queue:not(:disabled):hover {
+  background: var(--btn-queue-hov);
+}
+
+.btn-applied {
+  background: var(--btn-applied);
+  color: #fff;
+}
+
+.btn-applied:not(:disabled):hover {
+  background: var(--btn-applied-hov);
 }
 
 /* ══════════════════════════════════════════════════════════════════
-   10. SPINNER
+   6. STATUS LOG
    ══════════════════════════════════════════════════════════════════ */
-.spinner-container {
+.status-log-section {
+  margin: 10px 12px 14px;
+  flex: 1;
   display: flex;
-  justify-content: center;
-  align-items: center;
-  padding: 40px 0;
+  flex-direction: column;
+  min-height: 0;
 }
 
-.spinner {
-  width: 28px;
-  height: 28px;
-  border: 3px solid var(--border);
-  border-top-color: var(--accent-green);
-  border-radius: 50%;
-  animation: spin 0.8s linear infinite;
-}
-
-@keyframes spin {
-  0% {
-    transform: rotate(0deg);
-  }
-  100% {
-    transform: rotate(360deg);
-  }
-}
-
-/* ══════════════════════════════════════════════════════════════════
-   11. ERROR CARD
-   ══════════════════════════════════════════════════════════════════ */
-.error-card {
-  background: #2d1515;
-  border: 1px solid var(--accent-red);
-  border-radius: 8px;
-  padding: 12px;
-  font-size: 12px;
-  color: var(--accent-red);
-}
-
-.error-title {
-  font-weight: 700;
-  margin-bottom: 4px;
-}
-
-.error-detail {
+.status-log-label {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
   color: var(--text-secondary);
+  margin-bottom: 5px;
 }
 
-/* ══════════════════════════════════════════════════════════════════
-   12. POPUP FOOTER
-   ══════════════════════════════════════════════════════════════════ */
-.popup-footer {
-  padding: 8px 16px;
-  border-top: 1px solid var(--border);
+.status-log {
+  background: var(--bg-card);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-family: 'SFMono-Regular', 'Consolas', 'Menlo', monospace;
+  font-size: 11px;
+  overflow-y: auto;
+  max-height: 120px;
+  flex-shrink: 0;
   display: flex;
-  justify-content: space-between;
-  align-items: center;
+  flex-direction: column;
+  gap: 3px;
 }
 
-.footer-timestamp {
-  font-size: 10px;
+.log-entry {
   color: var(--text-secondary);
+  line-height: 1.4;
+  word-break: break-word;
 }
 
-.footer-settings {
-  font-size: 11px;
-  color: var(--accent-green);
-  cursor: pointer;
-  text-decoration: none;
+.log-entry .log-ts {
+  color: var(--border);
+  margin-right: 4px;
+  user-select: none;
 }
 
-.footer-settings:hover {
-  text-decoration: underline;
-}
-
-/* ══════════════════════════════════════════════════════════════════
-   13. SUCCESS BANNER
-   ══════════════════════════════════════════════════════════════════ */
-.success-banner {
-  background: #14532d;
-  border: 1px solid var(--accent-green);
-  border-radius: 8px;
-  padding: 12px;
-  text-align: center;
-}
-
-.success-icon {
-  font-size: 24px;
-  display: block;
-  margin-bottom: 4px;
-}
-
-.success-text {
-  font-weight: 700;
-  color: var(--accent-green);
-  font-size: 13px;
-}
-
-.success-sub {
-  font-size: 11px;
-  color: var(--text-secondary);
-  margin-top: 4px;
-}
+.log-entry.log-ok   { color: var(--score-green); }
+.log-entry.log-warn { color: var(--score-amber); }
+.log-entry.log-err  { color: var(--score-red); }

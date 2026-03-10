@@ -1,0 +1,17 @@
+{
+    "USERNAME": "",
+    "USER_EMAIL": "",
+    "USER_PHONE": "",
+    "USER_LINKEDIN_URL": "",
+    "USER_PORTFOLIO_URL": "",
+    "USER_LOCATION": "Remote",
+    "USER_YEARS_EXPERIENCE": "2",
+    "default_resume": "AarjunGen.pdf",
+    "dry_run": false,
+    "auto_apply_enabled": true,
+    "jobs_per_run_target": 150,
+    "jobs_per_run_minimum": 100,
+    "max_playwright_sessions": 5,
+    "search_query": "AI ML Data Science Automation Engineer remote",
+    "log_level": "INFO"
+}

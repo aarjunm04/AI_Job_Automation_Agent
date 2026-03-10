@@ -22,7 +22,9 @@ CREATE TABLE IF NOT EXISTS users (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     email TEXT UNIQUE NOT NULL,
     name TEXT NOT NULL,
-    preferences_json JSONB DEFAULT '{}'
+    preferences_json JSONB DEFAULT '{}',
+    user_settings JSONB NOT NULL DEFAULT '{}'::jsonb,
+    platform_settings JSONB NOT NULL DEFAULT '{}'::jsonb
 );
 
 -- =============================================================================

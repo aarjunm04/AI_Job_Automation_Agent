@@ -1,0 +1,22 @@
+name: Sync Config JSON to Postgres
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'config/user_settings.json'
+      - 'config/platform_settings.json'
+
+jobs:
+  sync_config:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Sync Config to Postgres
+        run: |
+          USER_SETTINGS=$(cat config/user_settings.json)
+          PLATFORM_SETTINGS=$(cat config/platform_settings.json)
+          sudo apt-get install -y postgresql-client
+          psql "${{ secrets.SUPABASE_URL }}" -c "UPDATE users SET user_settings = '$USER_SETTINGS'::jsonb, platform_settings = '$PLATFORM_SETTINGS'::jsonb WHERE id = (SELECT id FROM users ORDER BY created_at LIMIT 1);"
+          echo "Config sync complete"

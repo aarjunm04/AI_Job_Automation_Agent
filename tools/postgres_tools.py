@@ -44,6 +44,8 @@ __all__ = [
     "get_queued_jobs",
     "get_platform_config",
     "get_run_stats",
+    "get_recent_applications",
+    "get_pending_manual_queue",
 ]
 
 
@@ -841,8 +843,58 @@ def get_run_stats(run_batch_id: str) -> str:
         finally:
             if conn:
                 conn.close()
-
     try:
         return _execute()
     except Exception as e:
         return json.dumps({"error": "get_run_stats_failed", "detail": str(e)})
+
+@tool
+@operation
+def get_recent_applications(limit: int = 20) -> str:
+    """
+    Retrieve most recent application records.
+    """
+    @_with_retry(max_retries=3)
+    def _execute() -> str:
+        conn = None
+        try:
+            conn = _get_conn()
+            cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+            cursor.execute("SELECT * FROM applications ORDER BY submitted_at DESC LIMIT %s", (limit,))
+            return json.dumps([dict(row) for row in cursor.fetchall()], default=str)
+        except Exception as e:
+            logger.error(f"Failed to get recent applications: {e}")
+            return json.dumps({"error": "get_recent_applications_failed", "detail": str(e)})
+        finally:
+            if conn:
+                conn.close()
+    try:
+        return _execute()
+    except Exception as e:
+        return json.dumps({"error": "get_recent_applications_failed", "detail": str(e)})
+
+
+@tool
+@operation
+def get_pending_manual_queue(limit: int = 50) -> str:
+    """
+    Retrieve applications marked as manual_queued.
+    """
+    @_with_retry(max_retries=3)
+    def _execute() -> str:
+        conn = None
+        try:
+            conn = _get_conn()
+            cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+            cursor.execute("SELECT * FROM applications WHERE status = 'manual_queued' ORDER BY submitted_at ASC LIMIT %s", (limit,))
+            return json.dumps([dict(row) for row in cursor.fetchall()], default=str)
+        except Exception as e:
+            logger.error(f"Failed to get pending manual queue: {e}")
+            return json.dumps({"error": "get_pending_manual_queue_failed", "detail": str(e)})
+        finally:
+            if conn:
+                conn.close()
+    try:
+        return _execute()
+    except Exception as e:
+        return json.dumps({"error": "get_pending_manual_queue_failed", "detail": str(e)})
