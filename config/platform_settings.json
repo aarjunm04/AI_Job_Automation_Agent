@@ -1,0 +1,114 @@
+{
+    "_comment": "Migrated: platform_limits from platforms.json, weights from scoring_weights.json, queries from search_queries.json + extensions.",
+    "platform_limits": {
+        "linkedin": {
+            "daily_jobs": 120,
+            "min_delay_ms": 2000,
+            "max_concurrent": 1
+        },
+        "indeed": {
+            "daily_jobs": 120,
+            "min_delay_ms": 2000,
+            "max_concurrent": 1
+        },
+        "remoteok": {
+            "daily_jobs": 100,
+            "min_delay_ms": 5000,
+            "max_concurrent": 1
+        },
+        "himalayas": {
+            "daily_jobs": 100,
+            "min_delay_ms": 3000,
+            "max_concurrent": 1
+        },
+        "wellfound": {
+            "daily_jobs": 80,
+            "min_delay_ms": 3000,
+            "max_concurrent": 1
+        },
+        "weworkremotely": {
+            "daily_jobs": 60,
+            "min_delay_ms": 3000,
+            "max_concurrent": 1
+        },
+        "ycombinator": {
+            "daily_jobs": 60,
+            "min_delay_ms": 3000,
+            "max_concurrent": 1
+        },
+        "arc": {
+            "daily_jobs": 60,
+            "min_delay_ms": 3000,
+            "max_concurrent": 1
+        },
+        "turing": {
+            "daily_jobs": 50,
+            "min_delay_ms": 5000,
+            "max_concurrent": 1
+        },
+        "crossover": {
+            "daily_jobs": 40,
+            "min_delay_ms": 5000,
+            "max_concurrent": 1
+        },
+        "nodesk": {
+            "daily_jobs": 50,
+            "min_delay_ms": 3000,
+            "max_concurrent": 1
+        },
+        "toptal": {
+            "daily_jobs": 40,
+            "min_delay_ms": 5000,
+            "max_concurrent": 1
+        },
+        "remotive": {
+            "daily_jobs": 80,
+            "min_delay_ms": 3000,
+            "max_concurrent": 1
+        },
+        "jooble": {
+            "daily_jobs": 500,
+            "min_delay_ms": 2000,
+            "max_concurrent": 1
+        },
+        "serpapi": {
+            "daily_jobs": 33,
+            "min_delay_ms": 2000,
+            "max_concurrent": 4
+        }
+    },
+    "scoring_weights": {
+        "remote": 0.3,
+        "salary_usd": 0.25,
+        "python": 0.15,
+        "llm": 0.2,
+        "ai": 0.1,
+        "ml": 0.15
+    },
+    "search_queries": [
+        "AI Engineer remote India Nagpur",
+        "Machine Learning remote Python",
+        "Data Scientist LLM CrewAI",
+        "Automation Engineer AI remote",
+        "ML Engineer Data Science remote"
+    ],
+    "job_filters": {
+        "min_salary_usd": 150000,
+        "max_age_days": 30,
+        "must_keywords": [
+            "Python",
+            "CrewAI",
+            "LLM",
+            "Docker"
+        ],
+        "exclude_keywords": [
+            "onsite",
+            "hybrid"
+        ],
+        "locations": [
+            "remote",
+            "India",
+            "Nagpur"
+        ]
+    }
+}

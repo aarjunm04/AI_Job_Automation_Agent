@@ -1,0 +1,12 @@
+{
+    "_comment": "GitHub Action sync source — Python reads from DB only. Migrated from java.env + user_preferences.json.",
+    "username": "Aarjun",
+    "user_email": "aarjun@speedyapply.com",
+    "user_phone": "+91-9876543210",
+    "default_resume": "Aarjun_ml_engineer.pdf",
+    "dry_run": true,
+    "auto_apply_enabled": false,
+    "jobs_per_run_target": 50,
+    "search_query_override": null,
+    "notion_db_id": "from_java.env_NOTION_DB_ID or null"
+}

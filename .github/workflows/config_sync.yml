@@ -1,0 +1,31 @@
+name: Sync Config JSON to Postgres DB
+on:
+  push:
+    paths:
+      - 'config/user_settings.json'
+      - 'config/platform_settings.json'
+    branches: [ main ]
+jobs:
+  sync-db:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Setup PostgreSQL client
+      uses: harmon758/postgresql-client-action@v1
+      with:
+        postgresql_host: ${{ secrets.SUPABASE_HOST || 'db' }}
+        postgresql_port: 5432
+        postgresql_username: ${{ secrets.SUPABASE_USER || 'postgres' }}
+        postgresql_password: ${{ secrets.SUPABASE_PASSWORD }}
+        postgresql_db: ${{ secrets.POSTGRES_DB || 'postgres' }}
+    - name: Sync configs
+      run: |
+        USER_SETTINGS=$(jq -c . config/user_settings.json)
+        PLATFORM_SETTINGS=$(jq -c . config/platform_settings.json)
+        psql "postgresql://${{ secrets.SUPABASE_USER }}:${{ secrets.SUPABASE_PASSWORD }}@${{ secrets.SUPABASE_HOST }}:5432/${{ secrets.POSTGRES_DB }}" -c "
+          UPDATE users SET 
+            user_settings = '$USER_SETTINGS'::jsonb,
+            platform_settings = '$PLATFORM_SETTINGS'::jsonb
+          WHERE id = 1;
+        "
+        echo "✅ Synced user_settings & platform_settings to users.id=1"
