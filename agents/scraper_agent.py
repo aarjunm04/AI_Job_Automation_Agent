@@ -9,9 +9,11 @@ All platform configuration is read from config/platforms.json.
 import os
 import json
 import logging
+import time
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 
+import httpx
 from crewai import Agent, Task, Crew, Process
 import agentops
 from agentops.sdk.decorators import agent, operation
@@ -20,7 +22,6 @@ from integrations.llm_interface import LLMInterface
 from tools.scraper_tools import (
     run_jobspy_scrape,
     run_rest_api_scrape,
-    run_playwright_scrape,
     run_serpapi_scrape,
     run_safety_net_scrape,
     normalise_and_dedup,
@@ -31,12 +32,17 @@ from tools.postgres_tools import (
     create_run_batch,
     update_run_batch_stats,
     get_platform_config,
+    _fetch_user_config,
 )
-from tools.budget_tools import record_llm_cost, check_monthly_budget
+from tools.budget_tools import record_llm_cost, check_monthly_budget, check_xai_run_cap
 
 # Module-level logger
 logger = logging.getLogger(__name__)
 logger.setLevel(os.getenv("LOG_LEVEL", "INFO"))
+
+# Scraper service connection — set in docker-compose environment block
+SCRAPER_SERVICE_URL: str = os.getenv("SCRAPER_SERVICE_URL", "http://localhost:8001")
+SCRAPER_API_KEY: str = os.getenv("SCRAPER_SERVICE_API_KEY", "")
 
 # Module-level platform config cache
 _platform_config: Optional[Dict[str, Any]] = None
@@ -94,6 +100,7 @@ class ScraperAgent:
         self.llm_interface = LLMInterface()
         self.llm = self.llm_interface.get_llm("SCRAPER_AGENT")
         self.platform_config = _load_platform_config()
+        self.run_state: Dict[str, Any] = {}
         self.logger = logging.getLogger(self.__class__.__name__)
 
         self.logger.info(
@@ -124,7 +131,6 @@ class ScraperAgent:
             tools=[
                 run_jobspy_scrape,
                 run_rest_api_scrape,
-                run_playwright_scrape,
                 run_serpapi_scrape,
                 run_safety_net_scrape,
                 normalise_and_dedup,
@@ -175,19 +181,10 @@ STEP 3: SerpAPI Scrape (Google Jobs)
   - location: "Remote"
   - results_wanted: 25
 
-STEP 4: Playwright Scrape (Primary Platforms)
-Run these platforms ONE AT A TIME in this exact order:
-1. wellfound
-2. weworkremotely
-3. ycombinator
-4. arc
-5. turing
-6. crossover
-
-For each platform, call run_playwright_scrape with:
-- run_batch_id: {self.run_batch_id}
-- platform: [platform_name]
-- max_jobs: 30
+STEP 4: Playwright Scrape (Delegated to playwright-scraper container)
+Playwright scraping is handled by the dedicated ai_playwright_scraper container
+via HTTP. This step is executed automatically — do NOT call any tool for this.
+The playwright results will be merged into the job pool before normalization.
 
 STEP 5: Check Total Job Count
 - Call get_scrape_summary with run_batch_id: {self.run_batch_id}
@@ -222,6 +219,95 @@ IMPORTANT:
             ),
             agent=agent,
         )
+
+    def _run_playwright_via_http(self) -> Dict[str, Any]:
+        """Delegate playwright scraping to the ai_playwright_scraper container.
+
+        Fetches platform and query config from Postgres via ``_fetch_user_config``
+        and sends a single HTTP POST to ``{SCRAPER_SERVICE_URL}/scrape``.  Retries
+        up to 3 times with exponential back-off on connection errors.
+
+        Returns:
+            Dict with keys: run_batch_id, jobs_found, jobs (list[dict]),
+            platforms_scraped, duration_seconds on success; or
+            {success, reason, total_jobs, jobs, aborted} on failure.
+        """
+        playwright_platforms: List[str] = [
+            "wellfound", "weworkremotely", "ycombinator", "arc", "turing", "crossover"
+        ]
+        search_queries: List[str] = [
+            os.getenv("SEARCH_QUERY", "AI ML Data Science Automation Engineer")
+        ]
+        max_jobs: int = int(os.getenv("JOBS_PER_RUN_TARGET", "150"))
+
+        try:
+            cfg: Dict[str, Any] = _fetch_user_config()
+            platform_settings: Dict[str, Any] = cfg.get("platform_settings", {})
+            custom_platforms: List[str] = platform_settings.get("playwright_platforms", [])
+            if custom_platforms:
+                playwright_platforms = custom_platforms
+            custom_queries: List[str] = platform_settings.get("search_queries", [])
+            if custom_queries:
+                search_queries = custom_queries
+            target: int = int(
+                cfg.get("user_settings", {}).get(
+                    "jobs_per_run_target",
+                    os.getenv("JOBS_PER_RUN_TARGET", "150"),
+                )
+            )
+            max_jobs = target
+        except Exception as cfg_exc:  # noqa: BLE001
+            self.logger.warning(
+                "_run_playwright_via_http: config fetch failed (%s), using env defaults",
+                cfg_exc,
+            )
+
+        for attempt in range(3):
+            try:
+                with httpx.Client(timeout=60.0) as client:
+                    resp = client.post(
+                        f"{SCRAPER_SERVICE_URL}/scrape",
+                        headers={
+                            "X-API-Key": SCRAPER_API_KEY,
+                            "Content-Type": "application/json",
+                        },
+                        json={
+                            "run_batch_id": self.run_batch_id,
+                            "search_queries": search_queries,
+                            "platforms": playwright_platforms,
+                            "max_jobs": max_jobs,
+                        },
+                    )
+                if resp.status_code == 200:
+                    data: Dict[str, Any] = resp.json()
+                    self.logger.info(
+                        "_run_playwright_via_http: %d jobs from playwright-scraper in %.2fs",
+                        data.get("jobs_found", 0),
+                        data.get("duration_seconds", 0.0),
+                    )
+                    return data
+                self.logger.error(
+                    "_run_playwright_via_http: scraper service returned HTTP %d (attempt %d/3)",
+                    resp.status_code,
+                    attempt + 1,
+                )
+            except httpx.RequestError as exc:
+                self.logger.error(
+                    "_run_playwright_via_http: connection error (attempt %d/3): %s",
+                    attempt + 1,
+                    exc,
+                )
+            if attempt < 2:
+                time.sleep(2 ** attempt)
+
+        self.logger.error("scraper_service_unreachable: all 3 attempts failed")
+        return {
+            "success": False,
+            "reason": "scraper_service_unreachable",
+            "total_jobs": 0,
+            "jobs": [],
+            "aborted": True,
+        }
 
     def _fallback_scrape_sequence(self) -> Dict[str, Any]:
         """
@@ -264,17 +350,15 @@ IMPORTANT:
         except Exception as e:
             self.logger.error(f"Fallback SerpAPI failed: {e}")
 
-        platforms = ["wellfound", "weworkremotely", "ycombinator", "arc", "turing", "crossover"]
-        for p in platforms:
-            try:
-                self.logger.info(f"Fallback Step 4: Playwright Scrape - {p}")
-                run_playwright_scrape.func(
-                    run_batch_id=self.run_batch_id,
-                    platform=p,
-                    max_jobs=30
-                )
-            except Exception as e:
-                self.logger.error(f"Fallback Playwright ({p}) failed: {e}")
+        # Playwright scraping delegated to the ai_playwright_scraper container via HTTP
+        self.logger.info("Fallback Step 4: Playwright Scrape — delegating to playwright-scraper service")
+        playwright_result = self._run_playwright_via_http()
+        if not playwright_result.get("aborted"):
+            self.run_state["scraped_jobs"] = playwright_result.get("jobs", [])
+        else:
+            self.logger.error(
+                "_fallback_scrape_sequence: playwright-scraper unreachable — continuing without playwright jobs"
+            )
 
         try:
             self.logger.info("Fallback Step 5: Check Total Job Count")
@@ -329,22 +413,33 @@ IMPORTANT:
 
             self.logger.info(f"Starting scraper run for batch: {self.run_batch_id}")
 
-            # Check monthly budget before proceeding
+            # Check monthly budget + xAI run cap before proceeding
             budget_check = check_monthly_budget.func(run_batch_id=self.run_batch_id)
             budget_result = json.loads(budget_check)
 
+            xai_check = check_xai_run_cap.func(run_batch_id=self.run_batch_id)
+            xai_result = json.loads(xai_check)
+
+            budget_abort = budget_result.get("abort", False)
+            xai_abort = xai_result.get("abort", False)
+
             used_fallback = False
 
-            if budget_result.get("abort", False):
+            if budget_abort or xai_abort:
+                abort_reason = (
+                    budget_result.get("reason", "monthly_budget")
+                    if budget_abort
+                    else xai_result.get("reason", "xai_run_cap")
+                )
                 self.logger.warning(
-                    f"Monthly budget exceeded: {budget_result.get('reason')}. "
+                    f"Budget cap hit ({abort_reason}). "
                     "Bypassing LLM orchestration and using fallback scrape sequence."
                 )
                 log_event.func(
                     run_batch_id=self.run_batch_id,
                     level="WARNING",
                     event_type="scraper_llm_bypassed_budget",
-                    message="Budget exceeded. Using hardcoded scrape fallback.",
+                    message=f"Budget cap hit ({abort_reason}). Using hardcoded scrape fallback.",
                 )
                 result_data = self._fallback_scrape_sequence()
                 used_fallback = True

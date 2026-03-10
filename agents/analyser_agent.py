@@ -411,8 +411,8 @@ class AnalyserAgent:
         }
 
         try:
-            # Call RAG match tool directly (callable outside LLM agent context)
-            raw: str = query_resume_match(
+            # Call RAG match tool directly (.func bypasses CrewAI Tool wrapper)
+            raw: str = query_resume_match.func(
                 job_description=job.get("description", ""),
                 job_title=job_title,
                 required_skills=job.get("required_skills", ""),
@@ -506,7 +506,7 @@ class AnalyserAgent:
         """
         if self._fallback_level == 0 and self.fallback_llm_1 is not None:
             to_model: str = getattr(self.fallback_llm_1, "model", "fallback_1")
-            record_fallback_event(
+            record_fallback_event.func(
                 agent_type="AnalyserAgent",
                 from_provider=failed_provider,
                 to_provider=str(to_model),
@@ -523,7 +523,7 @@ class AnalyserAgent:
 
         if self._fallback_level == 1 and self.fallback_llm_2 is not None:
             to_model = getattr(self.fallback_llm_2, "model", "fallback_2")
-            record_fallback_event(
+            record_fallback_event.func(
                 agent_type="AnalyserAgent",
                 from_provider=failed_provider,
                 to_provider=str(to_model),
@@ -773,7 +773,7 @@ JOB LIST (JSON)
                     self.logger.critical(
                         "AnalyserAgent.run: no fallback available — aborting"
                     )
-                    record_agent_error(
+                    record_agent_error.func(
                         agent_type="AnalyserAgent",
                         error_message=str(primary_exc),
                         run_batch_id=self.run_batch_id,
@@ -807,7 +807,7 @@ JOB LIST (JSON)
                     self.logger.critical(
                         "AnalyserAgent.run: fallback LLM also failed: %s", fallback_exc
                     )
-                    record_agent_error(
+                    record_agent_error.func(
                         agent_type="AnalyserAgent",
                         error_message=str(fallback_exc),
                         run_batch_id=self.run_batch_id,
@@ -955,7 +955,7 @@ JOB LIST (JSON)
                 "AnalyserAgent.run: unhandled exception: %s", exc, exc_info=True
             )
             try:
-                record_agent_error(
+                record_agent_error.func(
                     agent_type="AnalyserAgent",
                     error_message=str(exc),
                     run_batch_id=self.run_batch_id,

@@ -234,7 +234,7 @@ class ApplyAgent:
         # Check 2 — Platform limit
         platform: str = job.get("source_platform", "unknown")
         try:
-            config_raw: str = get_platform_config(platform=platform)
+            config_raw: str = get_platform_config.func(platform=platform)
             config: Dict[str, Any] = {}
             try:
                 config = json.loads(config_raw)
@@ -345,7 +345,7 @@ class ApplyAgent:
             # Step 2 — Detect ATS platform
             ats_platform: str = "direct"
             try:
-                ats_raw: str = detect_ats_platform(
+                ats_raw: str = detect_ats_platform.func(
                     job_url=job_url, run_batch_id=self.run_batch_id
                 )
                 ats_result: Dict[str, Any] = json.loads(ats_raw)
@@ -359,7 +359,7 @@ class ApplyAgent:
 
             # Step 3 — Rate limit wait
             try:
-                config_raw: str = get_platform_config(platform=platform)
+                config_raw: str = get_platform_config.func(platform=platform)
                 pconfig: Dict[str, Any] = json.loads(config_raw)
                 rate_limit: float = float(
                     pconfig.get("rate_limit_per_request_seconds", 3.0)
@@ -396,7 +396,7 @@ class ApplyAgent:
                 }
 
             # Step 5 — Execute apply via fill_standard_form
-            result_raw: str = fill_standard_form(
+            result_raw: str = fill_standard_form.func(
                 job_url=job_url,
                 job_post_id=job_post_id,
                 resume_filename=resume_to_use,
@@ -416,7 +416,27 @@ class ApplyAgent:
                 )
 
             # Step 6 — Handle result
-            if result.get("applied", False):
+            if result.get("dry_run", False):
+                # fill_standard_form returned dry_run=True — count but do not
+                # treat as a real application.
+                self._applied_count += 1
+                log_event.func(
+                    run_batch_id=self.run_batch_id,
+                    level="INFO",
+                    event_type="dry_run_skip",
+                    message=(
+                        f"dry_run_skip — no actual submission | "
+                        f"{company} — {job_title} | ats={ats_platform}"
+                    ),
+                    job_post_id=job_post_id,
+                )
+                self.logger.info(
+                    "_apply_single_job: dry_run_skip — no actual submission "
+                    "for %s at %s",
+                    job_title,
+                    company,
+                )
+            elif result.get("applied", False):
                 self._applied_count += 1
                 log_event.func(
                     run_batch_id=self.run_batch_id,
@@ -519,7 +539,7 @@ class ApplyAgent:
 
             # Persist manual_queued application to Postgres
             try:
-                create_application(
+                create_application.func(
                     job_post_id=job_post_id,
                     resume_id="",
                     user_id=self.user_id,
@@ -536,7 +556,7 @@ class ApplyAgent:
 
             # Queue to Notion Applications DB
             try:
-                queue_job_to_applications_db(
+                queue_job_to_applications_db.func(
                     job_post_id=job_post_id,
                     run_batch_id=self.run_batch_id,
                     title=job.get("title", ""),
@@ -878,7 +898,7 @@ ROUTING MANIFEST (JSON)
                     job_post_id,
                 )
                 try:
-                    create_application(
+                    create_application.func(
                         job_post_id=job_post_id,
                         resume_id="",
                         user_id=self.user_id,
@@ -1265,7 +1285,7 @@ ROUTING MANIFEST (JSON)
             for job in self.routing_manifest:
                 jid = str(job.get("job_post_id", job.get("id", "")))
                 try:
-                    create_application(
+                    create_application.func(
                         job_post_id=jid,
                         resume_id="",
                         user_id=self.user_id,
