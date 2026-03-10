@@ -1,12 +1,17 @@
 {
-    "_comment": "GitHub Action sync source — Python reads from DB only. Migrated from java.env + user_preferences.json.",
-    "username": "Aarjun",
-    "user_email": "aarjun@speedyapply.com",
-    "user_phone": "+91-9876543210",
-    "default_resume": "Aarjun_ml_engineer.pdf",
-    "dry_run": true,
-    "auto_apply_enabled": false,
-    "jobs_per_run_target": 50,
-    "search_query_override": null,
-    "notion_db_id": "from_java.env_NOTION_DB_ID or null"
+    "USERNAME": "",
+    "USER_EMAIL": "",
+    "USER_PHONE": "",
+    "USER_LINKEDIN_URL": "",
+    "USER_PORTFOLIO_URL": "",
+    "USER_LOCATION": "Remote",
+    "USER_YEARS_EXPERIENCE": "2",
+    "default_resume": "AarjunGen.pdf",
+    "dry_run": false,
+    "auto_apply_enabled": true,
+    "jobs_per_run_target": 150,
+    "jobs_per_run_minimum": 100,
+    "max_playwright_sessions": 5,
+    "search_query": "AI ML Data Science Automation Engineer remote",
+    "log_level": "INFO"
 }

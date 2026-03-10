@@ -11,6 +11,7 @@ Runs as a separate Docker service on FASTAPI_PORT.
 
 import os
 import json
+import time
 import uuid
 import logging
 from datetime import datetime, timezone
@@ -476,6 +477,34 @@ async def get_dashboard(
     except Exception:  # noqa: BLE001
         manual_queue = []
 
+    # Live config from Postgres — retry up to 3x with exponential backoff
+    live_config: Dict[str, Any] = {}
+    for _attempt in range(3):
+        try:
+            _cfg = _get_user_config()
+            live_config = _cfg["user_settings"]
+            break
+        except RuntimeError as _exc:
+            if _attempt == 2:
+                return JSONResponse(
+                    status_code=503,
+                    content={
+                        "error": "config_unavailable",
+                        "detail": str(_exc),
+                    },
+                )
+            time.sleep(2 ** _attempt)
+        except Exception as _exc:  # noqa: BLE001
+            if _attempt == 2:
+                return JSONResponse(
+                    status_code=503,
+                    content={
+                        "error": "config_unavailable",
+                        "detail": str(_exc),
+                    },
+                )
+            time.sleep(2 ** _attempt)
+
     return JSONResponse(
         content={
             "timestamp": datetime.utcnow().isoformat() + "Z",
@@ -486,12 +515,7 @@ async def get_dashboard(
                 "count": len(manual_queue),
                 "jobs": manual_queue,
             },
-            "config": {
-                "dry_run": run_config.dry_run,
-                "auto_apply_enabled": run_config.auto_apply_enabled,
-                "jobs_per_run_target": run_config.jobs_per_run_target,
-                "default_resume": run_config.default_resume,
-            },
+            "config": live_config,
         }
     )
 
@@ -529,8 +553,20 @@ async def trigger_manual_apply(
         # Step 1: Validate DB is reachable before making any writes
         get_run_stats("health_check")
 
-        # Step 2: Resolve resume — use override if provided, else pipeline default
-        resume: str = request.resume_filename or run_config.default_resume
+        # Step 2: Resolve resume — use override if provided, else DB default
+        _default_resume: str = "AarjunGen.pdf"
+        try:
+            _ucfg = _get_user_config()
+            _db_default: str = _ucfg["user_settings"].get("default_resume", "")
+            if _db_default:
+                _default_resume = _db_default
+        except Exception as _dr_exc:  # noqa: BLE001
+            logger.warning(
+                "/apply/manual: failed to fetch default_resume from DB, "
+                "falling back to hardcoded default: %s",
+                _dr_exc,
+            )
+        resume: str = request.resume_filename or _default_resume
 
         # Step 3: Update application record to manual_queued
         update_application_status(
@@ -659,6 +695,83 @@ def get_db_connection() -> psycopg2.extensions.connection:
         else os.getenv("SUPABASE_URL", "")
     )
     return psycopg2.connect(url, cursor_factory=psycopg2.extras.RealDictCursor)
+
+
+def _get_user_config() -> Dict[str, Any]:
+    """Fetch the single-source-of-truth user config from the users table.
+
+    Executes ``SELECT user_settings, platform_settings FROM users ORDER BY
+    created_at LIMIT 1`` with up to 3 retries and exponential back-off on
+    ``OperationalError``.
+
+    Returns:
+        A dict with exactly two keys:
+
+        - ``"user_settings"`` — parsed Python dict from the ``user_settings``
+          JSONB column.
+        - ``"platform_settings"`` — parsed Python dict from the
+          ``platform_settings`` JSONB column.
+
+    Raises:
+        RuntimeError: ``"db_config_fetch_failed"`` when all 3 retries are
+            exhausted without a successful query.
+    """
+    _MAX_RETRIES: int = 3
+    last_exc: Exception = RuntimeError("db_config_fetch_failed")
+
+    for attempt in range(_MAX_RETRIES):
+        conn: Optional[psycopg2.extensions.connection] = None
+        try:
+            conn = get_db_connection()
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT user_settings, platform_settings "
+                    "FROM users ORDER BY created_at LIMIT 1"
+                )
+                row = cur.fetchone()
+            if row is None:
+                raise RuntimeError("db_config_fetch_failed")
+            user_settings: Any = row["user_settings"]
+            platform_settings: Any = row["platform_settings"]
+            # psycopg2 with RealDictCursor returns JSONB already parsed; guard
+            # the rare case where it arrives as a raw string.
+            if isinstance(user_settings, str):
+                user_settings = json.loads(user_settings)
+            if isinstance(platform_settings, str):
+                platform_settings = json.loads(platform_settings)
+            return {
+                "user_settings": user_settings or {},
+                "platform_settings": platform_settings or {},
+            }
+        except psycopg2.OperationalError as exc:
+            last_exc = exc
+            logger.warning(
+                "_get_user_config: OperationalError attempt %d/%d: %s",
+                attempt + 1,
+                _MAX_RETRIES,
+                exc,
+            )
+            time.sleep(2 ** attempt)
+        except RuntimeError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            last_exc = exc
+            logger.warning(
+                "_get_user_config: unexpected error attempt %d/%d: %s",
+                attempt + 1,
+                _MAX_RETRIES,
+                exc,
+            )
+            time.sleep(2 ** attempt)
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:  # noqa: BLE001
+                    pass
+
+    logger.error("_get_user_config: all retries exhausted: %s", last_exc)
+    raise RuntimeError("db_config_fetch_failed")
 
 
 def get_chroma_client() -> chromadb.ClientAPI:
@@ -792,9 +905,23 @@ async def match_resume(
             metadata: dict[str, Any] = results["metadatas"][0][0]
 
             similarity_score: float = round(1.0 - distance, 4)
+            _match_default_resume: str = "AarjunGen.pdf"
+            try:
+                _match_ucfg = _get_user_config()
+                _match_db_default: str = _match_ucfg["user_settings"].get(
+                    "default_resume", ""
+                )
+                if _match_db_default:
+                    _match_default_resume = _match_db_default
+            except Exception as _match_dr_exc:  # noqa: BLE001
+                logger.warning(
+                    "/match: failed to fetch default_resume from DB, "
+                    "falling back to hardcoded default: %s",
+                    _match_dr_exc,
+                )
             resume_suggested: str = metadata.get(
                 "filename",
-                os.getenv("DEFAULT_RESUME", "AarjunGen.pdf"),
+                _match_default_resume,
             )
         except HTTPException:
             raise
@@ -893,9 +1020,22 @@ async def autofill_fields(
         HTTPException: 500 on any unexpected error.
     """
     try:
-        # Load user profile from environment
-        full_name: str = os.getenv("USERNAME", "")
-        profile: dict[str, str] = {
+        # Load user profile from Postgres user_settings JSONB
+        try:
+            _af_cfg = _get_user_config()
+            _us: Dict[str, Any] = _af_cfg["user_settings"]
+        except RuntimeError as _af_exc:
+            logger.error("/autofill: DB profile fetch failed: %s", _af_exc)
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "error": "profile_unavailable",
+                    "detail": str(_af_exc),
+                },
+            )
+
+        full_name: str = str(_us.get("USERNAME", ""))
+        profile: Dict[str, str] = {
             "name": full_name,
             "first_name": full_name.split()[0] if full_name.strip() else "",
             "last_name": (
@@ -903,12 +1043,12 @@ async def autofill_fields(
                 if len(full_name.strip().split()) > 1
                 else full_name
             ),
-            "email": os.getenv("USER_EMAIL", ""),
-            "phone": os.getenv("USER_PHONE", ""),
-            "linkedin": os.getenv("USER_LINKEDIN_URL", ""),
-            "portfolio": os.getenv("USER_PORTFOLIO_URL", ""),
-            "location": os.getenv("USER_LOCATION", ""),
-            "experience": os.getenv("USER_YEARS_EXPERIENCE", ""),
+            "email": str(_us.get("USER_EMAIL", "")),
+            "phone": str(_us.get("USER_PHONE", "")),
+            "linkedin": str(_us.get("USER_LINKEDIN_URL", "")),
+            "portfolio": str(_us.get("USER_PORTFOLIO_URL", "")),
+            "location": str(_us.get("USER_LOCATION", "")),
+            "experience": str(_us.get("USER_YEARS_EXPERIENCE", "")),
         }
 
         field_mappings: dict[str, str] = {}

@@ -1,114 +1,75 @@
 {
-    "_comment": "Migrated: platform_limits from platforms.json, weights from scoring_weights.json, queries from search_queries.json + extensions.",
     "platform_limits": {
         "linkedin": {
-            "daily_jobs": 120,
-            "min_delay_ms": 2000,
-            "max_concurrent": 1
+            "max_per_run": 40,
+            "rate_limit_per_request_seconds": 3
         },
         "indeed": {
-            "daily_jobs": 120,
-            "min_delay_ms": 2000,
-            "max_concurrent": 1
+            "max_per_run": 40,
+            "rate_limit_per_request_seconds": 3
         },
         "remoteok": {
-            "daily_jobs": 100,
-            "min_delay_ms": 5000,
-            "max_concurrent": 1
+            "max_per_run": 30,
+            "rate_limit_per_request_seconds": 2
         },
         "himalayas": {
-            "daily_jobs": 100,
-            "min_delay_ms": 3000,
-            "max_concurrent": 1
+            "max_per_run": 30,
+            "rate_limit_per_request_seconds": 2
         },
         "wellfound": {
-            "daily_jobs": 80,
-            "min_delay_ms": 3000,
-            "max_concurrent": 1
+            "max_per_run": 20,
+            "rate_limit_per_request_seconds": 4
         },
-        "weworkremotely": {
-            "daily_jobs": 60,
-            "min_delay_ms": 3000,
-            "max_concurrent": 1
+        "wwr": {
+            "max_per_run": 20,
+            "rate_limit_per_request_seconds": 4
         },
-        "ycombinator": {
-            "daily_jobs": 60,
-            "min_delay_ms": 3000,
-            "max_concurrent": 1
+        "yc": {
+            "max_per_run": 20,
+            "rate_limit_per_request_seconds": 3
         },
         "arc": {
-            "daily_jobs": 60,
-            "min_delay_ms": 3000,
-            "max_concurrent": 1
+            "max_per_run": 15,
+            "rate_limit_per_request_seconds": 4
         },
         "turing": {
-            "daily_jobs": 50,
-            "min_delay_ms": 5000,
-            "max_concurrent": 1
+            "max_per_run": 15,
+            "rate_limit_per_request_seconds": 4
         },
         "crossover": {
-            "daily_jobs": 40,
-            "min_delay_ms": 5000,
-            "max_concurrent": 1
-        },
-        "nodesk": {
-            "daily_jobs": 50,
-            "min_delay_ms": 3000,
-            "max_concurrent": 1
-        },
-        "toptal": {
-            "daily_jobs": 40,
-            "min_delay_ms": 5000,
-            "max_concurrent": 1
-        },
-        "remotive": {
-            "daily_jobs": 80,
-            "min_delay_ms": 3000,
-            "max_concurrent": 1
-        },
-        "jooble": {
-            "daily_jobs": 500,
-            "min_delay_ms": 2000,
-            "max_concurrent": 1
-        },
-        "serpapi": {
-            "daily_jobs": 33,
-            "min_delay_ms": 2000,
-            "max_concurrent": 4
+            "max_per_run": 10,
+            "rate_limit_per_request_seconds": 5
         }
     },
     "scoring_weights": {
-        "remote": 0.3,
-        "salary_usd": 0.25,
-        "python": 0.15,
-        "llm": 0.2,
-        "ai": 0.1,
-        "ml": 0.15
+        "skills_match": 0.35,
+        "experience_match": 0.25,
+        "title_match": 0.20,
+        "location_match": 0.10,
+        "company_score": 0.10
     },
     "search_queries": [
-        "AI Engineer remote India Nagpur",
-        "Machine Learning remote Python",
-        "Data Scientist LLM CrewAI",
-        "Automation Engineer AI remote",
-        "ML Engineer Data Science remote"
+        "AI Engineer remote",
+        "Machine Learning Engineer remote",
+        "Data Scientist remote",
+        "MLOps Engineer remote",
+        "AI Automation Engineer remote"
     ],
     "job_filters": {
-        "min_salary_usd": 150000,
-        "max_age_days": 30,
-        "must_keywords": [
-            "Python",
-            "CrewAI",
-            "LLM",
-            "Docker"
-        ],
+        "min_fit_score": 0.40,
         "exclude_keywords": [
-            "onsite",
-            "hybrid"
+            "senior 10+ years",
+            "principal",
+            "director",
+            "VP"
         ],
-        "locations": [
+        "required_keywords": [
             "remote",
-            "India",
-            "Nagpur"
+            "python"
+        ],
+        "job_types": [
+            "fulltime",
+            "contract"
         ]
     }
 }

@@ -515,6 +515,12 @@ STEP 5: After completing any change — APPEND row to CHANGE_LOG before closing
 | L165 | 2026-03-05T18:55:11+05:30 | ANTIGRAVITY | rag_systems/rag_pipeline.py | BUGFIX | fix:gemini_model_text_embedding_004_to_gemini_embedding_001_model_renamed | DONE |
 | L166 | 2026-03-05T19:40:00+05:30 | ANTIGRAVITY | agents/* | BUGFIX | fix:typeerror_tool_callable_func_wrapper_bypass_native_calls | DONE |
 | L167 | 2026-03-05T19:40:00+05:30 | ANTIGRAVITY | dockerise.sh | UPDATE | update:docker_fixes_complete_agentrunner_verified | DONE |
+| L168 | 2026-03-09T16:21:00+05:30 | ANTIGRAVITY | test_scripts/* | CREATE | create:test_scripts:all_agents_tools_api_validation | DONE |
+| L169 | 2026-03-09T22:34:00+05:30 | ANTIGRAVITY | agents/scraper_agent.py | FEATURE DELTA | feature:scraper_fallback:hardcoded_scrape_sequence_on_llm_failure | DONE |
+| L170 | 2026-03-09T22:34:00+05:30 | ANTIGRAVITY | test_scripts/test_scraper.py | TEST | test:scraper_fallback:validate_budget_and_llm_failure_bypasses | DONE |
+| L172 | 2026-03-10T22:55:00+05:30 | GEMINI | config/user_settings.json, config/platform_settings.json, database/schema.sql, .github/workflows/config_sync.yml | CREATE | create:postgres-sso-json-packets:user_settings:platform_settings:schema-migration:config_sync-action | DONE |
+| L173 | 2026-03-10T23:05:00+05:30 | CLAUDE SONNET | api/api_server.py | REFACTOR | refactor:api-server:fetch-user-profile-and-config-from-postgres-json-packets:remove-os-getenv | DONE |
+| L174 | 2026-03-10T23:15:00+05:30 | CLAUDE SONNET | extension/popup/*, extension/background/service_worker.js, extension/content_scripts/sidebar.js | REFACTOR | refactor:chrome-ext:full-sidebar-rewrite:strip-mcp:fastapi-only-comms | DONE |
 
 
 ## 2-WEEK SPRINT PLAN
