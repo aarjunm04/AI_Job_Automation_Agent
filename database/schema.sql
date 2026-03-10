@@ -154,3 +154,10 @@ CREATE TABLE IF NOT EXISTS schema_versions (
     version     VARCHAR(16) PRIMARY KEY,
     applied_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+ALTER TABLE users ADD COLUMN IF NOT EXISTS user_settings JSONB DEFAULT '{}'::jsonb;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS platform_settings JSONB DEFAULT '{}'::jsonb;
+CREATE INDEX IF NOT EXISTS idx_users_user_settings ON users USING GIN (user_settings);
+CREATE INDEX IF NOT EXISTS idx_users_platform_settings ON users USING GIN (platform_settings);
+-- Bootstrap default user if needed:
+INSERT INTO users (id, user_settings, platform_settings) VALUES (1, '{}'::jsonb, '{}'::jsonb) ON CONFLICT (id) DO UPDATE SET user_settings = EXCLUDED.user_settings, platform_settings = EXCLUDED.platform_settings;
