@@ -83,8 +83,9 @@ try:
         healthcheck,
     )
     from rag_systems.resume_engine import get_default_engine
+    from rag_systems.rag_pipeline import EmbeddingService
 except ImportError:
-    print("ERROR: Cannot import from rag_systems. Ensure rag_api.py and resume_engine.py exist.")
+    logger.critical("Cannot import from rag_systems. Ensure rag_api.py and resume_engine.py exist.")
     sys.exit(1)
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -283,6 +284,22 @@ class ErrorResponse(BaseModel):
     details: Optional[Dict[str, Any]] = None
     timestamp: str
     request_id: Optional[str] = None
+
+
+# --- Request/Response models for /match and /autofill endpoints ----------
+
+
+class MatchRequest(BaseModel):
+    """Request model for POST /match endpoint."""
+    job_description: str = Field(..., min_length=1, description="Job description text")
+    job_title: str = Field("", description="Job title")
+    required_skills: str = Field("", description="Comma-separated required skills")
+
+
+class AutofillRequest(BaseModel):
+    """Request model for POST /autofill endpoint."""
+    resume_filename: str = Field("", description="Resume filename (optional)")
+    job_description: str = Field(..., min_length=1, description="Job description text")
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -868,6 +885,20 @@ async def verify_api_key(
     )
 
 
+async def verify_x_api_key(
+    x_api_key: str = Header(..., alias="X-API-Key"),
+) -> str:
+    """Verify X-API-Key header for /match and /autofill endpoints."""
+    expected = os.getenv("RAG_SERVER_API_KEY", "")
+    if expected and x_api_key == expected:
+        return x_api_key
+    logger.warning("Invalid X-API-Key attempted: %s***", x_api_key[:4] if x_api_key else "")
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Invalid API key",
+    )
+
+
 def check_rate_limit(api_key: str = Depends(verify_api_key)):
     """Check rate limit for API key"""
     if not rate_limiter.is_allowed(api_key):
@@ -889,54 +920,46 @@ async def root():
     return "RAG Production Server v1.0.0 - Running ✓"
 
 
-@app.get("/health", response_model=HealthCheckResponse)
+@app.get("/health")
 async def health_check():
-    """Comprehensive health check endpoint"""
+    """Health check endpoint — always returns HTTP 200 with status fields."""
+    result: Dict[str, Any] = {
+        "status": "ok",
+        "rag_engine": "ok",
+        "chromadb": "ok",
+        "embedder": "ok",
+        "resume_count": 0,
+        "version": "1.0.0",
+    }
+
+    # ChromaDB check
     try:
-        engine_health = healthcheck()
-        
-        components = {
-            "rag_engine": engine_health.get("status", "unknown"),
-            "chromadb": "ok" if engine_health.get("chroma_dir") else "error",
-            "embedder": "ok" if engine_health.get("embedding_provider") else "error",
-            "session_manager": "ok",
-            "rate_limiter": "ok",
-            "circuit_breaker": circuit_breaker.get_state()["state"],
-            "cache": "ok" if ServerConfig.CACHE_ENABLED else "disabled"
-        }
-        
-        # Overall status
-        has_error = any(status == "error" for status in components.values())
-        overall_status = "error" if has_error else "ok"
-        
-        system_metrics = metrics_collector.get_metrics()
-        session_stats = session_manager.get_stats()
-        cache_stats = response_cache.get_stats()
-        
-        combined_metrics = {
-            **system_metrics,
-            "sessions": session_stats,
-            "cache": cache_stats,
-            "resumes": engine_health.get("resume_count", 0)
-        }
-        
-        return HealthCheckResponse(
-            status=overall_status,
-            timestamp=datetime.utcnow().isoformat() + "Z",
-            uptime_seconds=system_metrics["uptime_seconds"],
-            components=components,
-            metrics=combined_metrics
-        )
-        
-    except Exception as e:
-        logger.error(f"Health check failed: {e}")
-        return HealthCheckResponse(
-            status="error",
-            timestamp=datetime.utcnow().isoformat() + "Z",
-            uptime_seconds=metrics_collector.get_metrics()["uptime_seconds"],
-            components={"error": str(e)},
-            metrics={}
-        )
+        engine = get_default_engine()
+        engine.chroma._client.heartbeat()
+    except Exception as exc:
+        logger.warning("Health: ChromaDB check failed: %s", exc)
+        result["chromadb"] = "error"
+        result["status"] = "error"
+
+    # Embedder check
+    try:
+        svc = EmbeddingService()
+        svc.embed_text("health check")
+    except Exception as exc:
+        logger.warning("Health: embedder check failed: %s", exc)
+        result["embedder"] = "error"
+        result["status"] = "error"
+
+    # RAG engine / resume count
+    try:
+        engine = get_default_engine()
+        result["resume_count"] = len(engine.list_resumes())
+    except Exception as exc:
+        logger.warning("Health: RAG engine check failed: %s", exc)
+        result["rag_engine"] = "error"
+        result["status"] = "error"
+
+    return JSONResponse(content=result, status_code=200)
 
 
 @app.post("/rag/query", tags=["RAG"])
@@ -945,7 +968,6 @@ def rag_query_context(
     api_key: str = Depends(verify_api_key)
 ):
     """Query RAG system for relevant resume context."""
-    import traceback
     start_time = time.time()
     
     try:
@@ -1272,6 +1294,63 @@ def get_metrics(api_key: str = Depends(verify_api_key)):
         "circuit_breaker": circuit_state,
         "timestamp": datetime.utcnow().isoformat() + "Z"
     }
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# MATCH & AUTOFILL ENDPOINTS
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+@app.post("/match", tags=["RAG"])
+async def match_resume(
+    request: MatchRequest,
+    api_key: str = Depends(verify_x_api_key),
+):
+    """Match the best resume against a job description."""
+    try:
+        job_text = "\n\n".join(
+            part for part in [request.job_title, request.job_description, request.required_skills] if part
+        )
+        job_payload: Dict[str, Any] = {"job_text": job_text}
+        result = select_resume(job_payload)
+        return JSONResponse(content={
+            "resume_suggested": result.get("resume_suggested", ""),
+            "similarity_score": result.get("similarity_score", 0.0),
+            "fit_score": result.get("fit_score", 0.0),
+            "match_reasoning": result.get("match_reasoning", ""),
+            "talking_points": result.get("talking_points", []),
+        })
+    except Exception as exc:
+        logger.error("POST /match failed: %s", exc)
+        return JSONResponse(
+            status_code=503,
+            content={"error": "rag_match_failed", "detail": str(exc)},
+        )
+
+
+@app.post("/autofill", tags=["RAG"])
+async def autofill_context(
+    request: AutofillRequest,
+    api_key: str = Depends(verify_x_api_key),
+):
+    """Retrieve RAG context chunks for auto-filling application forms."""
+    try:
+        result = get_rag_context(
+            job_payload={"job_text": request.job_description},
+            top_k_chunks=10,
+        )
+        chunks = result.get("context_chunks", [])
+        return JSONResponse(content={
+            "context_chunks": chunks,
+            "resume_filename": request.resume_filename,
+            "chunk_count": len(chunks),
+        })
+    except Exception as exc:
+        logger.error("POST /autofill failed: %s", exc)
+        return JSONResponse(
+            status_code=503,
+            content={"error": "rag_autofill_failed", "detail": str(exc)},
+        )
 
 
 # ═══════════════════════════════════════════════════════════════════════════

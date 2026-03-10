@@ -5,11 +5,14 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-__all__ = ["ingest_all_resumes", "ingest_single_resume", "chunk_text"]
+__all__ = ["ingest_all_resumes", "ingest_single_resume"]
 
 logger = logging.getLogger(__name__)
 
 EXPECTED_EMBEDDING_DIM = 1024
+
+# Shared chunking utility — single authoritative implementation lives in rag_pipeline
+from rag_systems.rag_pipeline import chunk_text
 
 
 # ─────────────────────────────────────────────────────────────
@@ -30,36 +33,6 @@ def _extract_pdf_text(pdf_path: str) -> str:
     except Exception as exc:
         logger.error("PDF extraction failed for %s: %s", pdf_path, exc)
         return ""
-
-
-# ─────────────────────────────────────────────────────────────
-# TEXT CHUNKER
-# NVIDIA NIM enforces a 512-token hard limit per request.
-# chunk_text() splits text into ≤400-word windows so every
-# chunk lands safely under that ceiling.
-# ─────────────────────────────────────────────────────────────
-def chunk_text(text: str, max_tokens: int = 400) -> list[str]:
-    """Split *text* into chunks of at most *max_tokens* words.
-
-    Uses simple whitespace splitting — no sentence boundary awareness.
-    Designed to keep each chunk under NVIDIA NIM's 512-token limit.
-
-    Args:
-        text: Plain text to split.
-        max_tokens: Maximum number of words per chunk (default 400).
-
-    Returns:
-        List of non-empty chunk strings.  Empty list if text is blank.
-    """
-    words = text.split()
-    if not words:
-        return []
-    chunks: list[str] = []
-    for i in range(0, len(words), max_tokens):
-        chunk = " ".join(words[i : i + max_tokens])
-        if chunk:
-            chunks.append(chunk)
-    return chunks
 
 
 def _average_vectors(vectors: list[list[float]]) -> Optional[list[float]]:
@@ -115,7 +88,7 @@ def _get_embedding(engine: object, text: str) -> Optional[list[float]]:
     words = text.split()
     if len(words) > 370:
         try:
-            chunks = chunk_text(text, max_tokens=370)
+            chunks = chunk_text(text, chunk_size=400, chunk_overlap=80)
             logger.debug(
                 "Text has %d words — split into %d chunks (max_tokens=370)",
                 len(words),

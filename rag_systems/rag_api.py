@@ -29,6 +29,15 @@ from rag_systems.rag_pipeline import RAGPipeline
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
+__all__ = [
+    "select_resume",
+    "get_resume_pdf_path",
+    "get_rag_context",
+    "reindex_resume",
+    "list_resumes",
+    "healthcheck",
+]
+
 # ------------------------------------------------------------
 # INTERNAL ENGINE SINGLETON
 # ------------------------------------------------------------
@@ -130,10 +139,3 @@ def healthcheck() -> Dict[str, Any]:
             "error": str(e),
         }
 
-
-# ------------------------------------------------------------
-# OPTIONAL CLI DEBUG MODE
-# ------------------------------------------------------------
-
-if __name__ == "__main__":
-    print("Healthcheck:", healthcheck())

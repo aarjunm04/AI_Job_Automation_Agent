@@ -191,8 +191,18 @@ class ResumeEngine:
 
         raw_text = self._extract_pdf_text(entry.local_path)
 
-        # 1. CHUNK
-        chunks = chunk_text(raw_text)
+        # 1. CHUNK (chunk_text returns list[str]; wrap into dicts for ChromaDB)
+        chunk_strings = chunk_text(raw_text, chunk_size=400, chunk_overlap=80)
+        chunks = [
+            {
+                "chunk_id": str(uuid.uuid4()),
+                "text": c,
+                "offset": i,
+                "token_count": len(c.split()),
+                "section_heading": None,
+            }
+            for i, c in enumerate(chunk_strings)
+        ]
 
         # 2. EMBED CHUNKS
         chunk_embeddings = [self.embedding_service.embed_text(c["text"]) for c in chunks]

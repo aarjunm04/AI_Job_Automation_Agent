@@ -20,6 +20,50 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
+__all__ = [
+    "chunk_text",
+    "EmbeddingProvider",
+    "GeminiEmbedder",
+    "NVIDIANIMEmbedder",
+    "EmbeddingService",
+    "RAGPipeline",
+    "create_default_pipeline",
+]
+
+
+# ============================================================
+# CHUNKING (single authoritative implementation)
+# ============================================================
+
+
+def chunk_text(
+    text: str,
+    chunk_size: int = 400,
+    chunk_overlap: int = 80,
+) -> list[str]:
+    """Split text into overlapping chunks for embedding.
+
+    Args:
+        text: Raw input text to chunk.
+        chunk_size: Maximum tokens per chunk (default 400 — safely under NIM 512 limit).
+        chunk_overlap: Token overlap between consecutive chunks (default 80).
+
+    Returns:
+        List of text chunk strings, minimum 1 chunk always returned.
+    """
+    tokens = text.split()
+    if not tokens:
+        return [text] if text else [""]
+
+    step = max(1, chunk_size - chunk_overlap)
+    chunks: list[str] = []
+    for i in range(0, len(tokens), step):
+        chunk = " ".join(tokens[i : i + chunk_size])
+        if chunk:
+            chunks.append(chunk)
+
+    return chunks if chunks else [text]
+
 
 # ============================================================
 # EMBEDDING PROVIDERS
@@ -288,83 +332,6 @@ class EmbeddingService:
         )
         logger.error(error_message)
         raise RuntimeError(error_message)
-
-
-# ============================================================
-# CHUNKING
-# ============================================================
-
-def _sentence_split(text: str) -> List[str]:
-    """Split text into sentences"""
-    return re.split(r"(?<=[.!?])\s+", text.strip())
-
-
-def chunk_text(
-    text: str, 
-    max_tokens: int = 200, 
-    overlap: int = 50
-) -> List[Dict[str, Any]]:
-    """
-    Split text into overlapping chunks for better retrieval
-    
-    Args:
-        text: Input text to chunk
-        max_tokens: Maximum tokens per chunk (approximate by word count)
-        overlap: Number of tokens to overlap between chunks
-        
-    Returns:
-        List of chunk dictionaries with metadata
-    """
-    import uuid
-    
-    sents = _sentence_split(text)
-    chunks = []
-    buf, count, offset = [], 0, 0
-
-    for s in sents:
-        wc = len(s.split())
-        
-        # Create chunk if buffer exceeds max_tokens
-        if count + wc > max_tokens and buf:
-            chunks.append({
-                "chunk_id": str(uuid.uuid4()),
-                "text": " ".join(buf),
-                "offset": offset,
-                "token_count": count,
-                "section_heading": None
-            })
-
-            # Keep overlap for context continuity
-            if overlap > 0:
-                keep, kept = [], 0
-                for prev in reversed(buf):
-                    w = len(prev.split())
-                    if kept >= overlap:
-                        break
-                    keep.insert(0, prev)
-                    kept += w
-                buf = keep
-                count = sum(len(x.split()) for x in buf)
-            else:
-                buf = []
-                count = 0
-
-        buf.append(s)
-        count += wc
-        offset += 1
-
-    # Add remaining buffer as final chunk
-    if buf:
-        chunks.append({
-            "chunk_id": str(uuid.uuid4()),
-            "text": " ".join(buf),
-            "offset": offset,
-            "token_count": count,
-            "section_heading": None
-        })
-
-    logger.info(f"Chunked text into {len(chunks)} chunks (max_tokens={max_tokens}, overlap={overlap})")
-    return chunks
 
 
 # ============================================================
