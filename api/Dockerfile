@@ -1,9 +1,7 @@
 # ============================================================
-# Stage 1: builder — install Python deps (NO Playwright)
+# Stage 1: builder — install Python deps for API server
 # ============================================================
 FROM python:3.11-slim-bookworm AS builder
-
-ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
@@ -13,24 +11,28 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
-COPY requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir \
-    $(grep -v "playwright" /tmp/requirements.txt | grep -v "^#" | grep -v "^$" | tr '\n' ' ')
+    fastapi \
+    uvicorn[standard] \
+    psycopg2-binary \
+    redis \
+    python-dotenv \
+    agentops \
+    httpx \
+    pydantic \
+    python-multipart \
+    chromadb \
+    notion-client
 
 # ============================================================
-# Stage 2: runtime — lean agent-runner, zero browser deps
+# Stage 2: runtime — slim FastAPI API server
 # ============================================================
-FROM python:3.11-slim-bookworm AS runtime
-
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    DEBIAN_FRONTEND=noninteractive
+FROM python:3.11-slim-bookworm
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq5 \
     curl \
-    ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /opt/venv /opt/venv
@@ -38,22 +40,25 @@ COPY --from=builder /opt/venv /opt/venv
 RUN useradd --create-home --shell /bin/bash appuser
 
 WORKDIR /app
-RUN chown appuser:appuser /app
 
 ENV PATH="/opt/venv/bin:$PATH"
 ENV PYTHONPATH=/app
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
 ENV LOG_LEVEL=INFO
 
-COPY --chown=appuser:appuser agents/ ./agents/
-COPY --chown=appuser:appuser tools/ ./tools/
-COPY --chown=appuser:appuser integrations/ ./integrations/
+COPY --chown=appuser:appuser api/ ./api/
+COPY --chown=appuser:appuser tools/postgres_tools.py ./tools/postgres_tools.py
+COPY --chown=appuser:appuser tools/agentops_tools.py ./tools/agentops_tools.py
+COPY --chown=appuser:appuser tools/budget_tools.py ./tools/budget_tools.py
+COPY --chown=appuser:appuser tools/__init__.py ./tools/__init__.py
 COPY --chown=appuser:appuser config/ ./config/
+COPY --chown=appuser:appuser integrations/ ./integrations/
 COPY --chown=appuser:appuser database/ ./database/
-COPY --chown=appuser:appuser utils/ ./utils/
-
-COPY --chown=appuser:appuser rag_systems/ ./rag_systems/
-COPY --chown=appuser:appuser main.py .
 
 USER appuser
 
-CMD ["python", "main.py", "--mode", "full"]
+EXPOSE 8000
+
+CMD ["uvicorn", "api.api_server:app", "--host", "0.0.0.0", \
+     "--port", "8000", "--log-level", "info"]

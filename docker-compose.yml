@@ -1,7 +1,8 @@
 # =============================================================================
 # AI Job Automation Agent — Production Docker Compose
 # =============================================================================
-# Services : postgres | redis | chromadb | rag-server | agentrunner
+# Services : postgres | redis | chromadb | rag-server | playwright-scraper
+#            | api-server | agent-runner
 # Network  : ai_job_network (bridge, single)
 # Secrets  : ~/java.env loaded as env_file at runtime — NEVER baked into image
 # Volumes  : named volumes for postgres / redis / chromadb (no bind-mount data dirs)
@@ -19,11 +20,13 @@ volumes:
     driver: local
   chromadb_data:
     driver: local
+  resume_data:
+    driver: local
 
 services:
 
   # ---------------------------------------------------------------------------
-  # PostgreSQL 15 — primary relational store for jobs, applications, state
+  # 1. PostgreSQL 15 — primary relational store for jobs, applications, state
   # ---------------------------------------------------------------------------
   postgres:
     image: pgvector/pgvector:pg15
@@ -45,58 +48,76 @@ services:
       - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
       - ./database/schema.sql:/docker-entrypoint-initdb.d/schema.sql:ro
 
+    ports:
+      - "5432:5432"
+
     healthcheck:
-      test: [ "CMD-SHELL", "pg_isready -U ${LOCAL_POSTGRES_USER:-postgres} -d ${LOCAL_POSTGRES_DB:-ai_job_db} || exit 1" ]
+      test: ["CMD-SHELL", "pg_isready -U ${LOCAL_POSTGRES_USER:-postgres} -d ${LOCAL_POSTGRES_DB:-ai_job_db} || exit 1"]
       interval: 10s
       timeout: 5s
-      retries: 6
-      start_period: 15s
+      retries: 5
+      start_period: 20s
 
     networks:
       - ai_job_network
 
   # ---------------------------------------------------------------------------
-  # Redis 7 — in-memory cache and session store (AOF persistence)
+  # 2. Redis 7 — in-memory cache and session store (AOF persistence)
   # ---------------------------------------------------------------------------
   redis:
     image: redis:7-alpine
     container_name: ai_redis
     restart: unless-stopped
     command: redis-server --appendonly yes --dir /data
+
+    env_file:
+      - ~/java.env
+
     volumes:
       - redis_data:/data
+
+    ports:
+      - "6379:6379"
+
     healthcheck:
-      test: [ "CMD-SHELL", "redis-cli ping | grep PONG" ]
+      test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 5s
-      retries: 6
-      start_period: 10s
+      retries: 3
+
     networks:
       - ai_job_network
 
   # ---------------------------------------------------------------------------
-  # ChromaDB — vector database for resume embeddings
+  # 3. ChromaDB — vector database for resume embeddings
   # Exposed on host at :8001 so devs can inspect via HTTP
   # ---------------------------------------------------------------------------
   chromadb:
     image: chromadb/chroma:0.6.3
     container_name: ai_chromadb
     restart: unless-stopped
-    ports:
-      - "8001:8000"
+
+    env_file:
+      - ~/java.env
+
     volumes:
       - chromadb_data:/chroma/chroma
+
+    ports:
+      - "8001:8000"
+
     healthcheck:
-      test: [ "CMD-SHELL", "bash -c '</dev/tcp/localhost/8000'" ]
-      interval: 10s
-      timeout: 5s
-      retries: 10
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/localhost/8000' 2>/dev/null && echo ok || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
       start_period: 30s
+
     networks:
       - ai_job_network
 
   # ---------------------------------------------------------------------------
-  # RAG Server — FastAPI endpoint consumed by the Chrome extension
+  # 4. RAG Server — FastAPI endpoint consumed by the Chrome extension
   # Source   : rag_systems/production_server.py  (app object confirmed)
   # Port     : 8090 (host) → 8090 (container)
   # ---------------------------------------------------------------------------
@@ -106,15 +127,18 @@ services:
       dockerfile: rag_systems/Dockerfile
     container_name: ai_rag_server
     restart: unless-stopped
+
     env_file:
       - ~/java.env
+
     environment:
       LOG_LEVEL: ${LOG_LEVEL:-info}
-      CHROMADB_HOST: chromadb
+      CHROMADB_HOST: ai_chromadb
       CHROMADB_PORT: "8000"
       REDIS_URL: redis://redis:6379/0
       RESUME_DIR: /app/resumes
       PYTHONPATH: /app
+
     command:
       - uvicorn
       - rag_systems.production_server:app
@@ -122,24 +146,30 @@ services:
       - "0.0.0.0"
       - --port
       - "8090"
+
     ports:
       - "8090:8090"
+
     depends_on:
       redis:
         condition: service_healthy
       chromadb:
         condition: service_healthy
+
     healthcheck:
-      test: [ "CMD", "curl", "-f", "http://localhost:8090/health" ]
-      interval: 15s
-      timeout: 5s
-      retries: 5
-      start_period: 30s
+      test: ["CMD-SHELL", "curl -f http://localhost:8090/health || exit 1"]
+      interval: 20s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
     volumes:
       - ./app/resumes:/app/resumes:ro
       - ./logs:/app/logs
+
     networks:
       - ai_job_network
+
     deploy:
       resources:
         limits:
@@ -147,20 +177,110 @@ services:
           memory: 2G
 
   # ---------------------------------------------------------------------------
-  # Agent Runner — autonomous pipeline (batch job; exits when done)
-  # restart: "no" — this is NOT a daemon; it runs once per scheduling trigger
+  # 5. Playwright Scraper Service (NEW — dedicated Chromium image)
+  # Source   : scrapers/scraper_service.py  (FastAPI app)
+  # Port     : 8001 internal only — NOT exposed to host
   # ---------------------------------------------------------------------------
-  agentrunner:
+  playwright-scraper:
+    build:
+      context: .
+      dockerfile: scrapers/Dockerfile
+    container_name: ai_playwright_scraper
+    restart: unless-stopped
+
+    env_file:
+      - ~/java.env
+
+    environment:
+      SCRAPER_SERVICE_API_KEY: ${SCRAPER_SERVICE_API_KEY:-}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      PYTHONPATH: /app
+      LOCAL_POSTGRES_URL: postgresql://${LOCAL_POSTGRES_USER:-postgres}:${LOCAL_POSTGRES_PASSWORD:-localdev123}@postgres:5432/${LOCAL_POSTGRES_DB:-ai_job_db}
+      REDIS_URL: redis://redis:6379/0
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8001/health || exit 1"]
+      interval: 20s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+    networks:
+      - ai_job_network
+
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 2G
+
+  # ---------------------------------------------------------------------------
+  # 6. API Server (NEW — slim FastAPI for Chrome Extension)
+  # Source   : api/api_server.py  (FastAPI app)
+  # Port     : 8000 (host) → 8000 (container)
+  # ---------------------------------------------------------------------------
+  api-server:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    container_name: ai_api_server
+    restart: unless-stopped
+
+    env_file:
+      - ~/java.env
+
+    environment:
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      PYTHONPATH: /app
+      LOCAL_POSTGRES_URL: postgresql://${LOCAL_POSTGRES_USER:-postgres}:${LOCAL_POSTGRES_PASSWORD:-localdev123}@postgres:5432/${LOCAL_POSTGRES_DB:-ai_job_db}
+      REDIS_URL: redis://redis:6379/0
+      RAG_SERVER_URL: http://rag-server:8090
+      CHROMADB_HOST: ai_chromadb
+      CHROMADB_PORT: "8000"
+
+    ports:
+      - "8000:8000"
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+    networks:
+      - ai_job_network
+
+  # ---------------------------------------------------------------------------
+  # 7. Agent Runner (REWRITTEN — no Playwright, pure agent pipeline)
+  # Batch job: runs once per scheduling trigger, then exits.
+  # profiles: ["batch"] — does NOT auto-start with `docker compose up`
+  # ---------------------------------------------------------------------------
+  agent-runner:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: ai_agentrunner
+    container_name: ai_agent_runner
     restart: "no"
+
     env_file:
       - ~/java.env
+
     environment:
       LOG_LEVEL: ${LOG_LEVEL:-info}
-      CHROMADB_HOST: chromadb
+      CHROMADB_HOST: ai_chromadb
       CHROMADB_PORT: "8000"
       REDIS_URL: redis://redis:6379/0
       RESUME_DIR: /app/resumes
@@ -169,21 +289,31 @@ services:
       LOCAL_POSTGRES_URL: postgresql://${LOCAL_POSTGRES_USER:-postgres}:${LOCAL_POSTGRES_PASSWORD:-localdev123}@postgres:5432/${LOCAL_POSTGRES_DB:-ai_job_db}
       PYTHONPATH: /app
       RAG_SERVER_URL: http://rag-server:8090
-    command: [ "python", "main.py" ]
+      SCRAPER_SERVICE_URL: http://playwright-scraper:8001
+
+    command: ["python", "main.py"]
+
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
-      chromadb:
-        condition: service_healthy
       rag-server:
         condition: service_healthy
+      playwright-scraper:
+        condition: service_healthy
+      api-server:
+        condition: service_healthy
+
     volumes:
       - ./app/resumes:/app/resumes:ro
       - ./logs:/app/logs
+
     networks:
       - ai_job_network
+
+    profiles: ["batch"]
+
     deploy:
       resources:
         limits:
