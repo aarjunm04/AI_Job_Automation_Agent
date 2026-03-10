@@ -521,6 +521,15 @@ STEP 5: After completing any change — APPEND row to CHANGE_LOG before closing
 | L172 | 2026-03-10T22:55:00+05:30 | GEMINI | config/user_settings.json, config/platform_settings.json, database/schema.sql, .github/workflows/config_sync.yml | CREATE | create:postgres-sso-json-packets:user_settings:platform_settings:schema-migration:config_sync-action | DONE |
 | L173 | 2026-03-10T23:05:00+05:30 | CLAUDE SONNET | api/api_server.py | REFACTOR | refactor:api-server:fetch-user-profile-and-config-from-postgres-json-packets:remove-os-getenv | DONE |
 | L174 | 2026-03-10T23:15:00+05:30 | CLAUDE SONNET | extension/popup/*, extension/background/service_worker.js, extension/content_scripts/sidebar.js | REFACTOR | refactor:chrome-ext:full-sidebar-rewrite:strip-mcp:fastapi-only-comms | DONE |
+| L175 | 2026-03-10T23:25:00+05:30 | CLAUDE SONNET | tools/postgres_tools.py, tools/rag_tools.py, tools/apply_tools.py | REFACTOR | refactor:tools-layer:fetch-platform-config-resume-default-dry-run-from-postgres-json-packets | DONE |
+| L176 | 2026-03-10T23:35:00+05:30 | CLAUDE OPUS | agents/analyser_agent.py, agents/apply_agent.py, agents/scraper_agent.py, scrapers/scraper_engine.py, scrapers/scraper_service.py | BUGFIX+REFACTOR | fix:func-typeerror-crash:scraper-engine-db-ssot:proxy-integrity-rotation | DONE |
+| L177 | 2026-03-10T23:45:00+05:30 | CLAUDE OPUS | test_scripts/test_postgres.py, test_scripts/test_rag.py | REFACTOR | refactor:test-mocks:migrate-config-limits-to-postgres-json-packets:add-fetch-user-config-tests | DONE |
+| L178 | 2026-03-10T23:55:00+05:30 | CLAUDE OPUS | rag_systems/rag_api.py, rag_systems/production_server.py, rag_systems/rag_pipeline.py, rag_systems/ingestion.py | REFACTOR | refactor:rag:unify-api-entry-points:deduplicate-chunking:chunk-size-400:health-endpoint-fix | DONE |
+| L179 | 2026-03-11T00:10:00+05:30 | CLAUDE OPUS | Dockerfile, scrapers/Dockerfile, api/Dockerfile, docker-compose.yml, java.env.template | REFACTOR | refactor:docker:split-playwright-scraper:agent-runner:api-server:rewire-compose:7-services | DONE |
+| L180 | 2026-03-11T00:10:00+05:30 | GEMINI | integrations/llm_interface.py, docker-compose.yml, Dockerfile | BUGFIX | fix:grok-model-ids:chromadb-host-container-name:remove-scrapers-copy-from-agent-runner | DONE |
+| L181 | 2026-03-11T00:15:00+05:30 | GEMINI | config/, scrapers/job_filters.yaml, database/schema.sql, extension/*, config/settings.py | CLEANUP | cleanup:delete-deprecated-config-files:schema-migration-patch:mcp-final-sweep:settings-strip | DONE |
+| L182 | 2026-03-11T00:20:00+05:30 | CLAUDE SONNET | tools/rag_tools.py, agents/scraper_agent.py | REFACTOR | refactor:http-wiring:rag-tools-httpx-to-rag-server:scraper-agent-httpx-to-scraper-service | DONE |
+| L183 | 2026-03-11T00:30:00+05:30 | CLAUDE SONNET | extension/extension_config.js, extension/sidebar.js | CLEANUP | 
 
 
 ## 2-WEEK SPRINT PLAN

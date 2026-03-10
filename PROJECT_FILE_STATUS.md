@@ -17,7 +17,7 @@
 |-------|-------|
 | Sprint | Phase 1 — 2026-03-01 to 2026-03-14 |
 | Today | Day 4 — 2026-03-04 |
-| Last changelog | L068 — CLAUDE — agents/master_agent.py — MODIFY |
+| Last changelog | L069 — CLAUDE OPUS — rag_systems/{rag_pipeline,ingestion,rag_api,production_server,resume_engine}.py — REFACTOR: unify RAG API, deduplicate chunking, add /match + /autofill + flat /health |
 | Next milestone | M1 — Infra + 15 resumes in ChromaDB — TODAY |
 | Phase 1 launch | 2026-03-14 |
 
