@@ -62,6 +62,7 @@ from dateutil import parser as date_parser
 
 from .jobspy_adapter import JobSpyAdapter
 from tools.serpapi_tool import search_google_jobs
+from tools.postgres_tools import _fetch_user_config
 from utils.proxy_ratelimit import get_proxy_dict, get_next_proxy, reset_proxy_cycle
 
 logging.basicConfig(
@@ -581,7 +582,10 @@ class FilterEngine:
     """
 
     def __init__(self, filters_path: Path):
-        self.filters_data = self._load_filters(filters_path)
+        self.filters_data = self._load_filters_from_db()
+        if not self.filters_data:
+            LOG.info("FilterEngine: DB config unavailable, falling back to YAML")
+            self.filters_data = self._load_filters(filters_path)
 
         # Search criteria
         search_criteria = self.filters_data.get("search_criteria", {})
@@ -639,7 +643,7 @@ class FilterEngine:
         )
 
     def _load_filters(self, path: Path) -> Dict[str, Any]:
-        """Load job filters from YAML."""
+        """Load job filters from YAML (fallback)."""
         if not path.exists():
             LOG.warning("job_filters.yaml not found at %s. Using empty config.", path)
             return {}
@@ -649,6 +653,27 @@ class FilterEngine:
             return data or {}
         except Exception as e:  # pragma: no cover
             LOG.error("Failed to parse job_filters.yaml: %s. Using empty config.", e)
+            return {}
+
+    @staticmethod
+    def _load_filters_from_db() -> Dict[str, Any]:
+        """Load job filters + scoring weights from Postgres users.platform_settings."""
+        try:
+            cfg = _fetch_user_config()
+            ps = cfg.get("platform_settings", {})
+            job_filters = ps.get("job_filters", {})
+            scoring_weights = ps.get("scoring_weights", {})
+            if not job_filters:
+                return {}
+            # Merge scoring_weights into job_filters under ai_scoring.weights
+            # so downstream ScoringEngine picks them up transparently.
+            if scoring_weights:
+                ai = job_filters.setdefault("ai_scoring", {})
+                ai.setdefault("weights", {}).update(scoring_weights)
+            LOG.info("FilterEngine: loaded config from Postgres platform_settings")
+            return job_filters
+        except Exception as exc:  # noqa: BLE001
+            LOG.warning("FilterEngine: DB config fetch failed: %s", exc)
             return {}
 
     def _derive_max_days_old(self) -> Optional[int]:

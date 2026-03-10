@@ -40,6 +40,9 @@ from pathlib import Path
 
 # External dependencies
 from dotenv import load_dotenv
+import requests as _http_requests
+from fastapi import FastAPI, Header, HTTPException
+from pydantic import BaseModel, Field
 from playwright.async_api import async_playwright, Browser, BrowserContext
 
 # =================================================================================
@@ -137,6 +140,24 @@ class ProxyManager:
             except Exception as e:
                 LOG.warning("Failed to parse proxy %s: %s", key, e)
 
+        # Bulk load from WEBSHARE_PROXY_LIST (comma-separated URLs)
+        bulk_raw = os.getenv("WEBSHARE_PROXY_LIST", "")
+        for url in bulk_raw.split(","):
+            url = url.strip()
+            if not url:
+                continue
+            try:
+                url = url.replace("https://", "http://")
+                no_proto = url.replace("http://", "")
+                auth, srv = no_proto.split("@", 1)
+                uname, pwd = auth.split(":", 1)
+                self.proxies.append(
+                    ProxyNode(server=f"http://{srv}", username=uname, password=pwd)
+                )
+                LOG.info("Loaded proxy from WEBSHARE_PROXY_LIST")
+            except Exception as e:
+                LOG.warning("Failed to parse WEBSHARE_PROXY_LIST entry: %s", e)
+
         if not self.proxies:
             LOG.warning("No valid proxies found. Running without proxies.")
 
@@ -153,6 +174,31 @@ class ProxyManager:
 
         # All proxies degraded — return the least-failed one
         return min(self.proxies, key=lambda p: (p.failures, p.used_mb))
+
+    def rotate_proxy(self) -> Optional[ProxyNode]:
+        """Force-advance the round-robin index and return the next available proxy."""
+        if not self.proxies:
+            return None
+        self._proxy_index = (self._proxy_index + 1) % len(self.proxies)
+        return self.select_proxy()
+
+    @staticmethod
+    def _verify_proxy(proxy_node: ProxyNode, timeout: float = 5.0) -> bool:
+        """Verify proxy health with a lightweight HTTP request."""
+        try:
+            resp = _http_requests.get(
+                "https://api.ipify.org?format=json",
+                proxies={
+                    "http": f"http://{proxy_node.username}:{proxy_node.password}@"
+                            f"{proxy_node.server.replace('http://', '')}",
+                    "https": f"http://{proxy_node.username}:{proxy_node.password}@"
+                             f"{proxy_node.server.replace('http://', '')}",
+                },
+                timeout=timeout,
+            )
+            return resp.status_code == 200
+        except Exception:
+            return False
 
 
 # =================================================================================
@@ -199,6 +245,21 @@ class PlaywrightManager:
         await self.initialize()
 
         proxy_node = self.proxy_manager.select_proxy()
+
+        # Verify proxy health — try up to 3 proxies before falling back to direct
+        if proxy_node and not self.proxy_manager._verify_proxy(proxy_node):
+            LOG.warning("Proxy %s failed health check — rotating", proxy_node.server)
+            proxy_node.mark_failure()
+            for _ in range(2):
+                proxy_node = self.proxy_manager.rotate_proxy()
+                if proxy_node and self.proxy_manager._verify_proxy(proxy_node):
+                    break
+                if proxy_node:
+                    proxy_node.mark_failure()
+                    proxy_node = None
+            if not proxy_node:
+                LOG.warning("All proxy candidates failed health check — using direct")
+
         proxy_config = (
             {
                 "server": proxy_node.server,
@@ -842,6 +903,7 @@ atexit.register(_shutdown_playwright)
 # =================================================================================
 
 __all__ = [
+    "app",
     "PlaywrightManager",
     "GLOBAL_PLAYWRIGHT_MANAGER",
     "WellfoundScraper",
@@ -853,3 +915,130 @@ __all__ = [
     "NodeskScraper",
     "ToptalScraper",
 ]
+
+
+# =================================================================================
+# FASTAPI HTTP SERVICE
+# =================================================================================
+
+app = FastAPI(title="Playwright Scraper Service", version="1.0.0")
+
+_SCRAPER_API_KEY: str = os.getenv("SCRAPER_SERVICE_API_KEY", "")
+
+
+def _verify_scraper_api_key(
+    x_api_key: str = Header(..., alias="X-API-Key"),
+) -> str:
+    """Verify X-API-Key header for the scraper service.
+
+    Args:
+        x_api_key: Value of the ``X-API-Key`` request header.
+
+    Returns:
+        The validated key string.
+
+    Raises:
+        HTTPException: 401 if the key is missing or does not match.
+    """
+    if _SCRAPER_API_KEY and x_api_key == _SCRAPER_API_KEY:
+        return x_api_key
+    if not _SCRAPER_API_KEY:
+        LOG.warning("SCRAPER_SERVICE_API_KEY not set — auth disabled")
+        return x_api_key
+    raise HTTPException(status_code=401, detail="Invalid API key")
+
+
+class ScrapeRequest(BaseModel):
+    """Request body for POST /scrape.
+
+    Attributes:
+        run_batch_id: UUID identifying the batch run.
+        search_queries: List of search query strings.
+        platforms: List of platform names to scrape.
+        max_jobs: Maximum number of jobs to return.
+    """
+
+    run_batch_id: str = Field(..., description="UUID of the run batch")
+    search_queries: List[str] = Field(default_factory=list, description="Search queries")
+    platforms: List[str] = Field(default_factory=list, description="Platforms to scrape")
+    max_jobs: int = Field(default=150, ge=1, le=1000, description="Max jobs to return")
+
+
+@app.post("/scrape")
+async def scrape_jobs(
+    request: ScrapeRequest,
+    api_key: str = Header(..., alias="X-API-Key"),
+) -> Dict[str, Any]:
+    """Trigger a scrape batch and return results.
+
+    Instantiates a :class:`~scrapers.scraper_engine.ScraperEngine` with
+    ``min_jobs_target`` set from the request payload and runs the full
+    scrape orchestration pipeline.
+
+    Args:
+        request: Scrape parameters including batch ID and limits.
+        api_key: ``X-API-Key`` header value.
+
+    Returns:
+        Dict with ``run_batch_id``, ``jobs_found``, ``jobs`` list,
+        ``platforms_scraped``, and ``duration_seconds``.
+    """
+    _verify_scraper_api_key(api_key)
+    start = time.time()
+    try:
+        from scrapers.scraper_engine import ScraperEngine
+
+        engine = ScraperEngine(min_jobs_target=request.max_jobs)
+        jobs, metrics = await engine.run()
+        duration = round(time.time() - start, 2)
+        LOG.info(
+            "POST /scrape batch=%s jobs=%d duration=%.2fs",
+            request.run_batch_id,
+            len(jobs),
+            duration,
+        )
+        return {
+            "run_batch_id": request.run_batch_id,
+            "jobs_found": len(jobs),
+            "jobs": jobs,
+            "platforms_scraped": list({j.get("source", "unknown") for j in jobs}),
+            "duration_seconds": duration,
+        }
+    except Exception as exc:
+        LOG.error("POST /scrape failed: %s", exc)
+        return {
+            "run_batch_id": request.run_batch_id,
+            "jobs_found": 0,
+            "jobs": [],
+            "platforms_scraped": [],
+            "duration_seconds": round(time.time() - start, 2),
+            "error": str(exc),
+        }
+
+
+@app.get("/health")
+async def health() -> Dict[str, Any]:
+    """Health check — verify Playwright can launch a browser.
+
+    Launches and immediately closes a headless Chromium instance to
+    confirm the browser binary is functional.
+
+    Returns:
+        Dict with ``status``, ``playwright`` health, and
+        ``proxy_pool_size``.
+    """
+    result: Dict[str, Any] = {
+        "status": "ok",
+        "playwright": "ok",
+        "proxy_pool_size": len(GLOBAL_PLAYWRIGHT_MANAGER.proxy_manager.proxies),
+    }
+    try:
+        pw = await async_playwright().start()
+        browser = await pw.chromium.launch(headless=True, args=["--no-sandbox"])
+        await browser.close()
+        await pw.stop()
+    except Exception as exc:
+        LOG.warning("Health: Playwright check failed: %s", exc)
+        result["playwright"] = "error"
+        result["status"] = "error"
+    return result
