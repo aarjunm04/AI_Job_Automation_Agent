@@ -112,6 +112,58 @@ def _with_retry(max_retries: int = 3) -> Callable:
     return decorator
 
 
+def _fetch_user_config() -> dict[str, Any]:
+    """Fetch ``user_settings`` and ``platform_settings`` JSONB columns from the users table.
+
+    Executes ``SELECT user_settings, platform_settings FROM users ORDER BY created_at LIMIT 1``.
+    Retries up to 3 times on ``psycopg2.OperationalError`` with exponential back-off
+    (``time.sleep(2**attempt)``).  All other exceptions are caught, logged at WARNING, and
+    cause an immediate return of ``{}`` — this function never raises.
+
+    Returns:
+        Dict with keys ``"user_settings"`` and ``"platform_settings"``, each being a
+        Python dict parsed from the corresponding JSONB column.  Returns ``{}`` when the
+        table is empty, the DB URL is unset, or all retry attempts are exhausted.
+    """
+    conn: Optional[PgConnection] = None
+    for attempt in range(3):
+        try:
+            conn = _get_conn()
+            cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+            cursor.execute(
+                "SELECT user_settings, platform_settings FROM users ORDER BY created_at LIMIT 1"
+            )
+            row = cursor.fetchone()
+            if row is None:
+                logger.warning("_fetch_user_config: users table is empty — returning {}")
+                return {}
+            return {
+                "user_settings": row["user_settings"] or {},
+                "platform_settings": row["platform_settings"] or {},
+            }
+        except psycopg2.OperationalError as op_err:
+            sleep_time: int = 2 ** attempt
+            logger.warning(
+                "_fetch_user_config: OperationalError attempt %d/3: %s — retrying in %ds",
+                attempt + 1,
+                op_err,
+                sleep_time,
+            )
+            time.sleep(sleep_time)
+        except Exception as exc:
+            logger.warning("_fetch_user_config: unexpected DB error: %s", exc)
+            return {}
+        finally:
+            if conn:
+                try:
+                    conn.close()
+                except Exception:  # noqa: BLE001
+                    pass
+            conn = None
+    logger.warning("_fetch_user_config: all 3 retries exhausted — returning empty dict")
+    return {}
+
+
 @tool
 @operation
 def upsert_job_post(
@@ -711,66 +763,44 @@ def get_queued_jobs(limit: int = 50) -> str:
 @tool
 @operation
 def get_platform_config(platform: str) -> str:
-    """
-    Retrieve platform configuration limits.
+    """Retrieve per-platform rate-limit config from ``users.platform_settings`` JSONB column.
+
+    Reads ``platform_settings->platform_limits->{platform}`` from the first row of the
+    ``users`` table.  The lookup is case-insensitive (lowercases the ``platform`` arg).
+    Retry logic (max 3 × exponential back-off on ``OperationalError``) is handled by
+    the shared ``_fetch_user_config()`` helper.  Fail-soft: returns a safe default dict
+    on any DB error or when the platform key is absent.
 
     Args:
-        platform: Platform name.
+        platform: Platform name (case-insensitive match against ``platform_limits`` keys).
 
     Returns:
-        JSON string with platform config (returns defaults if not found).
+        JSON string with the matching ``platform_limits`` entry, or
+        ``{"max_per_run": 20, "rate_limit_per_request_seconds": 3}`` when the platform
+        is not found or any DB failure occurs.
     """
-
-    @_with_retry(max_retries=3)
-    def _execute() -> str:
-        conn = None
-        try:
-            conn = _get_conn()
-            cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-
-            cursor.execute(
-                """
-                SELECT platform, max_per_run, max_per_day, max_concurrent_sessions
-                FROM config_limits
-                WHERE platform = %s
-                """,
-                (platform,),
-            )
-
-            result = cursor.fetchone()
-
-            if result:
-                config = {
-                    "platform": result["platform"],
-                    "max_per_run": result["max_per_run"],
-                    "max_per_day": result["max_per_day"],
-                    "max_concurrent_sessions": result["max_concurrent_sessions"],
-                }
-            else:
-                config = {
-                    "platform": platform,
-                    "max_per_run": 50,
-                    "max_per_day": 100,
-                    "max_concurrent_sessions": 1,
-                }
-
-            logger.info(f"Platform config retrieved: {platform}")
-
-            return json.dumps(config)
-
-        except Exception as e:
-            logger.error(f"Failed to get platform config: {e}")
-            return json.dumps(
-                {"error": "get_platform_config_failed", "detail": str(e)}
-            )
-        finally:
-            if conn:
-                conn.close()
-
+    _DEFAULT: dict[str, Any] = {"max_per_run": 20, "rate_limit_per_request_seconds": 3}
     try:
-        return _execute()
-    except Exception as e:
-        return json.dumps({"error": "get_platform_config_failed", "detail": str(e)})
+        cfg: dict[str, Any] = _fetch_user_config()
+        platform_limits: dict[str, Any] = (
+            cfg.get("platform_settings", {}).get("platform_limits", {})
+        )
+        platform_cfg: Optional[dict[str, Any]] = platform_limits.get(platform.lower())
+        if platform_cfg is None:
+            logger.info(
+                "get_platform_config: platform '%s' not in platform_limits — using defaults",
+                platform,
+            )
+            return json.dumps(_DEFAULT)
+        logger.info("get_platform_config: config retrieved for platform '%s'", platform)
+        return json.dumps(platform_cfg)
+    except Exception as exc:
+        logger.warning(
+            "get_platform_config: error fetching config for '%s': %s — using defaults",
+            platform,
+            exc,
+        )
+        return json.dumps(_DEFAULT)
 
 
 @tool

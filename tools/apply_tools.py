@@ -41,7 +41,7 @@ from playwright.async_api import Page, TimeoutError as PlaywrightTimeoutError, a
 from auto_apply.ats_detector import ATSDetector, ATSProfile, ATSType
 from auto_apply.form_filler import FormFiller, FillResult
 from integrations.llm_interface import LLMInterface
-from tools.postgres_tools import create_application, update_application_status, log_event
+from tools.postgres_tools import create_application, update_application_status, log_event, _fetch_user_config
 from tools.budget_tools import check_xai_run_cap, record_llm_cost
 from tools.agentops_tools import record_agent_error
 from tools.notion_tools import queue_job_to_applications_db
@@ -419,9 +419,51 @@ async def _run_apply(
         Dict with apply result keys per the STEP 13 spec.  Never raises.
     """
     # -----------------------------------------------------------------------
+    # DB CONFIG FETCH — Authoritative dry_run + default_resume from Postgres
+    # -----------------------------------------------------------------------
+    dry_run_effective: bool
+    default_resume_effective: str
+    try:
+        _cfg: dict[str, Any] = _fetch_user_config()
+        _user_settings: dict[str, Any] = _cfg.get("user_settings", {})
+        _platform_settings: dict[str, Any] = _cfg.get("platform_settings", {})
+        dry_run_effective = bool(_user_settings.get("dry_run", False))
+        default_resume_effective = str(
+            _user_settings.get("default_resume") or "AarjunGen.pdf"
+        )
+        auto_apply_enabled: bool = bool(_user_settings.get("auto_apply_enabled", True))
+        job_filters: dict[str, Any] = _platform_settings.get("job_filters", {})
+        logger.info(
+            "_run_apply: DB config — dry_run=%s default_resume=%s auto_apply_enabled=%s",
+            dry_run_effective,
+            default_resume_effective,
+            auto_apply_enabled,
+        )
+    except Exception as _cfg_exc:  # noqa: BLE001
+        dry_run_effective = os.getenv("DRY_RUN", "false").lower() == "true"
+        default_resume_effective = "AarjunGen.pdf"
+        logger.warning(
+            "_run_apply: DB config fetch failed (%s) — "
+            "falling back to env/hardcoded: dry_run=%s",
+            _cfg_exc,
+            dry_run_effective,
+        )
+
+    # Resolve resume filename — use DB default_resume if given file is missing on disk
+    _resume_path: Path = RESUME_DIR / resume_filename
+    if not _resume_path.is_file():
+        logger.warning(
+            "_run_apply: resume '%s' not found at '%s' — using default_resume '%s'",
+            resume_filename,
+            _resume_path,
+            default_resume_effective,
+        )
+        resume_filename = default_resume_effective
+
+    # -----------------------------------------------------------------------
     # STEP 1 — Guards: DRY_RUN + budget cap
     # -----------------------------------------------------------------------
-    if DRY_RUN:
+    if dry_run_effective:
         logger.info("_run_apply: DRY_RUN=true — skipping browser for %s", job_url)
         try:
             log_event(run_batch_id, "INFO", "dry_run_skip", f"dry_run|{job_url}")
@@ -622,7 +664,7 @@ async def _run_apply(
             # -------------------------------------------------------------------
             # STEP 9 — Submit (guarded by DRY_RUN)
             # -------------------------------------------------------------------
-            if not DRY_RUN:
+            if not dry_run_effective:
                 for raw_selector in ats_profile.submit_selector.split(","):
                     submit_selector: str = raw_selector.strip()
                     if not submit_selector:
@@ -730,7 +772,7 @@ async def _run_apply(
                 "llm_calls_used": fill_result.llm_calls,
                 "custom_questions_answered": len(fill_result.custom_questions),
                 "screenshot_captured": bool(screenshot_b64),
-                "dry_run": DRY_RUN,
+                "dry_run": dry_run_effective,
                 "job_url": job_url,
             }
 

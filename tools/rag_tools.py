@@ -3,23 +3,19 @@ from __future__ import annotations
 import json
 import logging
 import os
-import sys
-from pathlib import Path
-from typing import Any, Dict, List
+import time
+from typing import Any, Dict, List, Optional
 
+import httpx
 from crewai.tools import tool
 import agentops
 from agentops.sdk.decorators import agent, operation
 
+from tools.postgres_tools import _fetch_user_config
 
-# Ensure project root is on sys.path so that rag_systems is importable
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
-
-from rag_systems import rag_api  # type: ignore  # Imported via adjusted sys.path
-from rag_systems.rag_pipeline import EmbeddingService  # type: ignore
-from rag_systems.chromadb_store import ChromaStore, ChromaStoreConfig  # type: ignore
+# RAG server connection — set in docker-compose environment block
+RAG_SERVER_URL: str = os.getenv("RAG_SERVER_URL", "http://localhost:8090")
+RAG_API_KEY: str = os.getenv("RAG_SERVER_API_KEY", "")
 
 
 logger = logging.getLogger(__name__)
@@ -47,183 +43,168 @@ def _safe_json_dumps(payload: Dict[str, Any]) -> str:
 @tool
 @operation
 def query_resume_match(job_description: str, job_title: str, required_skills: str) -> str:
+    """Suggest the best resume for a given job description.
+
+    Calls ``POST {RAG_SERVER_URL}/match`` and retries up to 3 times with
+    exponential back-off.  Falls back to the default resume stored in
+    ``users.user_settings`` (Postgres) when the RAG server is unreachable.
+
+    Args:
+        job_description: Full text of the job description.
+        job_title: Title of the role.
+        required_skills: Comma-separated list of required skills.
+
+    Returns:
+        JSON string with keys: resume_suggested, similarity_score, fit_score,
+        match_reasoning, talking_points.
     """
-    Suggest the best resume for a given job description.
-
-    Returns a JSON string with:
-    {
-        "resume_suggested": str,
-        "similarity_score": float,
-        "fit_score": float,
-        "match_reasoning": str,
-        "talking_points": list
-    }
-    """
-    try:
-        parts: List[str] = []
-        if job_title and job_title.strip():
-            parts.append(job_title.strip())
-        if job_description and job_description.strip():
-            parts.append(job_description.strip())
-        if required_skills and required_skills.strip():
-            parts.append(required_skills.strip())
-
-        combined_text = "\n\n".join(parts)
-
-        job_payload = {"job_text": combined_text}
-        result = rag_api.select_resume(job_payload)  # type: ignore[no-untyped-call]
-
-        # Normalise result to a dict-like structure
-        if isinstance(result, dict):
-            data = result
-        else:
-            data = getattr(result, "__dict__", {}) or {}
-
-        resume_suggested = data.get("top_resume_id")
-        similarity_score = float(data.get("top_score", 0.0) or 0.0)
-        fit_score = similarity_score
-
-        match_reasoning = ""
-        talking_points: List[str] = []
-
+    for attempt in range(3):
         try:
-            candidates = data.get("candidates") or []
-            if isinstance(candidates, list) and candidates:
-                top_cand = candidates[0]
-                if isinstance(top_cand, dict):
-                    final_score = float(top_cand.get("final_score", similarity_score) or 0.0)
-                    match_reasoning = (
-                        f"Selected resume '{resume_suggested}' with final_score={final_score:.3f} "
-                        f"based on anchor and chunk similarity."
-                    )
+            with httpx.Client(timeout=30.0) as client:
+                resp = client.post(
+                    f"{RAG_SERVER_URL}/match",
+                    headers={"X-API-Key": RAG_API_KEY, "Content-Type": "application/json"},
+                    json={
+                        "job_description": job_description,
+                        "job_title": job_title,
+                        "required_skills": required_skills,
+                    },
+                )
+            if resp.status_code == 200:
+                data: Dict[str, Any] = resp.json()
+                return _safe_json_dumps({
+                    "resume_suggested": data.get("resume_suggested", ""),
+                    "similarity_score": float(data.get("similarity_score", 0.0)),
+                    "fit_score": float(data.get("fit_score", 0.0)),
+                    "match_reasoning": data.get("match_reasoning", ""),
+                    "talking_points": data.get("talking_points", []),
+                })
+            logger.warning(
+                "query_resume_match: RAG server returned HTTP %d (attempt %d/3)",
+                resp.status_code,
+                attempt + 1,
+            )
+        except httpx.RequestError as exc:
+            logger.warning(
+                "query_resume_match: connection error (attempt %d/3): %s",
+                attempt + 1,
+                exc,
+            )
+        if attempt < 2:
+            time.sleep(2 ** attempt)
 
-                    chunks = top_cand.get("recommended_chunks") or []
-                    if isinstance(chunks, list):
-                        for chunk in chunks:
-                            if isinstance(chunk, dict):
-                                text = chunk.get("document") or chunk.get("text") or ""
-                                if isinstance(text, str) and text.strip():
-                                    talking_points.append(text.strip())
-                    # Limit the number of talking points for brevity
-                    talking_points = talking_points[:5]
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("Failed to derive detailed reasoning from RAG result: %s", exc)
-
-        response = {
-            "resume_suggested": resume_suggested,
-            "similarity_score": similarity_score,
-            "fit_score": fit_score,
-            "match_reasoning": match_reasoning,
-            "talking_points": talking_points,
-        }
-        return _safe_json_dumps(response)
-    except Exception as exc:  # noqa: BLE001
-        logger.error("query_resume_match failed: %s", exc, exc_info=True)
-        fallback_resume = os.getenv("DEFAULT_RESUME", "AarjunGen.pdf")
-        error_response = {
-            "error": "rag_unavailable",
-            "fallback_resume": fallback_resume,
-        }
-        return _safe_json_dumps(error_response)
+    # All retries exhausted — fall back to DB default_resume
+    logger.error("query_resume_match: RAG server unreachable after 3 attempts, using DB fallback")
+    fallback_resume: str = "AarjunGen.pdf"
+    try:
+        _cfg: Dict[str, Any] = _fetch_user_config()
+        _db_resume: Optional[str] = _cfg.get("user_settings", {}).get("default_resume")
+        if _db_resume:
+            fallback_resume = str(_db_resume)
+        else:
+            logger.warning(
+                "query_resume_match: default_resume NULL in users.user_settings "
+                "— using hardcoded fallback"
+            )
+    except Exception as db_exc:  # noqa: BLE001
+        logger.warning(
+            "query_resume_match: DB fallback for default_resume also failed (%s) "
+            "— using hardcoded AarjunGen.pdf",
+            db_exc,
+        )
+    return _safe_json_dumps({
+        "resume_suggested": fallback_resume,
+        "similarity_score": 0.0,
+        "fit_score": 0.0,
+        "match_reasoning": "rag_unavailable_db_fallback",
+        "talking_points": [],
+    })
 
 
 @tool
 @operation
 def get_resume_context(resume_filename: str, job_description: str) -> str:
-    """
-    Return formatted resume text chunks relevant to the given job description.
+    """Return formatted resume text chunks relevant to the given job description.
 
-    The return value is a plain string suitable for direct LLM context injection.
-    """
-    del resume_filename  # Currently unused, selection is handled inside the RAG engine.
+    Calls ``POST {RAG_SERVER_URL}/autofill`` and returns chunks joined as a
+    plain string for direct LLM context injection.  Returns an empty string
+    and logs a WARNING on any HTTP failure.
 
+    Args:
+        resume_filename: Filename of the selected resume (forwarded to server).
+        job_description: Full text of the job description to match against.
+
+    Returns:
+        Newline-separated ``[CHUNK N] ...`` string, or empty string on failure.
+    """
     try:
-        job_payload = {"job_text": job_description}
-        result = rag_api.get_rag_context(  # type: ignore[no-untyped-call]
-            job_payload=job_payload,
-            top_k_chunks=10,
-        )
-
-        if isinstance(result, dict):
-            chunks = result.get("top_chunks") or result.get("chunks") or []
-        else:
-            chunks = getattr(result, "top_chunks", []) or getattr(result, "chunks", [])
-
+        with httpx.Client(timeout=30.0) as client:
+            resp = client.post(
+                f"{RAG_SERVER_URL}/autofill",
+                headers={"X-API-Key": RAG_API_KEY, "Content-Type": "application/json"},
+                json={"resume_filename": resume_filename, "job_description": job_description},
+            )
+        if resp.status_code != 200:
+            logger.warning(
+                "get_resume_context: rag_autofill_unavailable — HTTP %d", resp.status_code
+            )
+            return ""
+        data: Dict[str, Any] = resp.json()
+        chunks: List[str] = data.get("context_chunks", [])
         if not isinstance(chunks, list):
             chunks = []
-
-        formatted_chunks: List[str] = []
-        for idx, chunk in enumerate(chunks, start=1):
-            text = ""
-            if isinstance(chunk, dict):
-                text = chunk.get("document") or chunk.get("text") or ""
-            if isinstance(text, str):
-                text = text.strip()
-            else:
-                text = ""
-            if not text:
-                continue
-            formatted_chunks.append(f"[CHUNK {idx}] {text}")
-
-        return "\n\n".join(formatted_chunks)
+        formatted: List[str] = [
+            f"[CHUNK {i + 1}] {c.strip()}"
+            for i, c in enumerate(chunks)
+            if isinstance(c, str) and c.strip()
+        ]
+        return "\n\n".join(formatted)
     except Exception as exc:  # noqa: BLE001
-        logger.error("get_resume_context failed: %s", exc, exc_info=True)
-        return "RAG context unavailable for this job description."
+        logger.warning("get_resume_context: rag_autofill_unavailable — %s", exc)
+        return ""
 
 
 @tool
 @operation
 def embed_job_description(job_url: str, job_description: str) -> str:
-    """
-    Embed a job description into the ChromaDB 'job_descriptions' collection.
+    """Trigger embedding of a job description via the RAG server.
 
-    Returns a JSON string:
-    {
-        "embedded": bool,
-        "job_url": str,
-        "collection": "job_descriptions"
-    }
-    """
-    collection_name = os.getenv("JOB_DESCRIPTIONS_COLLECTION", "job_descriptions")
+    Reuses ``POST {RAG_SERVER_URL}/match`` with the job description as input.
+    The match payload is discarded; the call ensures the RAG server indexes
+    the description for future similarity lookups.
 
+    Args:
+        job_url: Full URL of the job posting (used as identifier).
+        job_description: Full text of the job description to embed.
+
+    Returns:
+        JSON string with keys: embedded (bool), job_url (str),
+        and error (str, only present on failure).
+    """
     try:
-        embedding_service = EmbeddingService()
-        vector = embedding_service.embed_text(job_description or "")
-
-        store = ChromaStore(
-            config=ChromaStoreConfig(collection_name=collection_name)
+        with httpx.Client(timeout=30.0) as client:
+            resp = client.post(
+                f"{RAG_SERVER_URL}/match",
+                headers={"X-API-Key": RAG_API_KEY, "Content-Type": "application/json"},
+                json={
+                    "job_description": job_description,
+                    "job_title": "",
+                    "required_skills": "",
+                },
+            )
+        if resp.status_code == 200:
+            return _safe_json_dumps({"embedded": True, "job_url": job_url})
+        logger.warning(
+            "embed_job_description: RAG server returned HTTP %d", resp.status_code
         )
-
-        from uuid import uuid4
-
-        doc_id = f"job::{uuid4()}"
-        metadata: Dict[str, Any] = {
-            "job_url": job_url,
-            "source": "job_description",
-        }
-
-        store.upsert_chunks(
-            resume_id=job_url or doc_id,
-            chunk_ids=[doc_id],
-            embeddings=[vector],
-            documents=[job_description],
-            metadatas=[metadata],
+        return _safe_json_dumps(
+            {"embedded": False, "job_url": job_url, "error": "rag_server_unavailable"}
         )
-
-        response = {
-            "embedded": True,
-            "job_url": job_url,
-            "collection": collection_name,
-        }
-        return _safe_json_dumps(response)
     except Exception as exc:  # noqa: BLE001
         logger.error("embed_job_description failed: %s", exc, exc_info=True)
-        response = {
-            "embedded": False,
-            "job_url": job_url,
-            "collection": collection_name,
-        }
-        return _safe_json_dumps(response)
+        return _safe_json_dumps(
+            {"embedded": False, "job_url": job_url, "error": "rag_server_unavailable"}
+        )
 
 
 @tool
