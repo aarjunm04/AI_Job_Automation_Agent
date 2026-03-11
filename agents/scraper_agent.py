@@ -343,7 +343,7 @@ IMPORTANT:
             self.logger.info("Fallback Step 3: SerpAPI Scrape")
             run_serpapi_scrape.func(
                 run_batch_id=self.run_batch_id,
-                search_query=search_query,
+                query=search_query,
                 location="Remote",
                 results_wanted=25
             )

@@ -240,7 +240,7 @@ class PlaywrightManager:
             self._initialized = True
             LOG.info("Playwright browser + stealth initialized")
 
-    async def new_context(self) -> BrowserContext:
+    async def new_context(self, require_proxy: bool = False) -> BrowserContext:
         """Create a new browser context with proxy rotation + stealth init script."""
         await self.initialize()
 
@@ -258,6 +258,8 @@ class PlaywrightManager:
                     proxy_node.mark_failure()
                     proxy_node = None
             if not proxy_node:
+                if require_proxy:
+                    raise RuntimeError("All proxies failed health check — require_proxy set, aborting")
                 LOG.warning("All proxy candidates failed health check — using direct")
 
         proxy_config = (
@@ -336,6 +338,7 @@ class BasePlaywrightScraper:
     link_selector: Optional[str] = None
     scroll_times: int = 3
     max_retries: int = 2
+    require_proxy: bool = False
 
     def __init__(self, jobs_limit: int = 20) -> None:
         self.jobs_limit = jobs_limit
@@ -359,12 +362,12 @@ class BasePlaywrightScraper:
         context: Optional[BrowserContext] = None
 
         try:
-            context = await manager.new_context()
+            context = await manager.new_context(require_proxy=self.require_proxy)
             page = await context.new_page()
-            page.set_default_navigation_timeout(45000)
-            page.set_default_timeout(30000)
+            page.set_default_navigation_timeout(15000)
+            page.set_default_timeout(10000)
 
-            await page.goto(self.start_url, wait_until="networkidle")
+            await page.goto(self.start_url, timeout=15000, wait_until="domcontentloaded")
             LOG.debug("%s: navigated to %s", self.name, self.start_url)
 
             for _ in range(self.scroll_times):
@@ -393,7 +396,10 @@ class BasePlaywrightScraper:
             raise
         finally:
             if context:
-                await context.close()
+                try:
+                    await context.close()
+                except Exception:
+                    pass
 
     async def _extract_job(self, card) -> Optional[Dict[str, Any]]:
         """Extract a raw job dict from a card element."""
@@ -501,10 +507,10 @@ class WellfoundScraper(BasePlaywrightScraper):
             # ------------------------------------------------------------------
 
             page = await context.new_page()
-            page.set_default_navigation_timeout(45000)
-            page.set_default_timeout(30000)
+            page.set_default_navigation_timeout(15000)
+            page.set_default_timeout(10000)
 
-            await page.goto(self.start_url, wait_until="networkidle")
+            await page.goto(self.start_url, timeout=15000, wait_until="domcontentloaded")
 
             for _ in range(self.scroll_times):
                 await page.evaluate("window.scrollBy(0, document.body.scrollHeight)")
@@ -530,7 +536,10 @@ class WellfoundScraper(BasePlaywrightScraper):
             raise
         finally:
             if context:
-                await context.close()
+                try:
+                    await context.close()
+                except Exception:
+                    pass
 
 
 class WeWorkRemotelyScraper(BasePlaywrightScraper):
@@ -579,10 +588,10 @@ class YCStartupScraper(BasePlaywrightScraper):
         try:
             context = await manager.new_context()
             page = await context.new_page()
-            page.set_default_navigation_timeout(45000)
-            page.set_default_timeout(30000)
+            page.set_default_navigation_timeout(15000)
+            page.set_default_timeout(10000)
 
-            await page.goto(self.start_url, wait_until="networkidle")
+            await page.goto(self.start_url, timeout=15000, wait_until="domcontentloaded")
 
             for _ in range(self.scroll_times):
                 await page.evaluate("window.scrollBy(0, document.body.scrollHeight)")
@@ -633,7 +642,10 @@ class YCStartupScraper(BasePlaywrightScraper):
             raise
         finally:
             if context:
-                await context.close()
+                try:
+                    await context.close()
+                except Exception:
+                    pass
 
     def _extract_from_next_data(self, data: Dict[str, Any]) -> List[Dict[str, Any]]:
         """
@@ -784,6 +796,7 @@ class NodeskScraper(BasePlaywrightScraper):
     link_selector = "h2 a, h3 a, a.job-title"
     scroll_times = 2
     max_retries = 2
+    require_proxy = True
 
 
 class ToptalScraper(BasePlaywrightScraper):
@@ -807,6 +820,7 @@ class ToptalScraper(BasePlaywrightScraper):
     link_selector = "h3 a, a.job-title, a[class*='job']"
     scroll_times = 2
     max_retries = 2
+    require_proxy = True
 
 
 # ---- Legacy scrapers (kept for reference; NOT exported) ----------------------
