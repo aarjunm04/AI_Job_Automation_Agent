@@ -1,4 +1,11 @@
 {
+    "filters": {
+        "required_keywords": [],
+        "exclude_keywords": ["10+ years", "15+ years", "Director", "VP ", "Vice President", "C-level", "unpaid", "internship"],
+        "salary_min": null,
+        "max_days_old": 7,
+        "remote_only": true
+    },
     "platform_limits": {
         "linkedin": {
             "max_per_run": 40,

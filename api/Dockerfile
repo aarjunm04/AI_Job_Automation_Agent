@@ -1,7 +1,7 @@
 # ============================================================
-# Stage 1: builder — install Python deps for API server
+# Stage 1: builder
 # ============================================================
-FROM python:3.11-slim-bookworm AS builder
+FROM python:3.11-slim AS builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
@@ -11,24 +11,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
+COPY requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir \
-    fastapi \
-    uvicorn[standard] \
-    psycopg2-binary \
-    redis \
-    python-dotenv \
-    agentops \
-    httpx \
-    pydantic \
-    python-multipart \
-    chromadb \
-    notion-client
+    pip install --no-cache-dir -r /app/requirements.txt
 
 # ============================================================
-# Stage 2: runtime — slim FastAPI API server
+# Stage 2: runtime
 # ============================================================
-FROM python:3.11-slim-bookworm
+FROM python:3.11-slim AS runtime
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq5 \
@@ -42,23 +32,22 @@ RUN useradd --create-home --shell /bin/bash appuser
 WORKDIR /app
 
 ENV PATH="/opt/venv/bin:$PATH"
-ENV PYTHONPATH=/app
-ENV PYTHONDONTWRITEBYTECODE=1
-ENV PYTHONUNBUFFERED=1
-ENV LOG_LEVEL=INFO
+ENV PYTHONPATH=/app PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 
-COPY --chown=appuser:appuser api/ ./api/
-COPY --chown=appuser:appuser tools/postgres_tools.py ./tools/postgres_tools.py
-COPY --chown=appuser:appuser tools/agentops_tools.py ./tools/agentops_tools.py
-COPY --chown=appuser:appuser tools/budget_tools.py ./tools/budget_tools.py
-COPY --chown=appuser:appuser tools/__init__.py ./tools/__init__.py
-COPY --chown=appuser:appuser config/ ./config/
-COPY --chown=appuser:appuser integrations/ ./integrations/
-COPY --chown=appuser:appuser database/ ./database/
+COPY --chown=appuser:appuser requirements.txt /app/requirements.txt
+COPY --chown=appuser:appuser api/ /app/api/
+COPY --chown=appuser:appuser agents/ /app/agents/
+COPY --chown=appuser:appuser tools/ /app/tools/
+COPY --chown=appuser:appuser integrations/ /app/integrations/
+COPY --chown=appuser:appuser config/ /app/config/
+COPY --chown=appuser:appuser database/ /app/database/
+COPY --chown=appuser:appuser utils/ /app/utils/
 
 USER appuser
 
 EXPOSE 8000
 
-CMD ["uvicorn", "api.api_server:app", "--host", "0.0.0.0", \
-     "--port", "8000", "--log-level", "info"]
+HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=5 \
+    CMD curl -sf http://localhost:8000/health || exit 1
+
+CMD ["uvicorn", "api.api_server:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]

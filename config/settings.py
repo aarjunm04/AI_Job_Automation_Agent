@@ -15,11 +15,13 @@ import os
 from dataclasses import dataclass, field
 
 __all__ = [
+    "settings",
     "db_config",
     "run_config",
     "budget_config",
     "api_config",
     "get_settings",
+    "Settings",
     "DBConfig",
     "RunConfig",
     "BudgetConfig",
@@ -90,9 +92,43 @@ class RunConfig:
             platforms if not reached.
         max_playwright_sessions: Maximum concurrent Playwright browser
             sessions.
+        auto_apply_enabled: When ``False``, all jobs are routed to the
+            manual queue regardless of score.
+        resume_dir: Directory containing resume PDF variants.
+        default_resume: Filename of the general-purpose resume to use when
+            no domain-specific variant is selected.
+        search_query: Default job-search query string passed to scrapers.
         log_level: Python ``logging`` level string (e.g. ``"INFO"``).
     """
-    
+
+    jobs_per_run_target: int = field(
+        default_factory=lambda: int(os.getenv("JOBS_PER_RUN_TARGET", "150"))
+    )
+    jobs_per_run_minimum: int = field(
+        default_factory=lambda: int(os.getenv("JOBS_PER_RUN_MINIMUM", "100"))
+    )
+    max_playwright_sessions: int = field(
+        default_factory=lambda: int(os.getenv("MAX_PLAYWRIGHT_SESSIONS", "5"))
+    )
+    auto_apply_enabled: bool = field(
+        default_factory=lambda: os.getenv(
+            "AUTO_APPLY_ENABLED", "true"
+        ).lower()
+        == "true"
+    )
+    dry_run: bool = False
+    resume_dir: str = field(
+        default_factory=lambda: os.getenv("RESUME_DIR", "app/resumes")
+    )
+    default_resume: str = field(
+        default_factory=lambda: os.getenv("DEFAULT_RESUME", "AarjunGen.pdf")
+    )
+    search_query: str = field(
+        default_factory=lambda: os.getenv(
+            "SEARCH_QUERY",
+            "AI ML Data Science Automation Engineer remote",
+        )
+    )
     log_level: str = field(
         default_factory=lambda: os.getenv("LOG_LEVEL", "INFO")
     )
@@ -180,21 +216,95 @@ class APIConfig:
     )
 
 
-def get_settings() -> tuple[DBConfig, RunConfig, BudgetConfig, APIConfig]:
+@dataclass(frozen=True)
+class Settings:
+    """Top-level settings object returned by ``get_settings()``."""
+
+    db_config: DBConfig
+    run_config: RunConfig
+    budget_config: BudgetConfig
+    api_config: APIConfig
+    rag_server_url: str = field(
+        default_factory=lambda: os.getenv("RAG_SERVER_URL", "http://localhost:8090")
+    )
+    scraper_service_url: str = field(
+        default_factory=lambda: os.getenv(
+            "SCRAPER_SERVICE_URL",
+            "http://localhost:8001",
+        )
+    )
+    chromadb_path: str = field(
+        default_factory=lambda: os.getenv("CHROMADB_PATH", "app/chromadb")
+    )
+
+    @property
+    def active_db(self) -> str:
+        return self.db_config.active_db
+
+    @property
+    def resume_dir(self) -> str:
+        return self.run_config.resume_dir
+
+    @property
+    def default_resume(self) -> str:
+        return self.run_config.default_resume
+
+    @property
+    def redis_url(self) -> str:
+        return self.db_config.redis_url
+
+    @property
+    def chromadb_host(self) -> str:
+        return self.db_config.chromadb_host
+
+    @property
+    def chromadb_port(self) -> int:
+        return self.db_config.chromadb_port
+
+    @property
+    def log_level(self) -> str:
+        return self.run_config.log_level
+
+    @property
+    def agentops_api_key(self) -> str:
+        return self.api_config.agentops_api_key
+
+    @property
+    def xai_cost_cap_per_run(self) -> float:
+        return self.budget_config.xai_cost_cap_per_run
+
+    @property
+    def total_monthly_budget(self) -> float:
+        return self.budget_config.total_monthly_budget
+
+
+def get_settings() -> Settings:
     """Initialise logging and build all configuration singletons.
 
     Reads environment variables (typically sourced from ``~/java.env``)
-    and returns a tuple of frozen dataclass instances representing every
-    subsystem's configuration.  This function is called once at module
-    import time; the results are stored as module-level singletons.
+    and returns a frozen settings object that exposes both the grouped
+    config dataclasses and the top-level attributes expected by callers.
+    This function is called once at module import time; the results are
+    stored as module-level singletons.
 
     Returns:
-        A four-element tuple ``(db_config, run_config, budget_config,
-        api_config)``, each a frozen dataclass populated exclusively from
-        environment variables.
+        ``Settings`` populated exclusively from environment variables.
     """
     logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
-    return DBConfig(), RunConfig(), BudgetConfig(), APIConfig()
+    db_cfg = DBConfig()
+    run_cfg = RunConfig()
+    budget_cfg = BudgetConfig()
+    api_cfg = APIConfig()
+    return Settings(
+        db_config=db_cfg,
+        run_config=run_cfg,
+        budget_config=budget_cfg,
+        api_config=api_cfg,
+    )
 
 
-db_config, run_config, budget_config, api_config = get_settings()
+settings = get_settings()
+db_config = settings.db_config
+run_config = settings.run_config
+budget_config = settings.budget_config
+api_config = settings.api_config
