@@ -48,7 +48,7 @@ class LocalPostgresClient:
         Raises:
             RuntimeError: If the pool cannot be created after 3 retry attempts.
         """
-        dsn: str = os.getenv(
+        url: str = os.getenv(
             "LOCAL_POSTGRES_URL",
             "postgresql://aarjunm04:password@localhost:5432/ai_job_db",
         )
@@ -59,11 +59,12 @@ class LocalPostgresClient:
         last_exc: Exception = RuntimeError("Pool initialisation never attempted.")
         for attempt, delay in enumerate(delays, start=1):
             try:
+                logger.info(f"DB connecting to: {str(url)[:40]}...")
                 self._pool: psycopg2.pool.ThreadedConnectionPool = (
                     psycopg2.pool.ThreadedConnectionPool(
                         self._pool_min,
                         self._pool_max,
-                        dsn,
+                        dsn=url,
                     )
                 )
                 logger.info(
