@@ -47,12 +47,12 @@ logger.setLevel(os.getenv("LOG_LEVEL", "INFO"))
 _scraper_engine: Optional[ScraperEngine] = None
 _serpapi_key_index: int = 0
 
-# Database URL for direct queries
-DB_URL = (
-    os.getenv("LOCAL_POSTGRES_URL")
-    if os.getenv("ACTIVE_DB", "local") == "local"
-    else os.getenv("SUPABASE_URL")
-)
+def _get_db_url() -> Optional[str]:
+    return (
+        os.getenv("LOCAL_POSTGRES_URL")
+        if os.getenv("ACTIVE_DB", "local") == "local"
+        else os.getenv("SUPABASE_URL")
+    )
 
 __all__ = [
     "run_jobspy_scrape",
@@ -152,7 +152,7 @@ def run_jobspy_scrape(
 
         for job in jobspy_jobs:
             try:
-                result = upsert_job_post(
+                result = upsert_job_post.run(
                     run_batch_id=run_batch_id,
                     source_platform=job.get("source", "jobspy"),
                     title=job.get("title", ""),
@@ -186,7 +186,7 @@ def run_jobspy_scrape(
 
     except Exception as e:
         logger.error(f"JobSpy scrape failed: {e}")
-        log_event(
+        log_event.run(
             run_batch_id=run_batch_id,
             level="ERROR",
             event_type="jobspy_scrape_failed",
@@ -227,7 +227,7 @@ def run_rest_api_scrape(
     for platform_name in platform_list:
         try:
             # Get platform config for rate limiting
-            config_result = get_platform_config(platform_name)
+            config_result = get_platform_config.run(platform_name)
             config = json.loads(config_result)
 
             if "error" in config:
@@ -256,7 +256,7 @@ def run_rest_api_scrape(
                 # Normalize and upsert each job
                 for job in raw_jobs:
                     try:
-                        result = upsert_job_post(
+                        result = upsert_job_post.run(
                             run_batch_id=run_batch_id,
                             source_platform=platform_name,
                             title=job.get("title", ""),
@@ -289,7 +289,7 @@ def run_rest_api_scrape(
 
         except Exception as e:
             logger.error(f"REST API scrape failed for {platform_name}: {e}")
-            log_event(
+            log_event.run(
                 run_batch_id=run_batch_id,
                 level="ERROR",
                 event_type="rest_api_scrape_failed",
@@ -368,7 +368,7 @@ def run_playwright_scrape(
 
         for job in raw_jobs:
             try:
-                result = upsert_job_post(
+                result = upsert_job_post.run(
                     run_batch_id=run_batch_id,
                     source_platform=platform,
                     title=job.get("title", ""),
@@ -406,14 +406,14 @@ def run_playwright_scrape(
         blocked = "captcha" in error_msg or "blocked" in error_msg or "403" in error_msg
 
         if blocked:
-            log_event(
+            log_event.run(
                 run_batch_id=run_batch_id,
                 level="WARNING",
                 event_type="playwright_blocked",
                 message=f"{platform} blocked or CAPTCHA detected: {str(e)}",
             )
         else:
-            log_event(
+            log_event.run(
                 run_batch_id=run_batch_id,
                 level="ERROR",
                 event_type="playwright_scrape_failed",
@@ -438,16 +438,17 @@ def run_playwright_scrape(
 @operation
 def run_serpapi_scrape(
     run_batch_id: str,
-    search_query: str,
+    query: str,
     location: str = "Remote",
     results_wanted: int = 25,
+    **kwargs,
 ) -> str:
     """
     Scrape Google Jobs via SerpAPI with key rotation.
 
     Args:
         run_batch_id: UUID of the run batch.
-        search_query: Job search query string.
+        query: Job search query string.
         location: Location filter (default: "Remote").
         results_wanted: Number of results to fetch.
 
@@ -458,7 +459,7 @@ def run_serpapi_scrape(
         # Delegate to serpapi_tool — handles key rotation, AgentOps tracking,
         # credit tracking, and fail-soft error handling internally.
         result_str = search_google_jobs(
-            query=search_query,
+            query=query,
             location=location,
             num_results=results_wanted,
         )
@@ -471,7 +472,7 @@ def run_serpapi_scrape(
                 logger.warning(
                     "SerpAPI scrape returned error: %s", parsed["error"]
                 )
-                log_event(
+                log_event.run(
                     run_batch_id=run_batch_id,
                     level="WARNING",
                     event_type="serpapi_scrape_failed",
@@ -494,7 +495,7 @@ def run_serpapi_scrape(
 
         for job in raw_jobs:
             try:
-                result = upsert_job_post(
+                result = upsert_job_post.run(
                     run_batch_id=run_batch_id,
                     source_platform="google_jobs",
                     title=job.get("title", ""),
@@ -528,7 +529,7 @@ def run_serpapi_scrape(
         )
 
     except Exception as e:
-        log_event(
+        log_event.run(
             run_batch_id=run_batch_id,
             level="ERROR",
             event_type="serpapi_scrape_failed",
@@ -571,7 +572,7 @@ def run_safety_net_scrape(run_batch_id: str, current_job_count: int) -> str:
                 }
             )
 
-        log_event(
+        log_event.run(
             run_batch_id=run_batch_id,
             level="INFO",
             event_type="safety_net_triggered",
@@ -588,7 +589,7 @@ def run_safety_net_scrape(run_batch_id: str, current_job_count: int) -> str:
 
         for platform in platforms:
             try:
-                result = run_playwright_scrape(
+                result = run_playwright_scrape.run(
                     run_batch_id=run_batch_id, platform=platform, max_jobs=30
                 )
                 result_data = json.loads(result)
@@ -602,7 +603,7 @@ def run_safety_net_scrape(run_batch_id: str, current_job_count: int) -> str:
 
             except Exception as e:
                 logger.error(f"Safety net scrape failed for {platform}: {e}")
-                log_event(
+                log_event.run(
                     run_batch_id=run_batch_id,
                     level="ERROR",
                     event_type="safety_net_scrape_failed",
@@ -643,7 +644,8 @@ def normalise_and_dedup(run_batch_id: str) -> str:
     Returns:
         JSON string with deduplication results.
     """
-    if not DB_URL:
+    db_url = _get_db_url()
+    if not db_url:
         return json.dumps(
             {
                 "duplicates_removed": 0,
@@ -655,7 +657,7 @@ def normalise_and_dedup(run_batch_id: str) -> str:
 
     conn = None
     try:
-        conn = psycopg2.connect(DB_URL)
+        conn = psycopg2.connect(db_url)
         conn.autocommit = False
         cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
@@ -743,7 +745,8 @@ def get_scrape_summary(run_batch_id: str) -> str:
     Returns:
         JSON string with scrape summary and platform breakdown.
     """
-    if not DB_URL:
+    db_url = _get_db_url()
+    if not db_url:
         return json.dumps(
             {
                 "run_batch_id": run_batch_id,
@@ -758,7 +761,7 @@ def get_scrape_summary(run_batch_id: str) -> str:
     for attempt in range(1, 4):
         conn = None
         try:
-            conn = psycopg2.connect(DB_URL)
+            conn = psycopg2.connect(db_url)
             cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
             # Get platform breakdown

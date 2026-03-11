@@ -581,59 +581,31 @@ class FilterEngine:
     All business rules (hard filters, thresholds) are derived from YAML.
     """
 
-    def __init__(self, filters_path: Path):
-        self.filters_data = self._load_filters_from_db()
-        if not self.filters_data:
-            LOG.info("FilterEngine: DB config unavailable, falling back to YAML")
-            self.filters_data = self._load_filters(filters_path)
+    def __init__(self, filters_path: Path = None):
+        import json, os
+        config_path = os.path.join(os.path.dirname(__file__), "..", "config", "platform_settings.json")
+        with open(config_path) as f:
+            platform_config = json.load(f)
+        filter_config = platform_config.get("filters", {})
+        required_keywords = filter_config.get("required_keywords", [])
+        salary_min = filter_config.get("salary_min", None)
+        max_days_old = filter_config.get("max_days_old", 7)
+        exclude_keywords = filter_config.get("exclude_keywords", [])
 
-        # Search criteria
-        search_criteria = self.filters_data.get("search_criteria", {})
-        self.required_keywords = [
-            k.lower()
-            for k in search_criteria.get("required_keywords", [])
-            if isinstance(k, str)
-        ]
+        self.required_keywords = [k.lower() for k in required_keywords if isinstance(k, str)]
+        self.exclude_if_rules = [str(k).lower() for k in exclude_keywords]
+        self.technical_exclusions = []
+        self.experience_max_years = None
+        self.salary_minimum = salary_min
+        self.remote_only = filter_config.get("remote_only", False)
+        self.hybrid_acceptable = not self.remote_only
+        self.max_days_old = max_days_old
 
-        # Exclusions
-        exclusions = self.filters_data.get("exclusions", {})
-        self.exclude_if_rules: List[str] = [
-            str(rule).lower() for rule in exclusions.get("exclude_if", [])
-        ]
-        self.technical_exclusions: List[str] = [
-            str(rule).lower() for rule in exclusions.get("technical_exclusions", [])
-        ]
-
-        # Experience rules
-        experience_cfg = self.filters_data.get("experience", {})
-        self.experience_min_years: Optional[int] = experience_cfg.get("minimum_years")
-        self.experience_max_years: Optional[int] = experience_cfg.get("maximum_years")
-        # Soft extension: allow up to +2 years if scoring is high enough.
-        self.experience_soft_extension: int = 2
-
-        # Compensation rules
-        compensation_cfg = self.filters_data.get("compensation", {})
-        self.salary_minimum: Optional[float] = compensation_cfg.get("minimum_salary")
-        self.salary_preferred_minimum: Optional[float] = compensation_cfg.get(
-            "preferred_minimum"
-        )
-
-        # Location rules
-        locations_cfg = self.filters_data.get("locations", {})
-        self.allowed_countries: List[str] = locations_cfg.get("allowed_countries", [])
-        self.excluded_countries: List[str] = locations_cfg.get(
-            "excluded_countries", []
-        )
-        self.remote_only: bool = bool(locations_cfg.get("remote_only", False))
-        self.hybrid_acceptable: bool = bool(
-            locations_cfg.get("hybrid_acceptable", True)
-        )
-        self.on_site_acceptable: bool = bool(
-            locations_cfg.get("on_site_acceptable", False)
-        )
-
-        # Freshness rules derived from exclusions "posted > N days ago" style.
-        self.max_days_old: Optional[int] = self._derive_max_days_old()
+        self.filters_data = platform_config.get("job_filters", {})
+        ai = self.filters_data.setdefault("ai_scoring", {})
+        ai.setdefault("weights", {}).update(platform_config.get("scoring_weights", {}))
+        self.filters_data.setdefault("search_criteria", {})["job_titles"] = platform_config.get("search_queries", [])
+        self.allowed_countries = self.filters_data.get("locations", {}).get("allowed_countries", [])
 
         LOG.info(
             "FilterEngine initialized | required_keywords=%d | salary_min=%s | max_days_old=%s",
@@ -642,54 +614,6 @@ class FilterEngine:
             self.max_days_old,
         )
 
-    def _load_filters(self, path: Path) -> Dict[str, Any]:
-        """Load job filters from YAML (fallback)."""
-        if not path.exists():
-            LOG.warning("job_filters.yaml not found at %s. Using empty config.", path)
-            return {}
-        try:
-            with path.open("r", encoding="utf-8") as f:
-                data = yaml.safe_load(f)
-            return data or {}
-        except Exception as e:  # pragma: no cover
-            LOG.error("Failed to parse job_filters.yaml: %s. Using empty config.", e)
-            return {}
-
-    @staticmethod
-    def _load_filters_from_db() -> Dict[str, Any]:
-        """Load job filters + scoring weights from Postgres users.platform_settings."""
-        try:
-            cfg = _fetch_user_config()
-            ps = cfg.get("platform_settings", {})
-            job_filters = ps.get("job_filters", {})
-            scoring_weights = ps.get("scoring_weights", {})
-            if not job_filters:
-                return {}
-            # Merge scoring_weights into job_filters under ai_scoring.weights
-            # so downstream ScoringEngine picks them up transparently.
-            if scoring_weights:
-                ai = job_filters.setdefault("ai_scoring", {})
-                ai.setdefault("weights", {}).update(scoring_weights)
-            LOG.info("FilterEngine: loaded config from Postgres platform_settings")
-            return job_filters
-        except Exception as exc:  # noqa: BLE001
-            LOG.warning("FilterEngine: DB config fetch failed: %s", exc)
-            return {}
-
-    def _derive_max_days_old(self) -> Optional[int]:
-        """
-        Infer maximum allowed job age in days from exclusion rules.
-
-        Example rule: "posted > 21 days ago" -> max_days_old = 21
-        """
-        candidates: List[int] = []
-        for rule in self.exclude_if_rules:
-            match = re.search(r"posted\s*>\s*(\d+)\s*days", rule)
-            if match:
-                candidates.append(int(match.group(1)))
-        if not candidates:
-            return None
-        return min(candidates)
 
     # ------------------------------------------------------------------ #
     # HARD FILTERING

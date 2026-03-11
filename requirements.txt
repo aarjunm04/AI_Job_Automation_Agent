@@ -10,7 +10,7 @@ fastapi==0.115.0
 uvicorn[standard]==0.31.1
 
 # ===== CrewAI — EXACT pin, owns openai/litellm/dotenv internally =====
-crewai==0.95.0
+crewai>=0.102.0
 # crewai-tools intentionally excluded — conflicts with crewai 0.95.0 above 0.36.0
 # All tool functionality is implemented natively in tools/ directory
 
