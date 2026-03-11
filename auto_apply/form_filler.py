@@ -52,7 +52,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Module-level constants derived from config singletons
 # ---------------------------------------------------------------------------
-DRY_RUN: bool = run_config.dry_run
+DRY_RUN: bool = os.getenv("DRY_RUN", "false").lower() == "true"
 RESUME_DIR: Path = Path(run_config.resume_dir)
 
 __all__ = ["FormFiller", "FieldType", "FormField", "FillResult"]
