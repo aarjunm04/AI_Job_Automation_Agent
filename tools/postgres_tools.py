@@ -26,12 +26,6 @@ from agentops.sdk.decorators import agent, operation
 logger = logging.getLogger(__name__)
 logger.setLevel(os.getenv("LOG_LEVEL", "INFO"))
 
-# Database URL selection based on ACTIVE_DB environment variable
-DB_URL = (
-    os.getenv("LOCAL_POSTGRES_URL")
-    if os.getenv("ACTIVE_DB", "local") == "local"
-    else os.getenv("SUPABASE_URL")
-)
 
 __all__ = [
     "upsert_job_post",
@@ -57,15 +51,25 @@ def _get_conn() -> PgConnection:
         psycopg2.extensions.connection: Database connection with autocommit=False.
 
     Raises:
-        RuntimeError: If DB_URL is None or connection fails.
+        RuntimeError: If connection fails.
     """
-    if not DB_URL:
-        raise RuntimeError(
-            "Database URL not configured. Set LOCAL_POSTGRES_URL or SUPABASE_URL in java.env"
-        )
-
     try:
-        conn = psycopg2.connect(DB_URL)
+        active_db = os.getenv("ACTIVE_DB", "local")
+        if active_db == "local":
+            conn = psycopg2.connect(
+                host=os.getenv("LOCAL_POSTGRES_HOST", "ai_postgres"),
+                port=int(os.getenv("LOCAL_POSTGRES_PORT", "5432")),
+                user=os.getenv("LOCAL_POSTGRES_USER", "aarjunm04"),
+                password=os.getenv("LOCAL_POSTGRES_PASSWORD"),
+                dbname=os.getenv("LOCAL_POSTGRES_DB", "ai_job_db"),
+                connect_timeout=10,
+            )
+        else:
+            db_url = os.getenv("SUPABASE_URL")
+            if not db_url:
+                raise RuntimeError("SUPABASE_URL not configured in java.env")
+            conn = psycopg2.connect(db_url)
+            
         conn.autocommit = False
         return conn
     except Exception as e:

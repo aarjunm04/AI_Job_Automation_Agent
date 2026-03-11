@@ -66,7 +66,7 @@ __all__ = [
 # ---------------------------------------------------------------------------
 # Constants from config singletons — no raw os.getenv() in tool logic
 # ---------------------------------------------------------------------------
-DRY_RUN: bool = run_config.dry_run
+DRY_RUN: bool = os.getenv("DRY_RUN", "false").lower() == "true"
 RESUME_DIR: Path = Path(run_config.resume_dir)
 MAX_SESSIONS: int = run_config.max_playwright_sessions
 

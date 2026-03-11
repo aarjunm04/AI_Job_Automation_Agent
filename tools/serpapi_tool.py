@@ -51,9 +51,10 @@ def _get_next_key() -> Optional[str]:
 
 @agentops.track_tool
 def search_google_jobs(
-    query: str,
-    location: str,
-    num_results: int = 20
+    query: str = "",
+    location: str = "Remote",
+    num_results: int = 20,
+    **kwargs
 ) -> str:
     """Search Google Jobs via SerpAPI with 4-key round-robin rotation.
 
