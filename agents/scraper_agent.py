@@ -3,7 +3,7 @@ Scraper Agent for AI Job Application Agent.
 
 This CrewAI agent orchestrates job discovery across all configured platforms,
 normalizes job data, removes duplicates, and persists results to Postgres.
-All platform configuration is read from config/platforms.json.
+All platform configuration is read from config/platform_settings.json.
 """
 
 import os
@@ -41,7 +41,7 @@ logger = logging.getLogger(__name__)
 logger.setLevel(os.getenv("LOG_LEVEL", "INFO"))
 
 # Scraper service connection — set in docker-compose environment block
-SCRAPER_SERVICE_URL: str = os.getenv("SCRAPER_SERVICE_URL", "http://localhost:8001")
+SCRAPER_SERVICE_URL: str = os.getenv("SCRAPER_SERVICE_URL", "http://ai_playwright_scraper:8001")
 SCRAPER_API_KEY: str = os.getenv("SCRAPER_SERVICE_API_KEY", "")
 
 # Module-level platform config cache
@@ -52,25 +52,25 @@ __all__ = ["ScraperAgent"]
 
 def _load_platform_config() -> Dict[str, Any]:
     """
-    Load platform configuration from config/platforms.json.
+    Load platform configuration from config/platform_settings.json.
 
     Returns:
         Dictionary containing platform configuration.
 
     Raises:
-        FileNotFoundError: If config/platforms.json does not exist.
+        FileNotFoundError: If config/platform_settings.json does not exist.
     """
     global _platform_config
 
     if _platform_config is not None:
         return _platform_config
 
-    config_path = Path(__file__).parent.parent / "config" / "platforms.json"
+    config_path = Path(__file__).parent.parent / "config" / "platform_settings.json"
 
     if not config_path.exists():
         raise FileNotFoundError(
             f"Platform configuration not found at {config_path}. "
-            "Create config/platforms.json with platform definitions."
+            "Create config/platform_settings.json with platform definitions."
         )
 
     with open(config_path, "r", encoding="utf-8") as f:

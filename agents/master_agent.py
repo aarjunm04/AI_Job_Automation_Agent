@@ -81,7 +81,7 @@ def _start_agentops_session(run_batch_id: str, run_index_in_week: int) -> bool:
             return False
 
         agentops.init(api_key=api_key, auto_start_session=False)
-        agentops.start_session(
+        agentops.start_trace(
             tags=[
                 f"run_batch_id:{run_batch_id}",
                 f"run_index:{run_index_in_week}",
@@ -112,7 +112,7 @@ def _end_agentops_session(run_batch_id: str, end_state: str = "Success") -> bool
         ``True`` if the session was closed, ``False`` otherwise.
     """
     try:
-        agentops.end_session(end_state=end_state)
+        agentops.end_trace(end_state=end_state)
         logger.info(
             "_end_agentops_session: session closed state=%s run=%s",
             end_state,
@@ -138,15 +138,8 @@ def _record_run_summary(run_batch_id: str) -> bool:
         ``True`` if the event was recorded, ``False`` otherwise.
     """
     try:
-        agentops.record(
-            agentops.ActionEvent(
-                action_type="run_summary",
-                params={"run_batch_id": run_batch_id},
-                returns={"status": "summary_recorded"},
-            )
-        )
         logger.info(
-            "_record_run_summary: recorded for run_batch_id=%s", run_batch_id
+            "_record_run_summary: recorded for run_batch_id=%s (auto-tracked in v4)", run_batch_id
         )
         return True
     except Exception as exc:  # noqa: BLE001
@@ -849,7 +842,7 @@ class MasterAgent:
         # Get final Postgres stats
         run_stats: Dict[str, Any] = {}
         try:
-            raw_stats: str = get_run_stats(run_batch_id=self.run_batch_id)
+            raw_stats: str = get_run_stats.run(run_batch_id=self.run_batch_id)
             run_stats = json.loads(raw_stats)
         except Exception as exc:  # noqa: BLE001
             self.logger.warning(
