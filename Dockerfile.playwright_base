@@ -1,0 +1,36 @@
+FROM mcr.microsoft.com/playwright/python:v1.50.0-jammy
+
+# System deps — libpq5 for postgres, curl for healthchecks
+# python3-pip ensures pip is available on the system Python (3.10)
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        libpq5 \
+        curl \
+        python3-pip && \
+    rm -rf /var/lib/apt/lists/*
+
+# Upgrade pip to latest
+RUN python3 -m pip install --upgrade pip --no-cache-dir
+
+WORKDIR /app
+
+ENV PYTHONPATH=/app \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+
+# Copy requirements FIRST for layer cache
+COPY requirements.txt /app/requirements.txt
+
+# Install all Python deps into system Python
+RUN pip install --no-cache-dir -r /app/requirements.txt
+
+# Non-root user — created AFTER pip install to avoid permission issues
+RUN useradd --create-home --shell /bin/bash appuser && \
+    chown -R appuser:appuser /app
+
+USER appuser
+
+# No CMD — child images define their own entrypoint
+# No HEALTHCHECK — base image only
+# No source code copied — source goes in child images only

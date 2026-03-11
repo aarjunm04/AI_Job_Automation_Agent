@@ -1,9 +1,7 @@
 # ============================================================
-# Stage 1: builder — install Python deps (NO Playwright)
+# Stage 1: builder
 # ============================================================
-FROM python:3.11-slim-bookworm AS builder
-
-ENV DEBIAN_FRONTEND=noninteractive
+FROM python:3.11-slim AS builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
@@ -13,19 +11,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
-COPY requirements.txt /tmp/requirements.txt
-RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir \
-    $(grep -v "playwright" /tmp/requirements.txt | grep -v "^#" | grep -v "^$" | tr '\n' ' ')
+COPY requirements.txt /app/requirements.txt
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+RUN pip install --no-cache-dir -r /app/requirements.txt
 
 # ============================================================
-# Stage 2: runtime — lean agent-runner, zero browser deps
+# Stage 2: runtime
 # ============================================================
-FROM python:3.11-slim-bookworm AS runtime
-
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    DEBIAN_FRONTEND=noninteractive
+FROM python:3.11-slim AS runtime
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq5 \
@@ -41,18 +34,25 @@ WORKDIR /app
 RUN chown appuser:appuser /app
 
 ENV PATH="/opt/venv/bin:$PATH"
-ENV PYTHONPATH=/app
-ENV LOG_LEVEL=INFO
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+RUN pip install playwright && \
+    PLAYWRIGHT_BROWSERS_PATH=/ms-playwright playwright install chromium
 
-COPY --chown=appuser:appuser agents/ ./agents/
-COPY --chown=appuser:appuser tools/ ./tools/
-COPY --chown=appuser:appuser integrations/ ./integrations/
-COPY --chown=appuser:appuser config/ ./config/
-COPY --chown=appuser:appuser database/ ./database/
-COPY --chown=appuser:appuser utils/ ./utils/
+ENV PYTHONPATH=/app PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 
-COPY --chown=appuser:appuser rag_systems/ ./rag_systems/
-COPY --chown=appuser:appuser main.py .
+COPY --chown=appuser:appuser requirements.txt /app/requirements.txt
+COPY --chown=appuser:appuser agents/ /app/agents/
+COPY --chown=appuser:appuser tools/ /app/tools/
+COPY --chown=appuser:appuser integrations/ /app/integrations/
+COPY --chown=appuser:appuser config/ /app/config/
+COPY --chown=appuser:appuser database/ /app/database/
+COPY --chown=appuser:appuser utils/ /app/utils/
+COPY --chown=appuser:appuser main.py /app/main.py
+COPY --chown=appuser:appuser rag_systems/ /app/rag_systems/
+COPY --chown=appuser:appuser resumes/ /app/resumes/
+COPY --chown=appuser:appuser api/ /app/api/
+COPY --chown=appuser:appuser auto_apply/ /app/auto_apply/
+COPY --chown=appuser:appuser scrapers/ /app/scrapers/
 
 USER appuser
 
