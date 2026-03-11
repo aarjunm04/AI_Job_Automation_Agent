@@ -530,6 +530,27 @@ STEP 5: After completing any change — APPEND row to CHANGE_LOG before closing
 | L181 | 2026-03-11T00:15:00+05:30 | GEMINI | config/, scrapers/job_filters.yaml, database/schema.sql, extension/*, config/settings.py | CLEANUP | cleanup:delete-deprecated-config-files:schema-migration-patch:mcp-final-sweep:settings-strip | DONE |
 | L182 | 2026-03-11T00:20:00+05:30 | CLAUDE SONNET | tools/rag_tools.py, agents/scraper_agent.py | REFACTOR | refactor:http-wiring:rag-tools-httpx-to-rag-server:scraper-agent-httpx-to-scraper-service | DONE |
 | L183 | 2026-03-11T00:30:00+05:30 | CLAUDE SONNET | extension/extension_config.js, extension/sidebar.js | CLEANUP | 
+| L184 | 2026-03-11T12:45:00+05:30 | CODEX | config/settings.py, auto_apply/form_filler.py | BUGFIX | bugfix:get_settings-tuple-return:form_filler-dry_run-attr-missing:os.getenv-pattern | DONE |
+| L185 | 2026-03-11T12:50:00+05:30 | CODEX | tools/apply_tools.py | BUGFIX | bugfix:apply_tools-dry_run-attr-missing:os.getenv-pattern-same-as-form_filler | DONE |
+| L186 | 2026-03-11T13:30:00+05:30 | GEMINI | Dockerfile.playwright_base, scrapers/Dockerfile, auto_apply/Dockerfile, rag_systems/Dockerfile, api/Dockerfile, Dockerfile | CREATE+REFACTOR | docker:9-image-split:playwright-base+scraper+apply:audit-fix-rag-api-agents | DONE |
+| L187 | 2026-03-11T13:45:00+05:30 | GEMINI | docker-compose.yml | AUDIT+REBUILD | docker-compose:9-service-rebuild:playwright-split:depends-on-chain:port-fix:volume-wire | DONE |
+| L188 | 2026-03-11T13:50:00+05:30 | CODEX | Dockerfile | BUGFIX | fix:SC2046-unquoted-var:DL4006-pipefail-shell-directive | DONE |
+| L189 | 2026-03-11T14:00:00+05:30 | GEMINI | Dockerfile.playwright_base | BUGFIX | fix:deadsnakes-ppa-gpg-failure:use-system-python310-in-playwright-base:no-ppa | DONE |
+| L190 | 2026-03-11T15:10:00+05:30 | GEMINI | docker-compose.yml | BUGFIX | fix:yaml-indentation-ai_chromadb-nested-under-ai_redis | DONE |
+| L191 | 2026-03-11T16:00:00+05:30 | GEMINI | Dockerfile | MODIFY | add rag_systems/ and resumes/ COPY lines to agentrunner image | DONE |
+| L192 | 2026-03-11T16:25:00+05:30 | CODEX | config/settings.py | BUGFIX | add dry_run:bool=False to RunConfig dataclass | DONE |
+| L192 | 2026-03-11T16:00:00+05:30 | GEMINI | docker-compose.yml | MODIFY | add ai_agentrunner service with profiles:run | DONE |
+| L193 | 2026-03-11T16:15:00+05:30 | GEMINI | Dockerfile | MODIFY | add all missing package COPY lines scrapers api auto_apply | DONE |
+| L194 | 2026-03-11T16:35:00+05:30 | GEMINI | VERIFY | dry_run fix verified + full docker health check + dry run passed | DONE |
+| L195 | 2026-03-11T16:45:00+05:30 | GEMINI | agents/scraper_agent.py, agents/master_agent.py, agents/tracker_agent.py, requirements.txt | BUGFIX | fix:platforms_json_path:agentops_v4_migration:get_run_stats_callable:crewai_0_102_0 | DONE |
+| L196 | 2026-03-11T17:35:00+05:30 | GEMINI | scrapers/scraper_engine.py | BUGFIX | FilterEngine reads filters from platform_settings.json not job_filters.yaml | DONE |
+| L197 | 2026-03-11T17:35:00+05:30 | GEMINI | config/platform_settings.json | MODIFY | add filters block as single source of truth | DONE |
+| L198 | 2026-03-11T17:35:00+05:30 | GEMINI | AUDIT | all 4 prior bug fixes confirmed present in source files | DONE |
+| L199 | 2026-03-11T18:35:00+05:30 | GEMINI | docker-compose.yml | BUGFIX | pin chromadb image to 0.6.3 to match client version | DONE |
+| L200 | 2026-03-11T19:21:00+05:30 | CODEX | rag_systems/ingestion.py | BUGFIX | fix infinite recursion in _get_embedding — split into _embed_single + _get_embedding with no self-calls | DONE |
+| L201 | 2026-03-11T19:35:00+05:30 | GEMINI | tools/postgres_tools.py | BUGFIX | replace raw LOCAL_POSTGRES_URL with explicit psycopg2 kwargs host/port/user/pass/dbname | DONE |
+| L202 | 2026-03-11T19:35:00+05:30 | GEMINI | agents/Dockerfile | BUGFIX | add playwright install chromium to build if Chromium was missing | DONE |
+| L203 | 2026-03-11T19:35:00+05:30 | GEMINI | tools/scraper_tools.py | BUGFIX | fix SerpAPI tool signature to accept query kwarg | DONE |
 
 
 ## 2-WEEK SPRINT PLAN
