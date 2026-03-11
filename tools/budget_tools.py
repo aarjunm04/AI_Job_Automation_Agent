@@ -66,7 +66,22 @@ def _log_to_db(
 
     conn = None
     try:
-        conn = psycopg2.connect(DB_URL)
+        active_db = os.getenv("ACTIVE_DB", "local")
+        if active_db == "local":
+            conn = psycopg2.connect(
+                host=os.getenv("LOCAL_POSTGRES_HOST", "ai_postgres"),
+                port=int(os.getenv("LOCAL_POSTGRES_PORT", "5432")),
+                user=os.getenv("LOCAL_POSTGRES_USER", "aarjunm04"),
+                password=os.getenv("LOCAL_POSTGRES_PASSWORD"),
+                dbname=os.getenv("LOCAL_POSTGRES_DB", "ai_job_db"),
+                connect_timeout=10,
+            )
+        else:
+            db_url = os.getenv("SUPABASE_URL")
+            if not db_url:
+                raise RuntimeError("SUPABASE_URL not configured")
+            conn = psycopg2.connect(db_url)
+        
         conn.autocommit = False
         cursor = conn.cursor()
 
@@ -241,7 +256,22 @@ def check_monthly_budget(run_batch_id: str) -> str:
 
     conn = None
     try:
-        conn = psycopg2.connect(DB_URL)
+        active_db = os.getenv("ACTIVE_DB", "local")
+        if active_db == "local":
+            conn = psycopg2.connect(
+                host=os.getenv("LOCAL_POSTGRES_HOST", "ai_postgres"),
+                port=int(os.getenv("LOCAL_POSTGRES_PORT", "5432")),
+                user=os.getenv("LOCAL_POSTGRES_USER", "aarjunm04"),
+                password=os.getenv("LOCAL_POSTGRES_PASSWORD"),
+                dbname=os.getenv("LOCAL_POSTGRES_DB", "ai_job_db"),
+                connect_timeout=10,
+            )
+        else:
+            db_url = os.getenv("SUPABASE_URL")
+            if not db_url:
+                raise RuntimeError("SUPABASE_URL not configured")
+            conn = psycopg2.connect(db_url)
+            
         cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
         cursor.execute(

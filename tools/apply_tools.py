@@ -947,15 +947,24 @@ def get_apply_summary(run_batch_id: str) -> str:
         JSON string ``{run_batch_id, applied, failed, manual_queued,
         total_attempted}`` or an error dict on failure.
     """
-    if not _DB_URL:
-        logger.error("get_apply_summary: DB_URL not configured")
-        return json.dumps(
-            {"error": "db_not_configured", "detail": "DB_URL not set"}
-        )
-
     conn = None
     try:
-        conn = psycopg2.connect(_DB_URL)
+        active_db = os.getenv("ACTIVE_DB", "local")
+        if active_db == "local":
+            conn = psycopg2.connect(
+                host=os.getenv("LOCAL_POSTGRES_HOST", "ai_postgres"),
+                port=int(os.getenv("LOCAL_POSTGRES_PORT", "5432")),
+                user=os.getenv("LOCAL_POSTGRES_USER", "aarjunm04"),
+                password=os.getenv("LOCAL_POSTGRES_PASSWORD"),
+                dbname=os.getenv("LOCAL_POSTGRES_DB", "ai_job_db"),
+                connect_timeout=10,
+            )
+        else:
+            db_url = os.getenv("SUPABASE_URL")
+            if not db_url:
+                logger.error("get_apply_summary: SUPABASE_URL not configured")
+                return json.dumps({"error": "db_not_configured", "detail": "SUPABASE_URL not set"})
+            conn = psycopg2.connect(db_url)
         cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
         cursor.execute(

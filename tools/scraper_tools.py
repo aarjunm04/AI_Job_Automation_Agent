@@ -644,20 +644,28 @@ def normalise_and_dedup(run_batch_id: str) -> str:
     Returns:
         JSON string with deduplication results.
     """
-    db_url = _get_db_url()
-    if not db_url:
-        return json.dumps(
-            {
-                "duplicates_removed": 0,
-                "jobs_remaining": 0,
-                "run_batch_id": run_batch_id,
-                "error": "DB_URL not configured",
-            }
-        )
-
     conn = None
     try:
-        conn = psycopg2.connect(db_url)
+        active_db = os.getenv("ACTIVE_DB", "local")
+        if active_db == "local":
+            conn = psycopg2.connect(
+                host=os.getenv("LOCAL_POSTGRES_HOST", "ai_postgres"),
+                port=int(os.getenv("LOCAL_POSTGRES_PORT", "5432")),
+                user=os.getenv("LOCAL_POSTGRES_USER", "aarjunm04"),
+                password=os.getenv("LOCAL_POSTGRES_PASSWORD"),
+                dbname=os.getenv("LOCAL_POSTGRES_DB", "ai_job_db"),
+                connect_timeout=10,
+            )
+        else:
+            db_url = os.getenv("SUPABASE_URL")
+            if not db_url:
+                return json.dumps({
+                    "duplicates_removed": 0,
+                    "jobs_remaining": 0,
+                    "run_batch_id": run_batch_id,
+                    "error": "SUPABASE_URL not configured",
+                })
+            conn = psycopg2.connect(db_url)
         conn.autocommit = False
         cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
@@ -745,23 +753,31 @@ def get_scrape_summary(run_batch_id: str) -> str:
     Returns:
         JSON string with scrape summary and platform breakdown.
     """
-    db_url = _get_db_url()
-    if not db_url:
-        return json.dumps(
-            {
-                "run_batch_id": run_batch_id,
-                "total_jobs": 0,
-                "by_platform": {},
-                "minimum_met": False,
-                "error": "DB_URL not configured",
-            }
-        )
-
     last_exc: Optional[Exception] = None
     for attempt in range(1, 4):
         conn = None
         try:
-            conn = psycopg2.connect(db_url)
+            active_db = os.getenv("ACTIVE_DB", "local")
+            if active_db == "local":
+                conn = psycopg2.connect(
+                    host=os.getenv("LOCAL_POSTGRES_HOST", "ai_postgres"),
+                    port=int(os.getenv("LOCAL_POSTGRES_PORT", "5432")),
+                    user=os.getenv("LOCAL_POSTGRES_USER", "aarjunm04"),
+                    password=os.getenv("LOCAL_POSTGRES_PASSWORD"),
+                    dbname=os.getenv("LOCAL_POSTGRES_DB", "ai_job_db"),
+                    connect_timeout=10,
+                )
+            else:
+                db_url = os.getenv("SUPABASE_URL")
+                if not db_url:
+                    return json.dumps({
+                        "run_batch_id": run_batch_id,
+                        "total_jobs": 0,
+                        "by_platform": {},
+                        "minimum_met": False,
+                        "error": "SUPABASE_URL not configured",
+                    })
+                conn = psycopg2.connect(db_url)
             cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
             # Get platform breakdown
