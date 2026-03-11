@@ -551,7 +551,14 @@ STEP 5: After completing any change — APPEND row to CHANGE_LOG before closing
 | L201 | 2026-03-11T19:35:00+05:30 | GEMINI | tools/postgres_tools.py | BUGFIX | replace raw LOCAL_POSTGRES_URL with explicit psycopg2 kwargs host/port/user/pass/dbname | DONE |
 | L202 | 2026-03-11T19:35:00+05:30 | GEMINI | agents/Dockerfile | BUGFIX | add playwright install chromium to build if Chromium was missing | DONE |
 | L203 | 2026-03-11T19:35:00+05:30 | GEMINI | tools/scraper_tools.py | BUGFIX | fix SerpAPI tool signature to accept query kwarg | DONE |
-
+| L204 | 2026-03-11T20:30:00+05:30 | GEMINI | tools/apply_tools.py, tools/scraper_tools.py, tools/budget_tools.py, tools/agentops_tools.py | BUGFIX | final kwargs conversion for postgres connections | DONE |
+| L205 | 2026-03-11T20:30:00+05:30 | GEMINI | Dockerfile | BUGFIX | add playwright install-deps chromium + pin bookworm base | DONE |
+| L206 | 2026-03-11T20:45:00+05:30 | GEMINI | ai_agent_runner | REBUILD | successfully rebuilt ai_agent_runner docker image; dry run hit Perplexity API quota | DONE |
+| L207 | 2026-03-11T23:06:00+05:30 | OPUS | scrapers/scraper_service.py | BUGFIX | add 15s page.goto timeout, skip direct connection when all proxies fail, try/except browser.close | DONE |
+| L208 | 2026-03-11T23:06:00+05:30 | OPUS | tools/scraper_tools.py | BUGFIX | add 45s wall-clock ThreadPoolExecutor timeout on run_playwright_scrape tool | DONE |
+| L209 | 2026-03-11T23:06:00+05:30 | OPUS | agents/scraper_agent.py | BUGFIX | pass query arg to run_serpapi_scrape in fallback step 3 | DONE |
+| L210 | 2026-03-11T23:06:00+05:30 | OPUS | tools/postgres_tools.py | BUGFIX | fix _fetch_user_config ORDER BY created_at → ORDER BY id | DONE |
+| L211 | 2026-03-11T23:06:00+05:30 | OPUS | tools/budget_tools.py | BUGFIX | replace raw LOCAL_POSTGRES_URL with explicit psycopg2 kwargs | DONE |
 
 ## 2-WEEK SPRINT PLAN
 

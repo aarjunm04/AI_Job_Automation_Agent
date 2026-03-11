@@ -1,7 +1,7 @@
 # ============================================================
 # Stage 1: builder
 # ============================================================
-FROM python:3.11-slim AS builder
+FROM python:3.11-slim-bookworm AS builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
@@ -18,7 +18,7 @@ RUN pip install --no-cache-dir -r /app/requirements.txt
 # ============================================================
 # Stage 2: runtime
 # ============================================================
-FROM python:3.11-slim AS runtime
+FROM python:3.11-slim-bookworm AS runtime
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq5 \
@@ -36,7 +36,8 @@ RUN chown appuser:appuser /app
 ENV PATH="/opt/venv/bin:$PATH"
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 RUN pip install playwright && \
-    PLAYWRIGHT_BROWSERS_PATH=/ms-playwright playwright install chromium
+    PLAYWRIGHT_BROWSERS_PATH=/ms-playwright playwright install chromium && \
+    PLAYWRIGHT_BROWSERS_PATH=/ms-playwright playwright install-deps chromium
 
 ENV PYTHONPATH=/app PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 
