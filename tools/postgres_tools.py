@@ -119,7 +119,7 @@ def _with_retry(max_retries: int = 3) -> Callable:
 def _fetch_user_config() -> dict[str, Any]:
     """Fetch ``user_settings`` and ``platform_settings`` JSONB columns from the users table.
 
-    Executes ``SELECT user_settings, platform_settings FROM users ORDER BY created_at LIMIT 1``.
+    Executes ``SELECT user_settings, platform_settings FROM users ORDER BY id LIMIT 1``.
     Retries up to 3 times on ``psycopg2.OperationalError`` with exponential back-off
     (``time.sleep(2**attempt)``).  All other exceptions are caught, logged at WARNING, and
     cause an immediate return of ``{}`` — this function never raises.
@@ -135,7 +135,7 @@ def _fetch_user_config() -> dict[str, Any]:
             conn = _get_conn()
             cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
             cursor.execute(
-                "SELECT user_settings, platform_settings FROM users ORDER BY created_at LIMIT 1"
+                "SELECT user_settings, platform_settings FROM users ORDER BY id LIMIT 1"
             )
             row = cursor.fetchone()
             if row is None:

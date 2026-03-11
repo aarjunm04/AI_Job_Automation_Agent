@@ -12,6 +12,7 @@ import json
 import logging
 import time
 import asyncio
+import concurrent.futures
 from typing import Optional, List, Dict, Any
 
 from crewai.tools import tool
@@ -356,11 +357,25 @@ def run_playwright_scrape(
 
         scraper = scraper_class(jobs_limit=max_jobs)
 
-        @_with_retry
-        def scrape_with_playwright():
+        def _do_scrape():
             return asyncio.run(scraper.run(GLOBAL_PLAYWRIGHT_MANAGER))
 
-        raw_jobs = scrape_with_playwright()
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+            future = ex.submit(_do_scrape)
+            try:
+                raw_jobs = future.result(timeout=45)
+            except concurrent.futures.TimeoutError:
+                logger.warning(f"{platform}: scrape exceeded 45s wall timeout — returning []")
+                return json.dumps(
+                    {
+                        "platform": platform,
+                        "jobs_found": 0,
+                        "jobs_upserted": 0,
+                        "proxy_used": proxy_used,
+                        "errors": [f"{platform} scrape exceeded 45s wall timeout"],
+                        "blocked": False,
+                    }
+                )
 
         jobs_upserted = 0
         errors = []

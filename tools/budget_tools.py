@@ -27,13 +27,6 @@ logger.setLevel(os.getenv("LOG_LEVEL", "INFO"))
 XAI_COST_CAP_PER_RUN = float(os.getenv("XAI_COST_CAP_PER_RUN", "0.38"))
 TOTAL_MONTHLY_BUDGET = float(os.getenv("TOTAL_MONTHLY_BUDGET", "10.00"))
 
-# Database URL selection
-DB_URL = (
-    os.getenv("LOCAL_POSTGRES_URL")
-    if os.getenv("ACTIVE_DB", "local") == "local"
-    else os.getenv("SUPABASE_URL")
-)
-
 # Module-level state (reset per run)
 _run_xai_cost: float = 0.0
 _run_perplexity_cost: float = 0.0
@@ -60,10 +53,6 @@ def _log_to_db(
         event_type: Event type.
         message: Log message.
     """
-    if not DB_URL:
-        logger.warning("Cannot log to DB: DB_URL not configured")
-        return
-
     conn = None
     try:
         active_db = os.getenv("ACTIVE_DB", "local")
@@ -248,12 +237,6 @@ def check_monthly_budget(run_batch_id: str) -> str:
     Returns:
         JSON string with abort flag and budget details.
     """
-    if not DB_URL:
-        logger.error("Cannot check monthly budget: DB_URL not configured")
-        return json.dumps(
-            {"error": "db_not_configured", "detail": "DB_URL not set"}
-        )
-
     conn = None
     try:
         active_db = os.getenv("ACTIVE_DB", "local")
