@@ -30,10 +30,10 @@ logger.setLevel(logging.INFO)
 
 # HttpClient for connecting to ChromaDB container over HTTP
 try:
-    from chromadb import HttpClient
+    import chromadb
     CHROMADB_AVAILABLE = True
 except Exception:  # pragma: no cover - env dependent
-    HttpClient = None  # type: ignore
+    chromadb = None  # type: ignore
     CHROMADB_AVAILABLE = False
 
 
@@ -67,7 +67,7 @@ class ChromaStore:
         attempts = 0
         while True:
             try:
-                self._client = HttpClient(host=self.config.host, port=self.config.port)
+                self._client = chromadb.HttpClient(host=self.config.host, port=self.config.port)
                 self._collection = self._client.get_or_create_collection(
                     name=self.config.collection_name,
                     embedding_function=None,  # We supply our own vectors — no default ef needed

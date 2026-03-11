@@ -5,6 +5,8 @@ import sys
 from pathlib import Path
 from typing import Optional
 
+import numpy as np
+
 __all__ = ["ingest_all_resumes", "ingest_single_resume"]
 
 logger = logging.getLogger(__name__)
@@ -58,9 +60,8 @@ def _average_vectors(vectors: list[list[float]]) -> Optional[list[float]]:
         )
     if not consistent:
         return None
-    avg: list[float] = [
-        sum(v[i] for v in consistent) / len(consistent) for i in range(dim)
-    ]
+    arr = np.array(consistent)
+    avg = np.mean(arr, axis=0).tolist()
     return avg
 
 
@@ -68,65 +69,15 @@ def _average_vectors(vectors: list[list[float]]) -> Optional[list[float]]:
 # EMBEDDING RESOLVER
 # Resolves correct embed method at runtime — confirmed chain first
 # ─────────────────────────────────────────────────────────────
-def _get_embedding(engine: object, text: str) -> Optional[list[float]]:
-    """Resolve and call embed method on ResumeEngine at runtime.
-
-    ResumeEngine exposes:
-      - engine.embedding_service (EmbeddingService — primary+fallback with retry)
-      - engine.embedder (NVIDIANIMEmbedder — direct primary)
-    This helper tries the confirmed chain first, then fallbacks.
-
-    Args:
-        engine: ResumeEngine instance from get_default_engine().
-        text: Plain text string to generate embedding for.
-
-    Returns:
-        List of floats (embedding vector) or None on any failure.
+def _embed_single(engine: object, text: str) -> Optional[list[float]]:
     """
-    # NVIDIA NIM hard-limits requests to 512 tokens (~370 words with safety margin).
-    # 370 words × ~1.75 tokens/word ≈ 482 tokens — 30 below the 512 ceiling.
-    words = text.split()
-    if len(words) > 370:
-        try:
-            chunks = chunk_text(text, chunk_size=400, chunk_overlap=80)
-            logger.debug(
-                "Text has %d words — split into %d chunks (max_tokens=370)",
-                len(words),
-                len(chunks),
-            )
-            chunk_vectors: list[list[float]] = []
-            for idx, chunk in enumerate(chunks):
-                vec = _get_embedding(engine, chunk)  # chunk ≤400w → no recurse
-                if vec is not None:
-                    chunk_vectors.append(vec)
-                else:
-                    logger.warning(
-                        "Chunk %d/%d returned None — skipping in average",
-                        idx + 1,
-                        len(chunks),
-                    )
-            if chunk_vectors:
-                averaged = _average_vectors(chunk_vectors)
-                if averaged is not None:
-                    logger.debug(
-                        "Chunked embed: averaged %d/%d vectors → dim=%d",
-                        len(chunk_vectors),
-                        len(chunks),
-                        len(averaged),
-                    )
-                    return averaged
-            logger.warning(
-                "Chunked embed produced no valid vectors — "
-                "falling back to single-shot full-text embed"
-            )
-        except Exception as _chunk_exc:
-            logger.warning(
-                "Chunking step raised %s — "
-                "falling back to single-shot full-text embed",
-                _chunk_exc,
-            )
-    # ── END CHUNKING GATE ────────────────────────────────────────────────────
-
+    Call embed_text on a single text string. NO chunking. NO recursion.
+    Try engine.embedder.embed_text(text) first.
+    If that fails, try engine.rag.embed_query(text).
+    If both fail, return None.
+    Never calls itself or _get_embedding.
+    Max 1 retry per provider, no loops.
+    """
     # Pattern 1 — CONFIRMED by deep audit: engine.embedder.embed_text()
     if hasattr(engine, "embedder") and hasattr(engine.embedder, "embed_text"):
         try:
@@ -137,8 +88,7 @@ def _get_embedding(engine: object, text: str) -> Optional[list[float]]:
                 logger.error(
                     "engine.embedder.embed_text() returned %d dims, "
                     "expected %d \u2014 discarding embedding, file will be skipped",
-                    len(result),
-                    EXPECTED_EMBEDDING_DIM,
+                    len(result), EXPECTED_EMBEDDING_DIM
                 )
                 return None
         except Exception as exc:
@@ -190,7 +140,7 @@ def _get_embedding(engine: object, text: str) -> Optional[list[float]]:
 
     # All patterns exhausted — log full introspection for debugging
     engine_attrs = [m for m in dir(engine) if not m.startswith("_")]
-    embedder_attrs = []  # type: list[str]
+    embedder_attrs = []
     if getattr(engine, "embedder", None):
         embedder_attrs = [
             m for m in dir(engine.embedder) if not m.startswith("_")
@@ -200,6 +150,53 @@ def _get_embedding(engine: object, text: str) -> Optional[list[float]]:
         "  engine attrs: %s\n  engine.embedder attrs: %s",
         engine_attrs, embedder_attrs
     )
+    return None
+
+
+def _get_embedding(engine: object, text: str) -> Optional[list[float]]:
+    """
+    Entry point. If text <= 400 words, call _embed_single directly.
+    If text > 400 words, split into chunks of max 400 words.
+    For each chunk call _embed_single (NOT _get_embedding).
+    Average all non-None vectors into one final vector.
+    If no chunks return valid vectors, return None.
+    NEVER calls itself.
+    """
+    words = text.split()
+    if len(words) <= 400:
+        return _embed_single(engine, text)
+
+    logger.debug(
+        "Text has %d words — split into 400-word windows", len(words)
+    )
+    
+    chunks = []
+    # group into 400-word windows
+    for i in range(0, len(words), 400):
+        chunk_words = words[i:i+400]
+        chunks.append(" ".join(chunk_words))
+
+    chunk_vectors: list[list[float]] = []
+    for idx, chunk in enumerate(chunks):
+        vec = _embed_single(engine, chunk)
+        if vec is not None:
+            chunk_vectors.append(vec)
+        else:
+            logger.warning(
+                "Chunk %d/%d returned None — skipping in average",
+                idx + 1, len(chunks)
+            )
+
+    if chunk_vectors:
+        averaged = _average_vectors(chunk_vectors)
+        if averaged is not None:
+            logger.debug(
+                "Chunked embed: averaged %d/%d vectors → dim=%d",
+                len(chunk_vectors), len(chunks), len(averaged)
+            )
+            return averaged
+
+    logger.warning("Chunked embed produced no valid vectors — returning None")
     return None
 
 
