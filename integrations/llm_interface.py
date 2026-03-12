@@ -4,6 +4,7 @@ LLM Interface Module — Spec-Compliant Agent LLM Configuration
 
 Centralized interface for managing CrewAI LLM objects for each agent type.
 Provides primary and fallback LLM chains per IDE_README.md AGENT SYSTEM table.
+Includes cost projection and budget-aware call gating.
 All API keys via os.getenv(); no Gemini or OpenRouter logic (embedding-only providers).
 """
 
@@ -96,6 +97,15 @@ class LLMInterface:
         "401", "403", "unauthorized", "forbidden",
         "invalid api key", "api key",
     )
+
+    # Cost-per-1K-token estimates (input+output blended) for budget projection
+    _COST_PER_1K_TOKENS: dict[str, float] = {
+        "xai": 0.005,           # xAI Grok models (paid)
+        "perplexity": 0.0005,   # Perplexity Sonar (cheap)
+        "groq": 0.0,            # Groq free tier
+        "cerebras": 0.0,        # Cerebras free tier
+        "sambanova": 0.0,       # SambaNova free tier
+    }
 
     def __init__(self) -> None:
         self._unavailable: set[str] = set()
@@ -308,6 +318,91 @@ class LLMInterface:
                 fallbacks.append(fb)
         return (primary, fallbacks)
 
+    # ------------------------------------------------------------------
+    # Public: cost projection and budget gating
+    # ------------------------------------------------------------------
+
+    def project_cost(self, agent_type: str, estimated_tokens: int = 2000) -> dict[str, Any]:
+        """Project the cost of an LLM call before making it.
+
+        Uses the active provider for ``agent_type`` to estimate cost
+        based on per-1K-token rates.
+
+        Args:
+            agent_type: One of the valid agent type strings.
+            estimated_tokens: Approximate total tokens (input + output).
+                Default 2000 (typical for a scoring call).
+
+        Returns:
+            Dict with ``provider``, ``model``, ``estimated_tokens``,
+            ``projected_cost_usd``, and ``cost_per_1k_tokens``.
+        """
+        agent_type = agent_type.strip().upper()
+        chain = self._chain_for(agent_type)
+        if not chain:
+            return {
+                "provider": "none",
+                "model": "none",
+                "estimated_tokens": estimated_tokens,
+                "projected_cost_usd": 0.0,
+                "cost_per_1k_tokens": 0.0,
+            }
+
+        # Use first available provider
+        for provider_name, model, _api_key, _base_url in chain:
+            if provider_name not in self._unavailable:
+                cost_1k = self._COST_PER_1K_TOKENS.get(provider_name, 0.001)
+                projected = (estimated_tokens / 1000.0) * cost_1k
+                return {
+                    "provider": provider_name,
+                    "model": model,
+                    "estimated_tokens": estimated_tokens,
+                    "projected_cost_usd": round(projected, 6),
+                    "cost_per_1k_tokens": cost_1k,
+                }
+
+        return {
+            "provider": "all_unavailable",
+            "model": "none",
+            "estimated_tokens": estimated_tokens,
+            "projected_cost_usd": 0.0,
+            "cost_per_1k_tokens": 0.0,
+        }
+
+    def check_budget_before_call(
+        self,
+        agent_type: str,
+        estimated_tokens: int = 2000,
+        budget_remaining: float = 0.10,
+    ) -> dict[str, Any]:
+        """Check if a projected LLM call fits within remaining budget.
+
+        Args:
+            agent_type: One of the valid agent type strings.
+            estimated_tokens: Approximate total tokens (input + output).
+            budget_remaining: Remaining budget in USD for the current run.
+
+        Returns:
+            Dict with ``proceed`` (bool), ``projected_cost_usd``,
+            ``budget_remaining``, and ``provider``.
+        """
+        projection = self.project_cost(agent_type, estimated_tokens)
+        proceed = projection["projected_cost_usd"] <= budget_remaining
+        if not proceed:
+            self.logger.warning(
+                "Budget gate: projected $%.6f > remaining $%.4f for %s — BLOCKED",
+                projection["projected_cost_usd"],
+                budget_remaining,
+                agent_type,
+            )
+        return {
+            "proceed": proceed,
+            "projected_cost_usd": projection["projected_cost_usd"],
+            "budget_remaining": budget_remaining,
+            "provider": projection["provider"],
+            "model": projection["model"],
+        }
+
     def test_connection(self, agent_type: str) -> dict[str, Any]:
         """
         Test primary LLM with a minimal single-token ping call.
@@ -422,3 +517,221 @@ class LLMInterface:
             len(results),
         )
         return results
+
+    # =========================================================================
+    # ASYNC COMPLETE — 5-Provider Fallback Chain
+    # =========================================================================
+    # 1. Perplexity (llama-3.1-sonar-large) — if budget allows
+    # 2. xAI Grok (grok-beta) — if 429, fallback
+    # 3. Groq (llama-3.3-70b-versatile) — FREE
+    # 4. Cerebras (llama3.1-70b) — FREE
+    # 5. SambaNova (Meta-Llama-3.1-70B-Instruct) — FREE
+    # =========================================================================
+
+    async def complete(
+        self,
+        prompt: str,
+        max_tokens: int = 1024,
+        purpose: str = "general",
+        budget_remaining: Optional[float] = None,
+    ) -> str:
+        """
+        Execute an LLM completion with 5-provider fallback chain.
+
+        Checks budget first — if < $0.50, skips paid providers (Perplexity, xAI)
+        and goes straight to free tier (Groq, Cerebras, SambaNova).
+
+        Args:
+            prompt: The prompt to send to the LLM.
+            max_tokens: Maximum tokens for the response.
+            purpose: Description of what this completion is for (for logging).
+            budget_remaining: Optional remaining budget in USD.
+
+        Returns:
+            The LLM response text.
+
+        Raises:
+            LLMExhaustedError: If all 5 providers fail.
+        """
+        import httpx
+
+        # Fallback chain configuration
+        # Format: (provider_name, model, api_key_env, base_url, is_paid)
+        FALLBACK_CHAIN: list[tuple[str, str, str, Optional[str], bool]] = [
+            ("perplexity", "llama-3.1-sonar-large", "PERPLEXITY_API_KEY", "https://api.perplexity.ai", True),
+            ("xai", "grok-beta", "XAI_API_KEY", "https://api.x.ai/v1", True),
+            ("groq", "llama-3.3-70b-versatile", "GROQ_API_KEY", "https://api.groq.com/openai/v1", False),
+            ("cerebras", "llama3.1-70b", "CEREBRAS_API_KEY", "https://api.cerebras.ai/v1", False),
+            ("sambanova", "Meta-Llama-3.1-70B-Instruct", "SAMBANOVA_API_KEY", "https://api.sambanova.ai/v1", False),
+        ]
+
+        # Check budget — if low, skip paid providers
+        skip_paid = False
+        if budget_remaining is not None and budget_remaining < 0.50:
+            self.logger.warning(
+                "Budget remaining $%.2f < $0.50, skipping paid providers",
+                budget_remaining,
+            )
+            skip_paid = True
+
+        last_error: Optional[Exception] = None
+
+        for provider_name, model, api_key_env, base_url, is_paid in FALLBACK_CHAIN:
+            # Skip paid providers if budget is low
+            if skip_paid and is_paid:
+                self.logger.debug("Skipping paid provider %s due to low budget", provider_name)
+                continue
+
+            # Check if provider is marked unavailable
+            if provider_name in self._unavailable:
+                self.logger.debug("Skipping unavailable provider %s", provider_name)
+                continue
+
+            # Get API key
+            api_key = os.getenv(api_key_env, "").strip()
+            if not api_key:
+                self.logger.debug("No API key for %s, skipping", provider_name)
+                continue
+
+            # Try this provider with 2 retries
+            for attempt in range(2):
+                try:
+                    response_text = await self._call_provider(
+                        provider_name=provider_name,
+                        model=model,
+                        api_key=api_key,
+                        base_url=base_url,
+                        prompt=prompt,
+                        max_tokens=max_tokens,
+                    )
+
+                    # Track cost for paid providers
+                    if is_paid:
+                        await self._track_cost_async(provider_name, len(prompt) // 4, max_tokens)
+
+                    self.logger.info(
+                        "complete() success: provider=%s, purpose=%s, tokens~%d",
+                        provider_name, purpose, max_tokens,
+                    )
+                    return response_text
+
+                except Exception as e:
+                    last_error = e
+                    error_str = str(e).lower()
+
+                    # Check for quota exceeded (429)
+                    if "429" in error_str or "quota" in error_str or "rate limit" in error_str:
+                        self.logger.warning(
+                            "Provider %s quota exceeded, moving to next provider", provider_name
+                        )
+                        break  # Don't retry, move to next provider
+
+                    # Auth errors — mark unavailable
+                    if any(s in error_str for s in self._AUTH_SIGNALS):
+                        self.logger.error("Provider %s auth error: %s", provider_name, e)
+                        self._unavailable.add(provider_name)
+                        break
+
+                    # Other errors — retry once
+                    if attempt < 1:
+                        self.logger.warning(
+                            "Provider %s attempt %d failed: %s, retrying...",
+                            provider_name, attempt + 1, e
+                        )
+                        await asyncio.sleep(2)
+                    else:
+                        self.logger.warning(
+                            "Provider %s failed after 2 attempts: %s",
+                            provider_name, e
+                        )
+
+        # All providers exhausted
+        raise LLMExhaustedError(
+            f"All LLM providers exhausted. Last error: {last_error}"
+        )
+
+    async def _call_provider(
+        self,
+        provider_name: str,
+        model: str,
+        api_key: str,
+        base_url: str,
+        prompt: str,
+        max_tokens: int,
+    ) -> str:
+        """Make an async HTTP call to an LLM provider."""
+        import httpx
+
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
+
+        # Build the request payload (OpenAI-compatible format)
+        payload = {
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": max_tokens,
+            "temperature": 0.7,
+        }
+
+        # Adjust for Perplexity's different API
+        if provider_name == "perplexity":
+            payload["model"] = f"llama-3.1-sonar-large-128k-online"
+
+        endpoint = f"{base_url}/chat/completions"
+
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(endpoint, headers=headers, json=payload)
+
+            if response.status_code == 429:
+                raise Exception(f"429 rate limit exceeded for {provider_name}")
+
+            if response.status_code != 200:
+                raise Exception(
+                    f"Provider {provider_name} returned {response.status_code}: {response.text}"
+                )
+
+            data = response.json()
+            choices = data.get("choices", [])
+            if not choices:
+                raise Exception(f"No choices in response from {provider_name}")
+
+            return choices[0].get("message", {}).get("content", "")
+
+    async def _track_cost_async(
+        self,
+        provider: str,
+        tokens_in: int,
+        tokens_out: int,
+    ) -> None:
+        """Track LLM cost asynchronously via budget_tools."""
+        try:
+            from tools.budget_tools import record_llm_cost
+
+            cost_per_1k = self._COST_PER_1K_TOKENS.get(provider, 0.0)
+            total_tokens = tokens_in + tokens_out
+            cost_usd = (total_tokens / 1000.0) * cost_per_1k
+
+            if cost_usd > 0:
+                record_llm_cost.func(
+                    provider=provider,
+                    cost_usd=cost_usd,
+                    agent_type="ASYNC_COMPLETE",
+                    run_batch_id="async_call",
+                )
+        except Exception as e:
+            self.logger.warning("Failed to track cost: %s", e)
+
+
+# =========================================================================
+# CUSTOM EXCEPTIONS
+# =========================================================================
+
+class LLMExhaustedError(Exception):
+    """Raised when all LLM providers in the fallback chain are exhausted."""
+    pass
+
+
+# Import asyncio for the async methods
+import asyncio
