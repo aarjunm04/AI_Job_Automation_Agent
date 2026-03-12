@@ -61,6 +61,11 @@ __all__ = [
     "check_captcha_present",
     "fill_standard_form",
     "get_apply_summary",
+    "route_and_apply",
+    "save_application_result",
+    "save_to_queue",
+    "get_best_resume",
+    "verify_apply_budget",
 ]
 
 # ---------------------------------------------------------------------------
@@ -1024,3 +1029,445 @@ def get_apply_summary(run_batch_id: str) -> str:
     return json.dumps(  # pragma: no cover
         {"error": "get_apply_summary_failed", "detail": "unreachable"}
     )
+
+
+# ---------------------------------------------------------------------------
+# TOOL 6 — Route and Apply (HTTP call to apply_service)
+# ---------------------------------------------------------------------------
+@tool
+@operation
+def route_and_apply(
+    job_id: str,
+    job_url: str,
+    resume_path: str,
+    fit_score: float,
+    run_batch_id: str,
+    user_id: str,
+    job_title: str = "",
+    company: str = "",
+    platform: str = "",
+) -> str:
+    """Route a job to the correct platform and execute application via apply_service.
+    
+    This is the primary tool for ApplyAgent to execute applications via HTTP
+    calls to the apply_service microservice running on port 8003.
+    
+    Args:
+        job_id: UUID of the job post.
+        job_url: Full URL of the job application page.
+        resume_path: Filename of the resume PDF.
+        fit_score: Fit score from analyser (0.0-1.0).
+        run_batch_id: UUID of the current run batch.
+        user_id: UUID of the candidate.
+        job_title: Job title for context.
+        company: Company name for context.
+        platform: ATS platform (auto-detected if empty).
+        
+    Returns:
+        JSON string with apply result from apply_service.
+    """
+    import requests
+    
+    apply_service_url = os.getenv("APPLY_SERVICE_URL", "http://localhost:8003")
+    
+    # Detect platform from URL if not provided
+    if not platform:
+        detector = ATSDetector()
+        detected_type = detector._detect_by_url(job_url)
+        platform = detected_type.value if detected_type else "native"
+    
+    try:
+        payload = {
+            "job_id": job_id,
+            "resume_path": resume_path,
+            "platform": platform,
+            "job_url": job_url,
+            "fit_score": fit_score,
+            "run_batch_id": run_batch_id,
+            "user_id": user_id,
+            "job_title": job_title,
+            "company": company,
+        }
+        
+        response = requests.post(
+            f"{apply_service_url}/apply",
+            json=payload,
+            timeout=120,  # 2 minute timeout for Playwright operations
+        )
+        
+        if response.status_code == 200:
+            result = response.json()
+            logger.info(
+                "route_and_apply: job=%s status=%s",
+                job_id,
+                result.get("status"),
+            )
+            return json.dumps(result)
+        else:
+            logger.error(
+                "route_and_apply: HTTP %d for job %s: %s",
+                response.status_code,
+                job_id,
+                response.text,
+            )
+            return json.dumps({
+                "status": "failed",
+                "job_id": job_id,
+                "error_code": f"HTTP_{response.status_code}",
+                "error_message": response.text[:200],
+            })
+            
+    except requests.exceptions.Timeout:
+        logger.error("route_and_apply: timeout for job %s", job_id)
+        return json.dumps({
+            "status": "queued",
+            "job_id": job_id,
+            "error_code": "TIMEOUT",
+            "error_message": "Apply service request timed out",
+        })
+    except requests.exceptions.ConnectionError as e:
+        logger.error("route_and_apply: connection error for job %s: %s", job_id, e)
+        return json.dumps({
+            "status": "queued",
+            "job_id": job_id,
+            "error_code": "CONNECTION_ERROR",
+            "error_message": str(e),
+        })
+    except Exception as exc:
+        logger.error("route_and_apply: error for job %s: %s", job_id, exc)
+        return json.dumps({
+            "status": "failed",
+            "job_id": job_id,
+            "error_code": "APPLY_ERROR",
+            "error_message": str(exc),
+        })
+
+
+# ---------------------------------------------------------------------------
+# TOOL 7 — Save Application Result to Postgres
+# ---------------------------------------------------------------------------
+@tool
+@operation
+def save_application_result(
+    job_id: str,
+    user_id: str,
+    status: str,
+    platform: str,
+    proof_type: str = "",
+    proof_value: str = "",
+    proof_confidence: float = 0.0,
+    error_code: str = "",
+    screenshot_path: str = "",
+    cost_usd: float = 0.0,
+) -> str:
+    """Save an application result to the applications table.
+    
+    Args:
+        job_id: UUID of the job post.
+        user_id: UUID of the user.
+        status: Application status (applied, failed, manual_queued).
+        platform: ATS platform used.
+        proof_type: Type of submission proof.
+        proof_value: Proof value (URL, confirmation number).
+        proof_confidence: Proof confidence 0.0-1.0.
+        error_code: Error code if failed.
+        screenshot_path: Path to proof screenshot.
+        cost_usd: LLM cost incurred.
+        
+    Returns:
+        JSON string with application_id or error.
+    """
+    conn = None
+    try:
+        active_db = os.getenv("ACTIVE_DB", "local")
+        if active_db == "local":
+            conn = psycopg2.connect(
+                host=os.getenv("LOCAL_POSTGRES_HOST", "ai_postgres"),
+                port=int(os.getenv("LOCAL_POSTGRES_PORT", "5432")),
+                user=os.getenv("LOCAL_POSTGRES_USER", "aarjunm04"),
+                password=os.getenv("LOCAL_POSTGRES_PASSWORD"),
+                dbname=os.getenv("LOCAL_POSTGRES_DB", "ai_job_db"),
+                connect_timeout=10,
+            )
+        else:
+            conn = psycopg2.connect(os.getenv("SUPABASE_URL"))
+        
+        conn.autocommit = False
+        cursor = conn.cursor()
+        
+        import uuid
+        app_id = str(uuid.uuid4())
+        
+        cursor.execute(
+            """
+            INSERT INTO applications (id, job_post_id, user_id, mode, status, platform, error_code)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            RETURNING id
+            """,
+            (app_id, job_id, user_id, "auto", status, platform, error_code or None)
+        )
+        
+        conn.commit()
+        
+        logger.info("save_application_result: created %s for job %s", app_id, job_id)
+        
+        return json.dumps({
+            "success": True,
+            "application_id": app_id,
+            "job_id": job_id,
+            "status": status,
+        })
+        
+    except Exception as exc:
+        if conn:
+            conn.rollback()
+        logger.error("save_application_result failed: %s", exc)
+        return json.dumps({
+            "success": False,
+            "error": str(exc),
+        })
+    finally:
+        if conn:
+            conn.close()
+
+
+# ---------------------------------------------------------------------------
+# TOOL 8 — Save to Manual Queue
+# ---------------------------------------------------------------------------
+@tool
+@operation
+def save_to_queue(
+    job_id: str,
+    user_id: str,
+    reason: str,
+    priority: int = 5,
+    notes: str = "",
+) -> str:
+    """Save a job to the manual queue for later processing.
+    
+    Creates an application record with status='manual_queued' and
+    adds an entry to the queued_jobs table.
+    
+    Args:
+        job_id: UUID of the job post.
+        user_id: UUID of the user.
+        reason: Reason for queueing (becomes error_code).
+        priority: Queue priority (higher = more urgent, default 5).
+        notes: Additional notes for manual reviewer.
+        
+    Returns:
+        JSON string with queue entry details or error.
+    """
+    conn = None
+    try:
+        active_db = os.getenv("ACTIVE_DB", "local")
+        if active_db == "local":
+            conn = psycopg2.connect(
+                host=os.getenv("LOCAL_POSTGRES_HOST", "ai_postgres"),
+                port=int(os.getenv("LOCAL_POSTGRES_PORT", "5432")),
+                user=os.getenv("LOCAL_POSTGRES_USER", "aarjunm04"),
+                password=os.getenv("LOCAL_POSTGRES_PASSWORD"),
+                dbname=os.getenv("LOCAL_POSTGRES_DB", "ai_job_db"),
+                connect_timeout=10,
+            )
+        else:
+            conn = psycopg2.connect(os.getenv("SUPABASE_URL"))
+        
+        conn.autocommit = False
+        cursor = conn.cursor()
+        
+        import uuid
+        app_id = str(uuid.uuid4())
+        
+        # First create application with manual_queued status
+        cursor.execute(
+            """
+            INSERT INTO applications (id, job_post_id, user_id, mode, status, platform, error_code)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            RETURNING id
+            """,
+            (app_id, job_id, user_id, "manual", "manual_queued", "unknown", reason)
+        )
+        
+        # Then create queued_jobs entry
+        cursor.execute(
+            """
+            INSERT INTO queued_jobs (application_id, job_post_id, priority, notes)
+            VALUES (%s, %s, %s, %s)
+            """,
+            (app_id, job_id, priority, notes or reason)
+        )
+        
+        conn.commit()
+        
+        logger.info("save_to_queue: queued job %s with priority %d", job_id, priority)
+        
+        return json.dumps({
+            "success": True,
+            "application_id": app_id,
+            "job_id": job_id,
+            "priority": priority,
+            "reason": reason,
+        })
+        
+    except Exception as exc:
+        if conn:
+            conn.rollback()
+        logger.error("save_to_queue failed: %s", exc)
+        return json.dumps({
+            "success": False,
+            "error": str(exc),
+        })
+    finally:
+        if conn:
+            conn.close()
+
+
+# ---------------------------------------------------------------------------
+# TOOL 9 — Get Best Resume via RAG
+# ---------------------------------------------------------------------------
+@tool
+@operation
+def get_best_resume(
+    job_title: str,
+    job_description: str,
+    company: str = "",
+) -> str:
+    """Get the best matching resume for a job via RAG server.
+    
+    Calls the RAG service /match endpoint to find the most suitable
+    resume variant based on job requirements.
+    
+    Args:
+        job_title: Title of the job position.
+        job_description: Full job description text.
+        company: Company name (optional).
+        
+    Returns:
+        JSON string with resume_path and match_score, or error.
+    """
+    import requests
+    
+    rag_service_url = os.getenv("RAG_SERVICE_URL", "http://localhost:8002")
+    default_resume = os.getenv("DEFAULT_RESUME", "AarjunGen.pdf")
+    
+    try:
+        payload = {
+            "job_title": job_title,
+            "job_description": job_description[:2000],  # Truncate for token limits
+            "company": company,
+        }
+        
+        response = requests.post(
+            f"{rag_service_url}/match",
+            json=payload,
+            timeout=30,
+        )
+        
+        if response.status_code == 200:
+            result = response.json()
+            resume_path = result.get("resume_path", default_resume)
+            match_score = result.get("match_score", 0.0)
+            
+            logger.info(
+                "get_best_resume: matched '%s' for %s (score=%.2f)",
+                resume_path,
+                job_title,
+                match_score,
+            )
+            
+            return json.dumps({
+                "success": True,
+                "resume_path": resume_path,
+                "match_score": match_score,
+            })
+        else:
+            logger.warning(
+                "get_best_resume: RAG service returned %d, using default",
+                response.status_code,
+            )
+            return json.dumps({
+                "success": True,
+                "resume_path": default_resume,
+                "match_score": 0.5,
+                "fallback": True,
+            })
+            
+    except requests.exceptions.RequestException as e:
+        logger.warning("get_best_resume: RAG service unavailable: %s", e)
+        return json.dumps({
+            "success": True,
+            "resume_path": default_resume,
+            "match_score": 0.5,
+            "fallback": True,
+            "error": str(e),
+        })
+    except Exception as exc:
+        logger.error("get_best_resume failed: %s", exc)
+        return json.dumps({
+            "success": True,
+            "resume_path": default_resume,
+            "match_score": 0.5,
+            "fallback": True,
+            "error": str(exc),
+        })
+
+
+# ---------------------------------------------------------------------------
+# TOOL 10 — Verify Apply Budget
+# ---------------------------------------------------------------------------
+@tool
+@operation
+def verify_apply_budget(
+    projected_cost: float,
+    run_batch_id: str,
+) -> str:
+    """Check if projected cost fits within remaining budget.
+    
+    Verifies both the per-run xAI cap and monthly budget before
+    allowing an LLM call to proceed.
+    
+    Args:
+        projected_cost: Estimated cost of the upcoming operation in USD.
+        run_batch_id: UUID of the current run batch.
+        
+    Returns:
+        JSON string with allowed (bool) and remaining_budget.
+    """
+    try:
+        # Check xAI run cap
+        cap_result = json.loads(check_xai_run_cap(run_batch_id))
+        
+        if cap_result.get("abort", False):
+            return json.dumps({
+                "allowed": False,
+                "reason": "xai_run_cap_exceeded",
+                "remaining_budget": 0.0,
+            })
+        
+        current_spent = cap_result.get("spent", 0.0)
+        cap = cap_result.get("cap", 0.38)
+        remaining = cap - current_spent
+        
+        if projected_cost > remaining:
+            return json.dumps({
+                "allowed": False,
+                "reason": "insufficient_budget",
+                "remaining_budget": remaining,
+                "projected_cost": projected_cost,
+            })
+        
+        return json.dumps({
+            "allowed": True,
+            "remaining_budget": remaining,
+            "projected_cost": projected_cost,
+        })
+        
+    except Exception as exc:
+        logger.error("verify_apply_budget failed: %s", exc)
+        # Fail open - allow operation if budget check fails
+        return json.dumps({
+            "allowed": True,
+            "remaining_budget": -1,  # Unknown
+            "error": str(exc),
+        })
