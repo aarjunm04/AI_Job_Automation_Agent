@@ -11,7 +11,15 @@ from .proxy_ratelimit import (
     reset_proxy_cycle,
     ProxyRateLimiter,
 )
-from .normalise_dedupe import normalise_job_post, clean_description
+from .normalise_dedupe import (
+    normalise_job_post,
+    clean_description,
+    deduplicate_jobs_fuzzy,
+    canonical_url,
+    compute_similarity,
+    days_old,
+    upsert_jobs_postgres,
+)
 
 __all__ = [
     "get_db_conn",
@@ -21,4 +29,9 @@ __all__ = [
     "ProxyRateLimiter",
     "normalise_job_post",
     "clean_description",
+    "deduplicate_jobs_fuzzy",
+    "canonical_url",
+    "compute_similarity",
+    "days_old",
+    "upsert_jobs_postgres",
 ]
