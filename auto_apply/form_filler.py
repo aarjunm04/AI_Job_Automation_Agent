@@ -55,7 +55,7 @@ logger = logging.getLogger(__name__)
 DRY_RUN: bool = os.getenv("DRY_RUN", "false").lower() == "true"
 RESUME_DIR: Path = Path(run_config.resume_dir)
 
-__all__ = ["FormFiller", "FieldType", "FormField", "FillResult"]
+__all__ = ["FormFiller", "FieldType", "FormField", "FillResult", "fill_field"]
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -106,6 +106,8 @@ class FillResult:
         custom_questions: List of ``{question, answer}`` dicts from LLM.
         errors: Human-readable error strings for debugging.
         success: ``True`` when the form is considered adequately filled.
+        screenshot_path: Path to error screenshot if any error occurred.
+        cost_usd: Total LLM cost incurred during form filling.
     """
 
     total_fields: int = 0
@@ -113,6 +115,8 @@ class FillResult:
     skipped: int = 0
     failed: int = 0
     llm_calls: int = 0
+    screenshot_path: str = ""
+    cost_usd: float = 0.0
     custom_questions: list[dict] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
     success: bool = False
@@ -243,6 +247,209 @@ class FormFiller:
         """
         delay_seconds: float = random.randint(min_ms, max_ms) / 1000.0
         await asyncio.sleep(delay_seconds)
+
+    async def _human_mouse_move(
+        self, target_x: float, target_y: float
+    ) -> None:
+        """Move mouse to target position using Bezier curve for human-like motion.
+        
+        Implements Fitts' Law compliant mouse movement with random micro-jitter
+        to evade bot detection. Uses quadratic Bezier curves with random
+        control points.
+        
+        Args:
+            target_x: Target X coordinate on page.
+            target_y: Target Y coordinate on page.
+        """
+        if self.dry_run:
+            return
+            
+        try:
+            # Get current mouse position (approximate from viewport center if unknown)
+            viewport = self.page.viewport_size or {"width": 1280, "height": 720}
+            current_x = viewport["width"] / 2 + random.uniform(-50, 50)
+            current_y = viewport["height"] / 2 + random.uniform(-50, 50)
+            
+            # Calculate path using Bezier curve
+            steps = random.randint(8, 15)
+            
+            # Random control point for quadratic Bezier
+            ctrl_x = (current_x + target_x) / 2 + random.uniform(-100, 100)
+            ctrl_y = (current_y + target_y) / 2 + random.uniform(-50, 50)
+            
+            for i in range(steps + 1):
+                t = i / steps
+                # Quadratic Bezier: B(t) = (1-t)²P0 + 2(1-t)tP1 + t²P2
+                x = (1-t)**2 * current_x + 2*(1-t)*t * ctrl_x + t**2 * target_x
+                y = (1-t)**2 * current_y + 2*(1-t)*t * ctrl_y + t**2 * target_y
+                
+                # Add micro-jitter for human-like imprecision
+                x += random.uniform(-3, 3)
+                y += random.uniform(-3, 3)
+                
+                await self.page.mouse.move(x, y)
+                await asyncio.sleep(random.uniform(0.01, 0.03))
+                
+        except Exception as exc:  # noqa: BLE001
+            self.logger.debug("_human_mouse_move: error (proceeding): %s", exc)
+
+    async def _human_type(self, value: str) -> None:
+        """Type text character-by-character with human-like variable delays.
+        
+        Simulates natural typing patterns with:
+        - Variable inter-key delays (80-220ms, WPM-normal)
+        - Occasional longer pauses between words
+        - Random micro-hesitations
+        
+        Args:
+            value: The text string to type.
+        """
+        if self.dry_run:
+            self.logger.debug("dry_run: would type '%s'", value[:50])
+            return
+            
+        try:
+            for i, char in enumerate(value):
+                # Base delay between keystrokes (80-220ms for ~40-60 WPM)
+                delay = random.uniform(0.08, 0.22)
+                
+                # Occasionally add longer pause between words
+                if char == ' ' and random.random() < 0.3:
+                    delay += random.uniform(0.1, 0.3)
+                
+                # Occasional micro-hesitation (simulating thinking)
+                if random.random() < 0.05:
+                    delay += random.uniform(0.2, 0.5)
+                
+                await self.page.keyboard.type(char, delay=delay * 1000)
+                
+        except Exception as exc:  # noqa: BLE001
+            self.logger.warning("_human_type: error (proceeding): %s", exc)
+
+    async def _scroll_to_element(self, selector: str) -> bool:
+        """Scroll element into view before interacting with it.
+        
+        Args:
+            selector: CSS selector for the target element.
+            
+        Returns:
+            True if scroll succeeded, False otherwise.
+        """
+        try:
+            element = await self.page.query_selector(selector)
+            if element:
+                await element.scroll_into_view_if_needed()
+                await asyncio.sleep(random.uniform(0.2, 0.4))
+                return True
+            return False
+        except Exception as exc:  # noqa: BLE001
+            self.logger.debug("_scroll_to_element: error: %s", exc)
+            return False
+
+    async def _human_click(self, selector: str) -> bool:
+        """Click an element with human-like mouse movement and timing.
+        
+        Args:
+            selector: CSS selector for the click target.
+            
+        Returns:
+            True if click succeeded, False otherwise.
+        """
+        if self.dry_run:
+            self.logger.debug("dry_run: would click %s", selector)
+            return True
+            
+        try:
+            # First scroll into view
+            await self._scroll_to_element(selector)
+            
+            # Get element bounding box
+            element = await self.page.query_selector(selector)
+            if not element:
+                return False
+                
+            box = await element.bounding_box()
+            if not box:
+                # Fallback to regular click
+                await self.page.click(selector)
+                return True
+                
+            # Calculate click position with slight randomness
+            target_x = box["x"] + box["width"] / 2 + random.uniform(-5, 5)
+            target_y = box["y"] + box["height"] / 2 + random.uniform(-3, 3)
+            
+            # Human-like mouse movement
+            await self._human_mouse_move(target_x, target_y)
+            
+            # Small delay before clicking
+            await asyncio.sleep(random.uniform(0.05, 0.15))
+            
+            # Click
+            await self.page.mouse.click(target_x, target_y)
+            
+            return True
+            
+        except Exception as exc:  # noqa: BLE001
+            self.logger.warning("_human_click: error: %s", exc)
+            return False
+
+    async def _human_fill_field(
+        self, selector: str, value: str, use_tab: bool = True
+    ) -> bool:
+        """Fill a field with complete human simulation.
+        
+        Combines: scroll → mouse move → click → clear → type → tab
+        
+        Args:
+            selector: CSS selector for the input field.
+            value: Value to type into the field.
+            use_tab: Whether to press Tab after filling (for field navigation).
+            
+        Returns:
+            True if fill succeeded, False otherwise.
+        """
+        if self.dry_run:
+            self.logger.debug("dry_run: would fill %s → '%s'", selector, value)
+            return True
+            
+        try:
+            # Scroll element into view
+            await self._scroll_to_element(selector)
+            
+            # Get element position
+            element = await self.page.query_selector(selector)
+            if not element:
+                return False
+                
+            box = await element.bounding_box()
+            if box:
+                # Move mouse to field
+                target_x = box["x"] + box["width"] / 2 + random.uniform(-10, 10)
+                target_y = box["y"] + box["height"] / 2 + random.uniform(-3, 3)
+                await self._human_mouse_move(target_x, target_y)
+            
+            # Click to focus
+            await self.page.click(selector, click_count=3)  # Triple-click to select all
+            await asyncio.sleep(random.uniform(0.1, 0.2))
+            
+            # Clear existing content
+            await self.page.keyboard.press("Backspace")
+            await asyncio.sleep(random.uniform(0.05, 0.1))
+            
+            # Type with human-like delays
+            await self._human_type(value)
+            
+            # Tab to next field if requested
+            if use_tab:
+                await asyncio.sleep(random.uniform(0.3, 0.8))
+                await self.page.keyboard.press("Tab")
+            
+            return True
+            
+        except Exception as exc:  # noqa: BLE001
+            self.logger.warning("_human_fill_field: error: %s — trying fallback", exc)
+            # Fallback to standard fill
+            return await self._safe_fill(selector, value)
 
     async def _safe_fill(self, selector: str, value: str) -> bool:
         """Fill a text-like input using three escalating strategies.
@@ -1210,3 +1417,165 @@ class FormFiller:
                 pass
 
         return self.result
+
+    async def screenshot_on_error(self, job_id: str = "") -> str:
+        """Capture a full-page screenshot when an error occurs.
+        
+        Screenshots are saved to /tmp/apply_{job_id}_{timestamp}.png
+        
+        Args:
+            job_id: Job identifier for the filename (optional).
+            
+        Returns:
+            Path to the saved screenshot, or empty string on failure.
+        """
+        try:
+            from datetime import datetime
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            job_suffix = f"_{job_id}" if job_id else ""
+            screenshot_path = f"/tmp/apply{job_suffix}_{timestamp}.png"
+            
+            await self.page.screenshot(path=screenshot_path, full_page=True)
+            self.result.screenshot_path = screenshot_path
+            self.logger.info("Error screenshot saved: %s", screenshot_path)
+            return screenshot_path
+            
+        except Exception as exc:  # noqa: BLE001
+            self.logger.warning("screenshot_on_error failed: %s", exc)
+            return ""
+
+    @operation
+    async def fill_field(
+        self,
+        selector: str,
+        value: str,
+        field_type: str = "text",
+    ) -> bool:
+        """Fill a single form field with human-like simulation.
+        
+        This is the public interface for filling individual fields,
+        used by platform-specific modules.
+        
+        Args:
+            selector: CSS selector for the target field.
+            value: Value to fill.
+            field_type: One of: text, email, phone, dropdown, radio, 
+                        checkbox, file_upload, textarea
+                        
+        Returns:
+            True if field was successfully filled, False otherwise.
+        """
+        if not value:
+            self.logger.debug("fill_field: empty value for %s — skipping", selector)
+            return True
+            
+        try:
+            # Scroll element into view first
+            await self._scroll_to_element(selector)
+            await self._human_delay(300, 800)  # Micro-pause between sections
+            
+            field_type_lower = field_type.lower()
+            
+            if field_type_lower == "file_upload":
+                return await self._upload_resume(selector)
+                
+            elif field_type_lower == "dropdown":
+                element = await self.page.query_selector(selector)
+                if element:
+                    options = await self.page.evaluate(
+                        """(el) => {
+                            return Array.from(el.options).map(o => o.text.trim())
+                               .filter(t => t.length > 0);
+                        }""",
+                        element,
+                    )
+                    return await self._safe_select(selector, options, value)
+                return False
+                
+            elif field_type_lower == "radio":
+                return await self._handle_radio_group(selector, "", value)
+                
+            elif field_type_lower == "checkbox":
+                should_check = value.lower() in ("true", "yes", "1", "checked")
+                return await self._handle_checkbox(selector, "", should_check)
+                
+            else:
+                # text, email, phone, textarea
+                return await self._human_fill_field(selector, value)
+                
+        except Exception as exc:  # noqa: BLE001
+            self.logger.error("fill_field failed for %s: %s", selector, exc)
+            await self.screenshot_on_error()
+            return False
+
+    async def detect_required_fields(self) -> list[FormField]:
+        """Detect all required fields on the current page.
+        
+        Returns:
+            List of FormField objects marked as required.
+        """
+        all_fields = await self.scan_form_fields()
+        return [f for f in all_fields if f.required]
+
+    async def detect_captcha(self) -> bool:
+        """Check if a CAPTCHA is present on the current page.
+        
+        Returns:
+            True if CAPTCHA detected, False otherwise.
+        """
+        try:
+            captcha_selectors = [
+                "iframe[src*='recaptcha']",
+                "iframe[src*='hcaptcha']",
+                "div.g-recaptcha",
+                "div.h-captcha",
+                "iframe[src*='turnstile']",
+                "div.cf-turnstile",
+            ]
+            
+            for selector in captcha_selectors:
+                element = await self.page.query_selector(selector)
+                if element:
+                    self.logger.warning("CAPTCHA detected: %s", selector)
+                    return True
+                    
+            return False
+            
+        except Exception as exc:  # noqa: BLE001
+            self.logger.warning("detect_captcha error: %s", exc)
+            return False
+
+
+# ---------------------------------------------------------------------------
+# Standalone fill_field function for external use
+# ---------------------------------------------------------------------------
+async def fill_field(
+    page: Page,
+    selector: str,
+    value: str,
+    field_type: str = "text",
+) -> bool:
+    """Standalone function to fill a single form field with human simulation.
+    
+    Creates a temporary FormFiller instance to leverage all human-like
+    behaviors without requiring full FormFiller setup.
+    
+    Args:
+        page: Playwright Page object.
+        selector: CSS selector for the target field.
+        value: Value to fill.
+        field_type: Field type (text, email, phone, dropdown, etc.)
+        
+    Returns:
+        True if field was filled successfully, False otherwise.
+    """
+    filler = FormFiller(
+        page=page,
+        job_title="",
+        job_description="",
+        company="",
+        resume_filename="",
+        ats_type="native",
+        dry_run=DRY_RUN,
+    )
+    return await filler.fill_field(selector, value, field_type)

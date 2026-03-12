@@ -66,6 +66,9 @@ class ATSType(Enum):
     SMARTRECRUITERS = "smartrecruiters"
     BAMBOOHR = "bamboohr"
     LINKEDIN_EASY_APPLY = "linkedin_easy_apply"
+    INDEED = "indeed"
+    WELLFOUND = "wellfound"
+    ARC_DEV = "arc_dev"
     NATIVE = "native"
     UNKNOWN = "unknown"
 
@@ -451,6 +454,91 @@ ATS_SELECTOR_REGISTRY: dict[ATSType, ATSProfile] = {
         apply_strategy="standard",
         notes="Generic fallback selectors. Best-effort fill.",
     ),
+    # ------------------------------------------------------------------
+    # Indeed — indeed.com
+    # ------------------------------------------------------------------
+    ATSType.INDEED: ATSProfile(
+        ats_type=ATSType.INDEED,
+        submit_selector=(
+            "button[id='indeedApplyButton'], "
+            "button[data-testid='indeedApplyButton'], "
+            "button.ia-IndeedApply-button"
+        ),
+        next_button_selector="button[data-testid='next-button']",
+        first_name_selector=(
+            "input[name='firstName'], input[id*='firstName']"
+        ),
+        last_name_selector=(
+            "input[name='lastName'], input[id*='lastName']"
+        ),
+        email_selector="input[name='email'], input[type='email']",
+        phone_selector="input[name='phone'], input[type='tel']",
+        resume_upload_selector=(
+            "input[type=file], input[data-testid='resume-upload']"
+        ),
+        linkedin_selector="",
+        is_multi_step=True,
+        requires_login=True,
+        captcha_risk="high",
+        apply_strategy="multi_step",
+        notes=(
+            "Requires Indeed account login. Multi-step modal flow. "
+            "High bot detection — use with caution."
+        ),
+    ),
+    # ------------------------------------------------------------------
+    # Wellfound (AngelList) — wellfound.com
+    # ------------------------------------------------------------------
+    ATSType.WELLFOUND: ATSProfile(
+        ats_type=ATSType.WELLFOUND,
+        submit_selector=(
+            "button[data-testid='apply-button'], "
+            "button[type=submit], "
+            "button.styles-module_button__JGWFQ"
+        ),
+        next_button_selector="button[data-testid='continue-button']",
+        first_name_selector="input[name='firstName']",
+        last_name_selector="input[name='lastName']",
+        email_selector="input[name='email']",
+        phone_selector="input[name='phone']",
+        resume_upload_selector=(
+            "input[type=file], input[data-testid='resume-input']"
+        ),
+        linkedin_selector="input[name='linkedinUrl']",
+        is_multi_step=False,
+        requires_login=True,
+        captcha_risk="low",
+        apply_strategy="standard",
+        notes=(
+            "Requires Wellfound account. Single-page form typical. "
+            "React-controlled inputs."
+        ),
+    ),
+    # ------------------------------------------------------------------
+    # Arc.dev — arc.dev
+    # ------------------------------------------------------------------
+    ATSType.ARC_DEV: ATSProfile(
+        ats_type=ATSType.ARC_DEV,
+        submit_selector=(
+            "button[type=submit], "
+            "button[data-testid='apply-submit']"
+        ),
+        next_button_selector="",
+        first_name_selector="input[name='firstName']",
+        last_name_selector="input[name='lastName']",
+        email_selector="input[name='email'], input[type='email']",
+        phone_selector="input[name='phone']",
+        resume_upload_selector="input[type=file]",
+        linkedin_selector="input[name='linkedInUrl']",
+        is_multi_step=False,
+        requires_login=True,
+        captcha_risk="low",
+        apply_strategy="standard",
+        notes=(
+            "Developer-focused job board. Requires Arc account. "
+            "Clean React forms."
+        ),
+    ),
 }
 
 
@@ -461,12 +549,15 @@ ATS_SELECTOR_REGISTRY: dict[ATSType, ATSProfile] = {
 URL_PATTERNS: dict[ATSType, list[str]] = {
     ATSType.GREENHOUSE: ["greenhouse.io", "boards.greenhouse.io"],
     ATSType.LEVER: ["jobs.lever.co", "lever.co/"],
-    ATSType.WORKDAY: ["workday.com", "myworkdayjobs.com"],
+    ATSType.WORKDAY: ["workday.com", "myworkdayjobs.com", "wd3.myworkdayjobs.com"],
     ATSType.ASHBY: ["ashbyhq.com", "jobs.ashbyhq.com"],
     ATSType.ICIMS: ["icims.com"],
     ATSType.SMARTRECRUITERS: ["smartrecruiters.com"],
     ATSType.BAMBOOHR: ["bamboohr.com"],
-    ATSType.LINKEDIN_EASY_APPLY: ["linkedin.com/jobs"],
+    ATSType.LINKEDIN_EASY_APPLY: ["linkedin.com/jobs", "linkedin.com/jobs/apply"],
+    ATSType.INDEED: ["indeed.com/apply", "indeed.com/viewjob", "indeed.com/jobs"],
+    ATSType.WELLFOUND: ["wellfound.com", "angel.co/jobs"],
+    ATSType.ARC_DEV: ["arc.dev", "arc.dev/remote-jobs"],
 }
 
 
@@ -511,6 +602,22 @@ DOM_FINGERPRINTS: dict[ATSType, list[str]] = {
         "div.jobs-easy-apply-modal",
         "div[data-test-modal]",
         "form.jobs-easy-apply-content",
+    ],
+    ATSType.INDEED: [
+        "div#indeedApply",
+        "div.ia-IndeedApply",
+        "button#indeedApplyButton",
+        "form[data-testid='indeed-apply-form']",
+    ],
+    ATSType.WELLFOUND: [
+        "div[data-testid='application-form']",
+        "form.job-apply-form",
+        "div.styles-module_applicationContainer",
+    ],
+    ATSType.ARC_DEV: [
+        "div.job-application-form",
+        "form[data-testid='arc-apply-form']",
+        "div.arc-application",
     ],
 }
 
