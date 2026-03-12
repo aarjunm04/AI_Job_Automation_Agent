@@ -7,6 +7,7 @@ Its responsibilities are:
 2. Push all manually queued jobs to the Notion Applications database.
 3. Record the AgentOps run summary.
 4. Close the run session in Postgres with accurate final counts.
+5. Generate and post the FinalReport to Notion.
 
 All external-service failures (Notion, AgentOps) are swallowed and logged;
 the agent must never crash the pipeline regardless of third-party availability.
@@ -14,11 +15,14 @@ the agent must never crash the pipeline regardless of third-party availability.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
 import time
-from typing import Any, Optional
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from typing import Any, Optional, List
 
 import agentops
 from agentops.sdk.decorators import agent, operation
@@ -28,6 +32,7 @@ from crewai import Agent, Crew, Process, Task
 
 from config.settings import db_config
 from integrations.llm_interface import LLMInterface
+from integrations.notion import NotionClient, FinalReport
 from tools.agentops_tools import record_agent_error
 from tools.notion_tools import (
     check_notion_connection,
@@ -47,7 +52,7 @@ from tools.postgres_tools import (
 logger = logging.getLogger(__name__)
 logger.setLevel(os.getenv("LOG_LEVEL", "INFO"))
 
-__all__ = ["TrackerAgent"]
+__all__ = ["TrackerAgent", "FinalReport"]
 
 
 # ---------------------------------------------------------------------------
@@ -514,3 +519,243 @@ If some Notion syncs failed, include them in the "errors" list as strings.
                 "run_batch_id": self.run_batch_id,
                 "error": str(exc),
             }
+
+    # ------------------------------------------------------------------
+    # Report generation
+    # ------------------------------------------------------------------
+
+    @operation
+    def generate_report(self, apply_result: Optional[dict[str, Any]] = None) -> FinalReport:
+        """Generate the final pipeline report with all statistics.
+
+        Reads from run_sessions, applications, queued_jobs, and audit_logs
+        to compile a complete run summary. Posts to Notion and ends AgentOps.
+
+        Args:
+            apply_result: Optional result dict from ApplyAgent.run().
+
+        Returns:
+            FinalReport dataclass with all run statistics.
+        """
+        self.logger.info("Generating final report for run_batch_id=%s", self.run_batch_id)
+
+        # Initialize report with defaults
+        report = FinalReport(
+            run_batch_id=self.run_batch_id,
+            run_date=datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+            jobs_discovered=0,
+            jobs_scored=0,
+            jobs_auto_applied=0,
+            jobs_manual_queued=0,
+            jobs_failed=0,
+            total_cost_usd=0.0,
+            duration_minutes=0.0,
+            success=True,
+            error_summary=None,
+            top_applied_jobs=None,
+        )
+
+        try:
+            # Step 1: Get run session stats from Postgres
+            run_stats = self._get_run_session_stats()
+            if run_stats:
+                report.jobs_discovered = run_stats.get("jobs_discovered", 0)
+                report.jobs_auto_applied = run_stats.get("jobs_auto_applied", 0)
+                report.jobs_manual_queued = run_stats.get("jobs_queued", 0)
+                report.duration_minutes = run_stats.get("duration_minutes", 0.0)
+
+            # Step 2: Get application counts by status
+            app_stats = self._get_application_stats()
+            if app_stats:
+                report.jobs_auto_applied = app_stats.get("applied", report.jobs_auto_applied)
+                report.jobs_failed = app_stats.get("failed", 0)
+                report.jobs_manual_queued = app_stats.get("manual_queued", report.jobs_manual_queued)
+
+            # Step 3: Calculate total cost from budget tools
+            report.total_cost_usd = self._get_total_cost()
+
+            # Step 4: Get top applied jobs
+            report.top_applied_jobs = self._get_top_applied_jobs(limit=10)
+
+            # Step 5: Check for errors in audit_logs
+            errors = self._get_error_summary()
+            if errors:
+                report.error_summary = errors
+                report.success = report.jobs_failed == 0
+
+            # Step 6: Calculate success rate
+            total_attempts = report.jobs_auto_applied + report.jobs_failed
+            if total_attempts > 0:
+                success_rate = report.jobs_auto_applied / total_attempts
+                self.logger.info("Success rate: %.1f%%", success_rate * 100)
+
+            # Step 7: Post to Notion
+            try:
+                asyncio.run(self._post_report_to_notion(report))
+            except Exception as notion_exc:
+                self.logger.warning("Failed to post report to Notion: %s", notion_exc)
+
+            # Step 8: End AgentOps session
+            end_state = "Success" if report.success else "Fail"
+            _record_run_summary(self.run_batch_id)
+            _end_agentops_session(end_state)
+
+            # Step 9: Log final summary
+            self.logger.info(
+                "FINAL REPORT: discovered=%d applied=%d queued=%d failed=%d cost=$%.4f duration=%.1fmin",
+                report.jobs_discovered,
+                report.jobs_auto_applied,
+                report.jobs_manual_queued,
+                report.jobs_failed,
+                report.total_cost_usd,
+                report.duration_minutes,
+            )
+
+        except Exception as exc:
+            self.logger.error("Error generating report: %s", exc, exc_info=True)
+            report.success = False
+            report.error_summary = str(exc)
+
+        return report
+
+    def _get_run_session_stats(self) -> Optional[dict[str, Any]]:
+        """Query run_sessions table for this run's stats."""
+        connection_url = db_config.connection_url
+        if not connection_url:
+            return None
+
+        try:
+            conn = psycopg2.connect(connection_url)
+            cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+            
+            cursor.execute("""
+                SELECT 
+                    jobs_discovered,
+                    jobs_auto_applied,
+                    jobs_queued,
+                    EXTRACT(EPOCH FROM (COALESCE(closed_at, NOW()) - created_at)) / 60.0 AS duration_minutes
+                FROM run_sessions
+                WHERE run_batch_id = %s
+            """, (self.run_batch_id,))
+            
+            row = cursor.fetchone()
+            conn.close()
+            return dict(row) if row else None
+        except Exception as exc:
+            self.logger.warning("Failed to get run session stats: %s", exc)
+            return None
+
+    def _get_application_stats(self) -> dict[str, int]:
+        """Query applications table grouped by status."""
+        connection_url = db_config.connection_url
+        if not connection_url:
+            return {}
+
+        try:
+            conn = psycopg2.connect(connection_url)
+            cursor = conn.cursor()
+            
+            cursor.execute("""
+                SELECT status, COUNT(*) as count
+                FROM applications a
+                JOIN jobs j ON j.id = a.job_post_id
+                WHERE j.run_batch_id = %s
+                GROUP BY status
+            """, (self.run_batch_id,))
+            
+            results = cursor.fetchall()
+            conn.close()
+            
+            stats = {}
+            for status, count in results:
+                stats[status.lower().replace(" ", "_")] = count
+            return stats
+        except Exception as exc:
+            self.logger.warning("Failed to get application stats: %s", exc)
+            return {}
+
+    def _get_total_cost(self) -> float:
+        """Get total cost from budget_tools."""
+        try:
+            from tools.budget_tools import get_cost_summary
+            
+            raw = get_cost_summary.func(self.run_batch_id)
+            data = json.loads(raw) if isinstance(raw, str) else raw
+            return float(data.get("run_total_cost", 0.0))
+        except Exception as exc:
+            self.logger.warning("Failed to get total cost: %s", exc)
+            return 0.0
+
+    def _get_top_applied_jobs(self, limit: int = 10) -> List[dict[str, Any]]:
+        """Get top applied jobs ordered by fit_score."""
+        connection_url = db_config.connection_url
+        if not connection_url:
+            return []
+
+        try:
+            conn = psycopg2.connect(connection_url)
+            cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+            
+            cursor.execute("""
+                SELECT 
+                    j.title,
+                    j.company,
+                    j.url,
+                    j.source_platform as platform,
+                    COALESCE(js.fit_score, 0.0) as fit_score
+                FROM applications a
+                JOIN jobs j ON j.id = a.job_post_id
+                LEFT JOIN job_scores js ON js.job_post_id = j.id
+                WHERE j.run_batch_id = %s
+                  AND a.status = 'applied'
+                ORDER BY js.fit_score DESC NULLS LAST
+                LIMIT %s
+            """, (self.run_batch_id, limit))
+            
+            rows = cursor.fetchall()
+            conn.close()
+            return [dict(row) for row in rows]
+        except Exception as exc:
+            self.logger.warning("Failed to get top applied jobs: %s", exc)
+            return []
+
+    def _get_error_summary(self) -> Optional[str]:
+        """Get error summary from audit_logs."""
+        connection_url = db_config.connection_url
+        if not connection_url:
+            return None
+
+        try:
+            conn = psycopg2.connect(connection_url)
+            cursor = conn.cursor()
+            
+            cursor.execute("""
+                SELECT message
+                FROM audit_logs
+                WHERE run_batch_id = %s
+                  AND level = 'ERROR'
+                ORDER BY created_at DESC
+                LIMIT 5
+            """, (self.run_batch_id,))
+            
+            rows = cursor.fetchall()
+            conn.close()
+            
+            if not rows:
+                return None
+            
+            errors = [row[0] for row in rows]
+            return "\n".join(errors[:5])
+        except Exception as exc:
+            self.logger.warning("Failed to get error summary: %s", exc)
+            return None
+
+    async def _post_report_to_notion(self, report: FinalReport) -> None:
+        """Post the final report to Notion."""
+        try:
+            client = NotionClient()
+            await client.post_run_report(report)
+            self.logger.info("Successfully posted report to Notion")
+        except Exception as exc:
+            self.logger.warning("Failed to post to Notion: %s", exc)
+            raise

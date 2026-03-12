@@ -21,6 +21,8 @@ import json
 import logging
 import os
 import time
+from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -666,6 +668,137 @@ class ApplyAgent:
         return False
 
     # ------------------------------------------------------------------
+    # Internal: concurrent per-platform dispatch
+    # ------------------------------------------------------------------
+
+    def _group_by_platform(
+        self, jobs: List[Dict[str, Any]]
+    ) -> Dict[str, List[Dict[str, Any]]]:
+        """Group routing manifest jobs by source_platform.
+
+        Args:
+            jobs: List of job dicts from the routing manifest.
+
+        Returns:
+            Dict mapping platform name to list of jobs.
+        """
+        groups: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+        for job in jobs:
+            platform = job.get("source_platform", "unknown")
+            groups[platform].append(job)
+        return dict(groups)
+
+    def _apply_platform_batch(
+        self, platform: str, jobs: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """Apply to all jobs for a single platform sequentially.
+
+        Jobs within a platform are processed sequentially to respect
+        per-platform rate limits. Different platforms run in parallel.
+
+        Args:
+            platform: Platform name (e.g. "linkedin", "lever").
+            jobs: List of jobs for this platform.
+
+        Returns:
+            List of per-job result dicts.
+        """
+        results: List[Dict[str, Any]] = []
+        for job in jobs:
+            if self._budget_aborted:
+                jid = str(job.get("job_post_id", job.get("id", "")))
+                self._reroute_to_manual(
+                    job,
+                    reason="budget_cap_hit_mid_platform_batch",
+                    job_post_id=jid,
+                )
+                continue
+            result = self._apply_single_job(job)
+            results.append(result)
+        self.logger.info(
+            "_apply_platform_batch: %s completed %d jobs",
+            platform,
+            len(results),
+        )
+        return results
+
+    def _dispatch_concurrent(
+        self, max_platform_workers: int = 3
+    ) -> List[Dict[str, Any]]:
+        """Dispatch applications concurrently across platforms.
+
+        Groups jobs by platform, then runs up to ``max_platform_workers``
+        platform batches in parallel threads. Within each platform batch,
+        jobs are processed sequentially to respect rate limits.
+
+        Args:
+            max_platform_workers: Max concurrent platform threads.
+                Default 3 to balance throughput with resource limits.
+
+        Returns:
+            Combined list of per-job result dicts from all platforms.
+        """
+        platform_groups = self._group_by_platform(self.routing_manifest)
+        all_results: List[Dict[str, Any]] = []
+
+        self.logger.info(
+            "_dispatch_concurrent: %d platforms, %d total jobs",
+            len(platform_groups),
+            len(self.routing_manifest),
+        )
+
+        try:
+            with ThreadPoolExecutor(
+                max_workers=min(max_platform_workers, len(platform_groups))
+            ) as executor:
+                future_to_platform = {
+                    executor.submit(
+                        self._apply_platform_batch, platform, jobs
+                    ): platform
+                    for platform, jobs in platform_groups.items()
+                }
+                for future in as_completed(future_to_platform):
+                    platform = future_to_platform[future]
+                    try:
+                        results = future.result(timeout=300)
+                        all_results.extend(results)
+                    except Exception as exc:  # noqa: BLE001
+                        self.logger.error(
+                            "_dispatch_concurrent: platform %s failed: %s",
+                            platform,
+                            exc,
+                        )
+                        # Safety net: reroute all jobs from failed platform
+                        for job in platform_groups[platform]:
+                            jid = str(
+                                job.get("job_post_id", job.get("id", ""))
+                            )
+                            self._reroute_to_manual(
+                                job,
+                                reason=f"platform_dispatch_failed: {exc}",
+                                job_post_id=jid,
+                            )
+        except Exception as exc:  # noqa: BLE001
+            self.logger.error(
+                "_dispatch_concurrent: thread pool failed, falling back "
+                "to sequential: %s",
+                exc,
+            )
+            # Sequential fallback
+            for job in self.routing_manifest:
+                if self._budget_aborted:
+                    jid = str(job.get("job_post_id", job.get("id", "")))
+                    self._reroute_to_manual(
+                        job,
+                        reason="budget_cap_fallback_sequential",
+                        job_post_id=jid,
+                    )
+                    continue
+                all_results.append(self._apply_single_job(job))
+
+        return all_results
+
+    # ------------------------------------------------------------------
     # Agent / Task builders
     # ------------------------------------------------------------------
 
@@ -1130,68 +1263,81 @@ ROUTING MANIFEST (JSON)
                 )
 
             # ----------------------------------------------------------
-            # Step 8: process each job programmatically
+            # Step 8: process jobs with concurrent platform dispatch
             # ----------------------------------------------------------
-            per_job_results: List[Dict[str, Any]] = []
+            use_concurrent = os.getenv(
+                "APPLY_CONCURRENT_DISPATCH", "true"
+            ).strip().lower() == "true"
 
-            for idx, job in enumerate(self.routing_manifest, start=1):
-                # Budget abort check every 5 jobs
-                if self._budget_aborted:
-                    self.logger.warning(
-                        "ApplyAgent.run: budget aborted — re-routing "
-                        "remaining %d jobs",
-                        len(self.routing_manifest) - idx + 1,
+            if use_concurrent and len(self.routing_manifest) > 1:
+                self.logger.info(
+                    "ApplyAgent.run: using concurrent per-platform dispatch"
+                )
+                per_job_results = self._dispatch_concurrent(
+                    max_platform_workers=int(
+                        os.getenv("APPLY_MAX_PLATFORM_WORKERS", "3")
                     )
-                    remaining_jobs: List[Dict[str, Any]] = (
-                        self.routing_manifest[idx - 1:]
-                    )
-                    for rjob in remaining_jobs:
-                        rjid: str = str(
-                            rjob.get("job_post_id", rjob.get("id", ""))
-                        )
-                        self._reroute_to_manual(
-                            rjob,
-                            reason="budget_cap_hit_mid_run",
-                            job_post_id=rjid,
-                        )
-                    break
-
-                # Periodic budget check every 5 jobs
-                if idx > 1 and idx % 5 == 1:
-                    try:
-                        cap_raw: str = check_xai_run_cap.func(
-                            run_batch_id=self.run_batch_id
-                        )
-                        cap_check: Dict[str, Any] = json.loads(cap_raw)
-                        if cap_check.get("abort", False):
-                            self._budget_aborted = True
-                            self.logger.critical(
-                                "ApplyAgent.run: xAI budget cap hit after "
-                                "%d applications — aborting",
-                                idx - 1,
-                            )
-                            # Re-route this job and all remaining
-                            remaining = self.routing_manifest[idx - 1:]
-                            for rjob in remaining:
-                                rjid = str(
-                                    rjob.get("job_post_id", rjob.get("id", ""))
-                                )
-                                self._reroute_to_manual(
-                                    rjob,
-                                    reason="xai_cap_hit_mid_run",
-                                    job_post_id=rjid,
-                                )
-                            break
-                    except Exception as cap_exc:  # noqa: BLE001
+                )
+            else:
+                per_job_results: List[Dict[str, Any]] = []
+                for idx, job in enumerate(self.routing_manifest, start=1):
+                    # Budget abort check every 5 jobs
+                    if self._budget_aborted:
                         self.logger.warning(
-                            "ApplyAgent.run: periodic budget check failed "
-                            "(proceeding): %s",
-                            cap_exc,
+                            "ApplyAgent.run: budget aborted — re-routing "
+                            "remaining %d jobs",
+                            len(self.routing_manifest) - idx + 1,
                         )
+                        remaining_jobs: List[Dict[str, Any]] = (
+                            self.routing_manifest[idx - 1:]
+                        )
+                        for rjob in remaining_jobs:
+                            rjid: str = str(
+                                rjob.get("job_post_id", rjob.get("id", ""))
+                            )
+                            self._reroute_to_manual(
+                                rjob,
+                                reason="budget_cap_hit_mid_run",
+                                job_post_id=rjid,
+                            )
+                        break
 
-                # Apply single job (fail-soft)
-                job_result: Dict[str, Any] = self._apply_single_job(job)
-                per_job_results.append(job_result)
+                    # Periodic budget check every 5 jobs
+                    if idx > 1 and idx % 5 == 1:
+                        try:
+                            cap_raw: str = check_xai_run_cap.func(
+                                run_batch_id=self.run_batch_id
+                            )
+                            cap_check: Dict[str, Any] = json.loads(cap_raw)
+                            if cap_check.get("abort", False):
+                                self._budget_aborted = True
+                                self.logger.critical(
+                                    "ApplyAgent.run: xAI budget cap hit after "
+                                    "%d applications — aborting",
+                                    idx - 1,
+                                )
+                                # Re-route this job and all remaining
+                                remaining = self.routing_manifest[idx - 1:]
+                                for rjob in remaining:
+                                    rjid = str(
+                                        rjob.get("job_post_id", rjob.get("id", ""))
+                                    )
+                                    self._reroute_to_manual(
+                                        rjob,
+                                        reason="xai_cap_hit_mid_run",
+                                        job_post_id=rjid,
+                                    )
+                                break
+                        except Exception as cap_exc:  # noqa: BLE001
+                            self.logger.warning(
+                                "ApplyAgent.run: periodic budget check failed "
+                                "(proceeding): %s",
+                                cap_exc,
+                            )
+
+                    # Apply single job (fail-soft)
+                    job_result: Dict[str, Any] = self._apply_single_job(job)
+                    per_job_results.append(job_result)
 
             # ----------------------------------------------------------
             # Step 9: reconcile — safety net

@@ -49,6 +49,7 @@ from tools.agentops_tools import (
     record_agent_error,
     record_fallback_event,
 )
+from utils.normalise_dedupe import deduplicate_jobs_fuzzy
 
 # Module-level logger
 logger = logging.getLogger(__name__)
@@ -449,13 +450,14 @@ class MasterAgent:
             # ----------------------------------------------------------
             # Dedup: filter out jobs already processed in this run_batch_id
             # Guards against crash-restart re-processing duplicates.
+            # Uses fuzzy dedup (title+company sim ≥ 0.85) on top of URL hash.
             # ----------------------------------------------------------
             try:
                 db_conn = psycopg2.connect(db_config.connection_url)
                 try:
                     with db_conn.cursor() as cur:
                         cur.execute(
-                            "SELECT job_url FROM jobs WHERE run_id = %s",
+                            "SELECT url FROM jobs WHERE run_batch_id = %s",
                             (self.run_batch_id,)
                         )
                         already_processed = {row[0] for row in cur.fetchall()}
@@ -464,16 +466,10 @@ class MasterAgent:
                     removed = len(already_processed)
                     if removed:
                         self.logger.info(
-                            "run_batch_id dedup: removed %d duplicates | "
-                            "original=%d | remaining=%d",
+                            "run_batch_id dedup: %d URLs already in DB | "
+                            "original=%d",
                             removed,
                             original_count,
-                            original_count - removed,
-                        )
-                    else:
-                        self.logger.debug(
-                            "run_batch dedup: no prior jobs found for run_id=%s",
-                            self.run_batch_id,
                         )
                 finally:
                     db_conn.close()
@@ -628,13 +624,40 @@ class MasterAgent:
                 "error": str(exc),
             }
 
+    def _check_run_cost_veto(self) -> bool:
+        """Check if projected run cost exceeds the per-run veto threshold.
+
+        Uses ``RUN_COST_VETO`` env var (default $0.10) as the hard cap.
+        Queries the cost tracker for current spend.
+
+        Returns:
+            ``True`` if the run should be vetoed (cost exceeded),
+            ``False`` if within budget.
+        """
+        veto_threshold: float = float(os.getenv("RUN_COST_VETO", "0.10"))
+        try:
+            cost_raw: str = get_cost_summary.func(run_batch_id=self.run_batch_id)
+            cost_data: Dict[str, Any] = json.loads(cost_raw)
+            total_spent: float = float(cost_data.get("run_total_cost", 0.0))
+            if total_spent >= veto_threshold:
+                self.logger.critical(
+                    "RUN COST VETO: $%.4f spent ≥ $%.4f threshold — vetoing",
+                    total_spent,
+                    veto_threshold,
+                )
+                return True
+        except Exception as exc:  # noqa: BLE001
+            self.logger.warning(
+                "_check_run_cost_veto: cost check failed (proceeding): %s", exc
+            )
+        return False
+
     def _run_apply_phase(self) -> Dict[str, Any]:
         """Execute the Apply Agent phase.
 
         Requires analyser phase and ``AUTO_APPLY_ENABLED=true``.
-        Budget gate: checks xAI run cap before proceeding.
-        Imports ``ApplyAgent`` inline to avoid circular import issues
-        (apply_agent.py may not exist yet during early development).
+        Budget gate: checks xAI run cap AND per-run cost veto before proceeding.
+        Imports ``ApplyAgent`` inline to avoid circular import issues.
 
         Returns:
             Phase result dict with application counts.
@@ -670,6 +693,15 @@ class MasterAgent:
                     "phase": "apply",
                     "aborted": True,
                     "reason": "xai_run_cap_exceeded",
+                    "success": False,
+                }
+
+            # Budget gate — per-run cost veto ($0.10 default)
+            if self._check_run_cost_veto():
+                return {
+                    "phase": "apply",
+                    "aborted": True,
+                    "reason": "run_cost_veto",
                     "success": False,
                 }
 
@@ -1000,6 +1032,13 @@ class MasterAgent:
                 if scraper_result.get("aborted", False):
                     pipeline_aborted = True
 
+                # Per-run cost veto between phases
+                if not pipeline_aborted and self._check_run_cost_veto():
+                    pipeline_aborted = True
+                    self.logger.critical(
+                        "Pipeline aborted — per-run cost veto after scraper"
+                    )
+
                 # Analyser phase (only if scraper did not abort)
                 if not pipeline_aborted:
                     analyser_result: Dict[str, Any] = (
@@ -1007,6 +1046,13 @@ class MasterAgent:
                     )
                     if analyser_result.get("aborted", False):
                         pipeline_aborted = True
+
+                # Per-run cost veto between phases
+                if not pipeline_aborted and self._check_run_cost_veto():
+                    pipeline_aborted = True
+                    self.logger.critical(
+                        "Pipeline aborted — per-run cost veto after analyser"
+                    )
 
                 # Apply phase (only if analyser did not abort)
                 if not pipeline_aborted:
@@ -1016,9 +1062,11 @@ class MasterAgent:
                 self._run_scraper_phase()
 
             elif self.mode == "analyse_only":
+                # Score jobs from previous run batch stored in DB
                 self._run_analyser_phase()
 
             elif self.mode == "apply_only":
+                # Apply phase loads routing manifest from DB
                 self._run_apply_phase()
 
             # Tracker phase — ALWAYS runs, never skipped
@@ -1066,7 +1114,10 @@ class MasterAgent:
             end_state: str = "Success" if report["success"] else "Fail"
             _end_agentops_session(self.run_batch_id, end_state)
 
-            # Step 8 — Return report
+            # Step 8 — Write JSON report to logs/
+            self._write_run_report(report)
+
+            # Step 9 — Return report
             return report
 
         except Exception as exc:
@@ -1097,6 +1148,40 @@ class MasterAgent:
     # ------------------------------------------------------------------
     # Class method: CLI convenience constructor
     # ------------------------------------------------------------------
+
+    # ------------------------------------------------------------------
+    # Internal: write JSON report to logs/
+    # ------------------------------------------------------------------
+
+    def _write_run_report(self, report: Dict[str, Any]) -> None:
+        """Write the run report as JSON to the logs directory.
+
+        Creates both ``latest_run.json`` (overwritten each run) and a
+        timestamped file for audit history.
+
+        Args:
+            report: Complete run report dictionary.
+        """
+        try:
+            logs_dir = Path("logs")
+            logs_dir.mkdir(parents=True, exist_ok=True)
+
+            # Write latest run
+            latest = logs_dir / "latest_run.json"
+            latest.write_text(json.dumps(report, indent=2, default=str))
+
+            # Write timestamped archive
+            ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+            archive = logs_dir / f"run_{ts}_{self.run_batch_id[:8]}.json"
+            archive.write_text(json.dumps(report, indent=2, default=str))
+
+            self.logger.info(
+                "Run report written to %s and %s", latest, archive
+            )
+        except Exception as exc:  # noqa: BLE001
+            self.logger.warning(
+                "_write_run_report: failed to write report: %s", exc
+            )
 
     @classmethod
     def from_cli(cls, mode: str = "full") -> "MasterAgent":

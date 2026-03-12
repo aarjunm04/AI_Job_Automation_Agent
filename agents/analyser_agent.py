@@ -25,6 +25,7 @@ import json
 import logging
 import os
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Optional
 
 import psycopg2
@@ -486,6 +487,65 @@ class AnalyserAgent:
             return fallback_result
 
     # ------------------------------------------------------------------
+    # Internal: parallel scoring with ThreadPoolExecutor
+    # ------------------------------------------------------------------
+
+    def _score_jobs_parallel(
+        self,
+        jobs: list[dict[str, Any]],
+        max_workers: int = 4,
+    ) -> list[dict[str, Any]]:
+        """Score multiple jobs concurrently using a thread pool.
+
+        Falls back to sequential scoring if parallel execution fails.
+        Each job is scored independently via ``_score_job``.
+
+        Args:
+            jobs: List of job dicts to score.
+            max_workers: Number of concurrent scoring threads.
+                Default 4 to balance throughput with rate limits.
+
+        Returns:
+            List of score result dicts, one per job.
+        """
+        results: list[dict[str, Any]] = []
+        try:
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                future_to_job = {
+                    executor.submit(self._score_job, job): job
+                    for job in jobs
+                }
+                for future in as_completed(future_to_job):
+                    try:
+                        result = future.result(timeout=60)
+                        results.append(result)
+                    except Exception as exc:  # noqa: BLE001
+                        job = future_to_job[future]
+                        self.logger.error(
+                            "_score_jobs_parallel: job %s failed: %s",
+                            job.get("id", "?"),
+                            exc,
+                        )
+                        results.append({
+                            "job_post_id": str(job.get("id", "")),
+                            "fit_score": 0.0,
+                            "route": "skip",
+                            "resume_suggested": os.getenv("DEFAULT_RESUME", "AarjunGen.pdf"),
+                            "eligibility_pass": False,
+                            "reasons_json": {"error": str(exc)},
+                        })
+        except Exception as exc:  # noqa: BLE001
+            self.logger.warning(
+                "_score_jobs_parallel: thread pool failed, falling back to "
+                "sequential: %s",
+                exc,
+            )
+            for job in jobs:
+                results.append(self._score_job(job))
+
+        return results
+
+    # ------------------------------------------------------------------
     # Internal: LLM fallback chain
     # ------------------------------------------------------------------
 
@@ -919,6 +979,24 @@ JOB LIST (JSON)
                 )
 
             total_scored: int = len(jobs)
+
+            # ----------------------------------------------------------
+            # Top-100 filter: cap routing manifest to 100 highest-scoring
+            # ----------------------------------------------------------
+            max_manifest = int(os.getenv("MAX_APPLY_MANIFEST", "100"))
+            routing_manifest.sort(
+                key=lambda x: float(x.get("fit_score", 0.0)),
+                reverse=True,
+            )
+            if len(routing_manifest) > max_manifest:
+                overflow = len(routing_manifest) - max_manifest
+                self.logger.info(
+                    "Top-%d filter: capping manifest from %d (dropping %d low-score)",
+                    max_manifest,
+                    len(routing_manifest),
+                    overflow,
+                )
+                routing_manifest = routing_manifest[:max_manifest]
 
             # ----------------------------------------------------------
             # Step 8: log completion
