@@ -307,13 +307,27 @@ class LeverApply(BasePlatformApply):
             job_url: str = self.job_meta.get("job_url", "")
             if not current_url.startswith(job_url[:30]):
                 await self.page.goto(
-                    job_url,
+                    job_url + "?lever-source=AI",  # Track source
                     wait_until="domcontentloaded",
                     timeout=20000,
                 )
             await self.page.wait_for_load_state(
                 "networkidle", timeout=15000
             )
+
+            # Check for "already applied" indicator
+            try:
+                page_text = await self.page.inner_text("body")
+                if "you've already applied" in page_text.lower() or \
+                   "already submitted" in page_text.lower():
+                    return self._build_result(
+                        success=False,
+                        error_code="ALREADY_APPLIED",
+                        reroute_to_manual=False,  # Don't queue, just skip
+                        reroute_reason="Already applied to this position",
+                    )
+            except Exception:
+                pass  # Non-fatal
 
             # Detect iframe embedding
             work_page: PageOrFrame = await self._get_work_context()
