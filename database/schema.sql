@@ -139,15 +139,79 @@ CREATE TABLE IF NOT EXISTS audit_logs (
 -- =============================================================================
 CREATE INDEX IF NOT EXISTS idx_jobs_run_batch_id ON jobs(run_batch_id);
 CREATE INDEX IF NOT EXISTS idx_jobs_source_platform ON jobs(source_platform);
+CREATE INDEX IF NOT EXISTS idx_jobs_url_hash ON jobs USING hash(url);
+CREATE INDEX IF NOT EXISTS idx_jobs_run_platform ON jobs(run_batch_id, source_platform);
+CREATE INDEX IF NOT EXISTS idx_jobs_created_at ON jobs(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_job_scores_job_post_id ON job_scores(job_post_id);
 CREATE INDEX IF NOT EXISTS idx_job_scores_fit_score ON job_scores(fit_score DESC);
+CREATE INDEX IF NOT EXISTS idx_job_scores_route ON job_scores(eligibility_pass, fit_score DESC);
 CREATE INDEX IF NOT EXISTS idx_applications_job_post_id ON applications(job_post_id);
 CREATE INDEX IF NOT EXISTS idx_applications_user_id ON applications(user_id);
 CREATE INDEX IF NOT EXISTS idx_applications_status ON applications(status);
+CREATE INDEX IF NOT EXISTS idx_applications_run_platform ON applications(platform, status);
 CREATE INDEX IF NOT EXISTS idx_queued_jobs_priority ON queued_jobs(priority DESC);
+CREATE INDEX IF NOT EXISTS idx_queued_jobs_job_post_id ON queued_jobs(job_post_id);
 CREATE INDEX IF NOT EXISTS idx_audit_logs_run_batch_id ON audit_logs(run_batch_id);
 CREATE INDEX IF NOT EXISTS idx_audit_logs_level ON audit_logs(level);
-CREATE INDEX IF NOT EXISTS idx_config_limits_platform ON config_limits(platform);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_event_type ON audit_logs(event_type);
+CREATE INDEX IF NOT EXISTS idx_run_sessions_date ON run_sessions(run_date DESC);
+
+-- =============================================================================
+-- TRIGGER: auto-update run_sessions counts from applications
+-- =============================================================================
+CREATE OR REPLACE FUNCTION update_run_session_counts()
+RETURNS TRIGGER AS $$
+BEGIN
+    UPDATE run_sessions
+    SET jobs_auto_applied = (
+            SELECT COUNT(*) FROM applications a
+            JOIN jobs j ON j.id = a.job_post_id
+            WHERE j.run_batch_id = (
+                SELECT run_batch_id FROM jobs WHERE id = NEW.job_post_id LIMIT 1
+            )
+            AND a.status = 'applied'
+        ),
+        jobs_queued = (
+            SELECT COUNT(*) FROM applications a
+            JOIN jobs j ON j.id = a.job_post_id
+            WHERE j.run_batch_id = (
+                SELECT run_batch_id FROM jobs WHERE id = NEW.job_post_id LIMIT 1
+            )
+            AND a.status = 'manual_queued'
+        )
+    WHERE id = (
+        SELECT run_batch_id FROM jobs WHERE id = NEW.job_post_id LIMIT 1
+    );
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_update_run_session_counts ON applications;
+CREATE TRIGGER trg_update_run_session_counts
+AFTER INSERT OR UPDATE ON applications
+FOR EACH ROW
+EXECUTE FUNCTION update_run_session_counts();
+
+-- =============================================================================
+-- TRIGGER: auto-update run_sessions.jobs_discovered from jobs inserts
+-- =============================================================================
+CREATE OR REPLACE FUNCTION update_run_session_discovered()
+RETURNS TRIGGER AS $$
+BEGIN
+    UPDATE run_sessions
+    SET jobs_discovered = (
+        SELECT COUNT(*) FROM jobs WHERE run_batch_id = NEW.run_batch_id
+    )
+    WHERE id = NEW.run_batch_id;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_update_run_session_discovered ON jobs;
+CREATE TRIGGER trg_update_run_session_discovered
+AFTER INSERT ON jobs
+FOR EACH ROW
+EXECUTE FUNCTION update_run_session_discovered();
 
 -- =============================================================================
 -- TABLE 10: schema_versions
@@ -160,4 +224,27 @@ CREATE TABLE IF NOT EXISTS schema_versions (
 -- Migrations for single-source-of-truth JSONB settings
 ALTER TABLE users ADD COLUMN IF NOT EXISTS user_settings JSONB NOT NULL DEFAULT '{}'::jsonb;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS platform_settings JSONB NOT NULL DEFAULT '{}'::jsonb;
+-- config_limits dropped in favour of users.platform_settings JSONB
 DROP TABLE IF EXISTS config_limits;
+
+-- Add closed_at auto-set for run_sessions
+CREATE OR REPLACE FUNCTION close_run_session()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF NEW.jobs_auto_applied > 0 OR NEW.jobs_queued > 0 THEN
+        NEW.closed_at = NOW();
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_close_run_session ON run_sessions;
+CREATE TRIGGER trg_close_run_session
+BEFORE UPDATE ON run_sessions
+FOR EACH ROW
+WHEN (OLD.closed_at IS NULL AND (NEW.jobs_auto_applied > 0 OR NEW.jobs_queued > 0))
+EXECUTE FUNCTION close_run_session();
+
+-- Record initial schema version
+INSERT INTO schema_versions (version) VALUES ('001')
+ON CONFLICT (version) DO NOTHING;
