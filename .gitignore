@@ -397,6 +397,8 @@ logs/
 
 #system shell script 
 push_secrets.sh
+repo_structure.txt
+requirements-dev.txt
 
 #ide readme files for ide dev 
 IDE_LOGS.md
