@@ -397,3 +397,9 @@ logs/
 
 #system shell script 
 push_secrets.sh
+
+#ide readme files for ide dev 
+IDE_LOGS.md
+IDE_README.md
+IDE_STANDARDS.md 
+
