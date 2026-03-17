@@ -394,3 +394,6 @@ rag_systems/.chroma/
 logs/
 *.log
 .coverage
+
+#system shell script 
+push_secrets.sh
