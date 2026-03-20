@@ -13,6 +13,28 @@ logger = logging.getLogger(__name__)
 
 EXPECTED_EMBEDDING_DIM = 1024
 
+
+def _validate_embedding(vector: list[float], doc_id: str) -> bool:
+    """Return True only if vector has the expected embedding dimension.
+
+    Args:
+        vector: Embedding vector to validate.
+        doc_id: Identifier of the document being embedded (for logging).
+
+    Returns:
+        True if vector length matches EMBEDDING_DIM env var, False otherwise.
+    """
+    expected_dim = int(os.getenv("EMBEDDING_DIM", "1024"))
+    if not vector or len(vector) != expected_dim:
+        logger.error(
+            "Invalid embedding for doc %s: len=%d expected=%d",
+            doc_id,
+            len(vector) if vector else 0,
+            expected_dim,
+        )
+        return False
+    return True
+
 # Shared chunking utility — single authoritative implementation lives in rag_pipeline
 from rag_systems.rag_pipeline import chunk_text
 
@@ -239,6 +261,9 @@ def ingest_single_resume(pdf_path: str) -> bool:
     embedding = _get_embedding(engine, text)
     if not embedding:
         logger.error("Embedding returned None for %s — skipping", filename)
+        return False
+
+    if not _validate_embedding(embedding, filename):
         return False
 
     logger.debug("Embedding dim=%d for %s", len(embedding), filename)

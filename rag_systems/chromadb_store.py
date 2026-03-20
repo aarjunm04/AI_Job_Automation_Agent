@@ -39,8 +39,8 @@ except Exception:  # pragma: no cover - env dependent
 
 @dataclass
 class ChromaStoreConfig:
-    host: str = field(default_factory=lambda: os.getenv("CHROMADB_HOST", "chromadb"))
-    port: int = field(default_factory=lambda: int(os.getenv("CHROMADB_PORT", "8000")))
+    host: str = field(default_factory=lambda: os.getenv("CHROMA_HOST", "ai_chromadb"))
+    port: int = field(default_factory=lambda: int(os.getenv("CHROMA_PORT", "8001")))
     collection_name: str = field(default_factory=lambda: os.getenv("CHROMA_COLLECTION", "resumes"))
     retry_attempts: int = 3
     retry_delay_seconds: float = 0.5
@@ -57,6 +57,8 @@ class ChromaStore:
         self._client = None
         self._collection = None
         self._fallback_store: Dict[str, Dict[str, Any]] = {"documents": {}}
+        # Logger kept on self so dim-guard helpers can reference it
+        self._logger = logging.getLogger(self.__class__.__name__)
 
         if CHROMADB_AVAILABLE:
             self._init_chromadb()
@@ -67,7 +69,10 @@ class ChromaStore:
         attempts = 0
         while True:
             try:
-                self._client = chromadb.HttpClient(host=self.config.host, port=self.config.port)
+                self._client = chromadb.HttpClient(
+                    host=os.getenv("CHROMA_HOST", "ai_chromadb"),
+                    port=int(os.getenv("CHROMA_PORT", "8001")),
+                )
                 self._collection = self._client.get_or_create_collection(
                     name=self.config.collection_name,
                     embedding_function=None,  # We supply our own vectors — no default ef needed
@@ -164,15 +169,44 @@ class ChromaStore:
         sanitized = self._sanitize_metadata_list(metadatas)
 
         if CHROMADB_AVAILABLE and self._collection is not None:
+            # ---- DIM GUARD — skip embeddings with wrong dimension --------
+            expected_dim = int(os.getenv("EMBEDDING_DIM", "1024"))
+            valid_ids: List[str] = []
+            valid_docs: List[str] = []
+            valid_embs: List[List[float]] = []
+            valid_metas: List[Dict[str, Any]] = []
+            for i, emb in enumerate(embeddings):
+                if len(emb) != expected_dim:
+                    self._logger.error(
+                        "Embedding dim mismatch: got %d expected %d, skipping doc %s",
+                        len(emb), expected_dim, chunk_ids[i],
+                    )
+                    continue
+                valid_ids.append(chunk_ids[i])
+                valid_docs.append(documents[i])
+                valid_embs.append(emb)
+                valid_metas.append(sanitized[i] if sanitized else {})
+            # --------------------------------------------------------------
+            if not valid_ids:
+                logger.warning(
+                    "upsert_chunks: all %d embeddings failed dim guard — nothing upserted",
+                    len(chunk_ids),
+                )
+                return
             attempts = 0
             while True:
                 try:
-                    self._collection.add(ids=chunk_ids, embeddings=embeddings, documents=documents, metadatas=sanitized)
-                    logger.info("Upserted %d chunks for resume_id=%s", len(chunk_ids), resume_id)
+                    self._collection.upsert(
+                        ids=valid_ids,
+                        embeddings=valid_embs,
+                        documents=valid_docs,
+                        metadatas=valid_metas,
+                    )
+                    logger.info("Upserted %d chunks for resume_id=%s", len(valid_ids), resume_id)
                     return
                 except Exception as e:
                     attempts += 1
-                    logger.exception("Chroma add failed (attempt %d): %s", attempts, e)
+                    logger.exception("Chroma upsert failed (attempt %d): %s", attempts, e)
                     if attempts >= self.config.retry_attempts:
                         raise
                     time.sleep(self.config.retry_delay_seconds)
@@ -196,10 +230,26 @@ class ChromaStore:
         documents = [anchor_text or ""]
 
         if CHROMADB_AVAILABLE and self._collection is not None:
+            # ---- DIM GUARD — validate anchor embedding -------------------
+            expected_dim = int(os.getenv("EMBEDDING_DIM", "1024"))
+            if not anchor_embedding or len(anchor_embedding) != expected_dim:
+                self._logger.error(
+                    "Embedding dim mismatch: got %d expected %d, skipping doc %s",
+                    len(anchor_embedding) if anchor_embedding else 0,
+                    expected_dim,
+                    anchor_id,
+                )
+                return
+            # --------------------------------------------------------------
             attempts = 0
             while True:
                 try:
-                    self._collection.add(ids=[anchor_id], embeddings=[anchor_embedding], documents=documents, metadatas=[sanitized])
+                    self._collection.upsert(
+                        ids=[anchor_id],
+                        embeddings=[anchor_embedding],
+                        documents=documents,
+                        metadatas=[sanitized],
+                    )
                     logger.info("Anchor upserted: %s", anchor_id)
                     return
                 except Exception as e:
