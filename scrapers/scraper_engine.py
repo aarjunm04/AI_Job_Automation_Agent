@@ -582,10 +582,29 @@ class FilterEngine:
     """
 
     def __init__(self, filters_path: Path = None):
-        import json, os
-        config_path = os.path.join(os.path.dirname(__file__), "..", "config", "platform_settings.json")
-        with open(config_path) as f:
-            platform_config = json.load(f)
+        config_dir = os.getenv(
+            "CONFIG_DIR",
+            os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "config")),
+        )
+        config_path = os.path.join(config_dir, "platform_settings.json")
+
+        platform_config: Dict[str, Any] = {}
+        try:
+            if os.path.exists(config_path):
+                with open(config_path, "r", encoding="utf-8") as f:
+                    platform_config = json.load(f)
+            else:
+                LOG.warning(
+                    "FilterEngine config missing: %s (set CONFIG_DIR to override) — using defaults",
+                    config_path,
+                )
+        except Exception as e:
+            LOG.warning(
+                "FilterEngine failed to load config: %s (%s) — using defaults",
+                config_path,
+                e,
+            )
+
         filter_config = platform_config.get("filters", {})
         required_keywords = filter_config.get("required_keywords", [])
         salary_min = filter_config.get("salary_min", None)

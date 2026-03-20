@@ -21,6 +21,7 @@ from agentops.sdk.decorators import agent, operation
 import psycopg2
 import psycopg2.extras
 
+from scrapers.jobspy_adapter import JobSpyAdapter
 from scrapers.scraper_engine import (
     ScraperEngine,
     RemoteOKAPIScraper,
@@ -38,7 +39,7 @@ from scrapers.scraper_service import (
     NodeskScraper,
     ToptalScraper,
 )
-from tools.postgres_tools import upsert_job_post, log_event, get_platform_config
+from tools.postgres_tools import upsert_job_post, log_event, get_platform_config, _get_conn
 
 # Module-level logger
 logger = logging.getLogger(__name__)
@@ -47,6 +48,11 @@ logger.setLevel(os.getenv("LOG_LEVEL", "INFO"))
 # Module-level lazy-initialized engines
 _scraper_engine: Optional[ScraperEngine] = None
 _serpapi_key_index: int = 0
+
+
+def get_pg_conn():
+    """Return a psycopg2 connection using the shared Postgres DAL logic."""
+    return _get_conn()
 
 def _get_db_url() -> Optional[str]:
     return (
@@ -137,21 +143,26 @@ def run_jobspy_scrape(
         JSON string with scraping results and statistics.
     """
     try:
-        engine = _get_engine()
+        # Run JobSpy ONLY (avoid triggering other scrapers).
+        allowed_countries = []
+        try:
+            allowed_countries = _get_engine().filter_engine.allowed_countries
+        except Exception:
+            allowed_countries = []
 
-        # JobSpy is integrated into ScraperEngine - run full engine
-        # and filter for jobspy results
-        jobs, metrics = asyncio.run(engine.run())
-
-        # Filter for jobspy sources (linkedin, indeed)
-        jobspy_jobs = [
-            j for j in jobs if j.get("source") in ["linkedin", "indeed"]
-        ]
+        hours_old = int(os.getenv("JOBSPY_HOURS_OLD", "168"))
+        adapter = JobSpyAdapter(
+            jobs_per_site=int(results_wanted),
+            concurrency=4,
+            hours_old=hours_old,
+            allowed_countries=allowed_countries,
+        )
+        raw_jobs = asyncio.run(adapter.run())
 
         jobs_upserted = 0
         errors = []
 
-        for job in jobspy_jobs:
+        for job in raw_jobs:
             try:
                 result = upsert_job_post.run(
                     run_batch_id=run_batch_id,
@@ -172,13 +183,13 @@ def run_jobspy_scrape(
                 errors.append(str(e))
 
         logger.info(
-            f"JobSpy scrape completed: {len(jobspy_jobs)} found, {jobs_upserted} upserted"
+            f"JobSpy scrape completed: {len(raw_jobs)} found, {jobs_upserted} upserted"
         )
 
         return json.dumps(
             {
                 "platform": "jobspy",
-                "jobs_found": len(jobspy_jobs),
+                "jobs_found": len(raw_jobs),
                 "jobs_upserted": jobs_upserted,
                 "run_batch_id": run_batch_id,
                 "errors": errors[:10],  # Limit error list
@@ -325,6 +336,9 @@ def run_playwright_scrape(
         JSON string with scraping results and statistics.
     """
     try:
+        playwright_timeout_ms = int(os.getenv("PLAYWRIGHT_TIMEOUT_MS", "60000"))
+        playwright_timeout_s = max(1.0, playwright_timeout_ms / 1000.0)
+
         # Get proxy from environment
         proxy_list_str = os.getenv("WEBSHARE_PROXY_LIST", "")
         proxies = [p.strip() for p in proxy_list_str.split(",") if p.strip()]
@@ -363,16 +377,18 @@ def run_playwright_scrape(
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
             future = ex.submit(_do_scrape)
             try:
-                raw_jobs = future.result(timeout=45)
+                raw_jobs = future.result(timeout=playwright_timeout_s)
             except concurrent.futures.TimeoutError:
-                logger.warning(f"{platform}: scrape exceeded 45s wall timeout — returning []")
+                logger.warning(
+                    f"{platform}: scrape exceeded {playwright_timeout_ms}ms wall timeout — returning []"
+                )
                 return json.dumps(
                     {
                         "platform": platform,
                         "jobs_found": 0,
                         "jobs_upserted": 0,
                         "proxy_used": proxy_used,
-                        "errors": [f"{platform} scrape exceeded 45s wall timeout"],
+                        "errors": [f"{platform} scrape exceeded {playwright_timeout_ms}ms wall timeout"],
                         "blocked": False,
                     }
                 )
@@ -661,27 +677,7 @@ def normalise_and_dedup(run_batch_id: str) -> str:
     """
     conn = None
     try:
-        active_db = os.getenv("ACTIVE_DB", "local")
-        if active_db == "local":
-            conn = psycopg2.connect(
-                host=os.getenv("LOCAL_POSTGRES_HOST", "ai_postgres"),
-                port=int(os.getenv("LOCAL_POSTGRES_PORT", "5432")),
-                user=os.getenv("LOCAL_POSTGRES_USER", "aarjunm04"),
-                password=os.getenv("LOCAL_POSTGRES_PASSWORD"),
-                dbname=os.getenv("LOCAL_POSTGRES_DB", "ai_job_db"),
-                connect_timeout=10,
-            )
-        else:
-            db_url = os.getenv("SUPABASE_URL")
-            if not db_url:
-                return json.dumps({
-                    "duplicates_removed": 0,
-                    "jobs_remaining": 0,
-                    "run_batch_id": run_batch_id,
-                    "error": "SUPABASE_URL not configured",
-                })
-            conn = psycopg2.connect(db_url)
-        conn.autocommit = False
+        conn = get_pg_conn()
         cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
         # Find duplicate URLs within this run batch
