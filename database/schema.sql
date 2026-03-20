@@ -1,19 +1,8 @@
--- ============================================================
--- Schema Version: 001
--- Last Modified: 2026-03-03
--- Migration Policy: Manual versioned SQL in migrations/ dir
---   Apply in order: v001 -> v002 -> ...
---   Naming: v{NNN}_{description}.sql
---   Apply: psql $LOCAL_POSTGRES_URL -f migrations/vNNN.sql
--- NEVER modify this file after first deployment.
--- All schema changes go through migrations/ only.
--- ============================================================
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+CREATE EXTENSION IF NOT EXISTS vector;
 
 -- AI Job Application Agent — Postgres Schema
 -- Run: psql $LOCAL_POSTGRES_URL -f database/schema.sql
-
--- Enable pgvector extension for embedding vectors
-CREATE EXTENSION IF NOT EXISTS vector;
 
 -- =============================================================================
 -- TABLE 1: users
@@ -76,7 +65,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     location TEXT,
     url TEXT UNIQUE NOT NULL,
     posted_at TIMESTAMPTZ,
-    embedding_vector vector(1024),
+    embedding_vector VECTOR(1024),
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
@@ -132,6 +121,30 @@ CREATE TABLE IF NOT EXISTS audit_logs (
     event_type TEXT NOT NULL,
     message TEXT NOT NULL,
     created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- =============================================================================
+-- TABLE 10: system_config
+-- =============================================================================
+CREATE TABLE IF NOT EXISTS system_config (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    config_key VARCHAR(255) UNIQUE NOT NULL,
+    config_value JSONB NOT NULL,
+    updated_at TIMESTAMPTZ DEFAULT now()
+);
+
+-- =============================================================================
+-- TABLE 11: query_cache
+-- =============================================================================
+CREATE TABLE IF NOT EXISTS query_cache (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    queries JSONB NOT NULL,
+    generated_by_run_id UUID,
+    yield_baseline INT,
+    yield_improved INT,
+    consecutive_low_yield_count INT DEFAULT 0,
+    created_at TIMESTAMPTZ DEFAULT now(),
+    updated_at TIMESTAMPTZ DEFAULT now()
 );
 
 -- =============================================================================
@@ -214,7 +227,7 @@ FOR EACH ROW
 EXECUTE FUNCTION update_run_session_discovered();
 
 -- =============================================================================
--- TABLE 10: schema_versions
+-- TABLE 12: schema_versions
 -- =============================================================================
 CREATE TABLE IF NOT EXISTS schema_versions (
     version     VARCHAR(16) PRIMARY KEY,
