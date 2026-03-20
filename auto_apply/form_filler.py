@@ -55,7 +55,15 @@ logger = logging.getLogger(__name__)
 DRY_RUN: bool = os.getenv("DRY_RUN", "false").lower() == "true"
 RESUME_DIR: Path = Path(run_config.resume_dir)
 
-__all__ = ["FormFiller", "FieldType", "FormField", "FillResult", "fill_field"]
+__all__ = [
+    "FormFiller",
+    "FieldType",
+    "FormField",
+    "FillResult",
+    "fill_field",
+    "human_type",
+    "human_delay",
+]
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -213,6 +221,52 @@ class FormFiller:
         self.llm_model_string: str = self._get_model_string()
         self.result: FillResult = FillResult()
         self.logger: logging.Logger = logging.getLogger(self.__class__.__name__)
+
+    # ------------------------------------------------------------------
+    # Class-level: verified ATS selectors from browser recon
+    # ------------------------------------------------------------------
+
+    _ATS_SELECTORS: dict[str, dict[str, str]] = {
+        "greenhouse": {
+            "form":       "#application-form",
+            "first_name": "#first_name",
+            "last_name":  "#last_name",
+            "email":      "#email",
+            "phone":      "#phone",
+            "resume":     "input[type='file']#resume",
+        },
+        "lever": {
+            "form":       "form#application-form",
+            "full_name":  "input[name='name']",
+            "email":      "input[name='email']",
+            "phone":      "input[name='phone']",
+            "resume":     "input#resume-upload-input",
+        },
+        "workable": {
+            "form":       "form[data-ui='application-form']",
+            "first_name": "input[name='firstname']",
+            "last_name":  "input[name='lastname']",
+            "email":      "input[name='email']",
+            "phone":      "input[name='phone']",
+            "resume":     "input[type='file']",
+        },
+    }
+
+    _SUBMIT_SELECTORS: dict[str, str] = {
+        "greenhouse": "button[type='submit']",
+        "lever":      "button#btn-submit",
+        "workable":   "button[data-ui='apply-button']",
+    }
+
+    # Fallback chain — tried in order when platform-specific submit fails
+    _SUBMIT_FALLBACKS: list[str] = [
+        "button[type='submit']",
+        "input[type='submit']",
+        "button:has-text('Submit')",
+        "button:has-text('Apply')",
+        "button:has-text('Submit Application')",
+        "button:has-text('Submit application')",
+    ]
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -1444,6 +1498,234 @@ class FormFiller:
             self.logger.warning("screenshot_on_error failed: %s", exc)
             return ""
 
+    # ------------------------------------------------------------------
+    # Per-platform fill methods (browser-verified selectors)
+    # ------------------------------------------------------------------
+
+    async def fill_greenhouse(self) -> FillResult:
+        """Fill a Greenhouse application form using verified selectors.
+
+        Returns:
+            ``FillResult`` after filling all standard Greenhouse fields.
+        """
+        sel = self._ATS_SELECTORS["greenhouse"]
+
+        try:
+            await self.page.wait_for_selector(
+                sel["form"], timeout=15000
+            )
+        except Exception as exc:  # noqa: BLE001
+            self.logger.error(
+                "fill_greenhouse: form container not found: %s", exc
+            )
+            self.result.errors.append(f"greenhouse form not found: {exc}")
+            return self.result
+
+        # Fill standard fields
+        for field_key, value in [
+            ("first_name", self.profile.first_name),
+            ("last_name",  self.profile.last_name),
+            ("email",      self.profile.email),
+            ("phone",      self.profile.phone),
+        ]:
+            if value and field_key in sel:
+                ok = await self._human_fill_field(sel[field_key], value)
+                if ok:
+                    self.result.filled += 1
+                else:
+                    self.result.failed += 1
+                await self._human_delay()
+
+        # Resume upload
+        if sel.get("resume"):
+            ok = await self._upload_resume(sel["resume"])
+            if ok:
+                self.result.filled += 1
+            else:
+                self.result.failed += 1
+
+        # Scan and fill remaining fields via generic pipeline
+        await self.fill_all_fields()
+        return self.result
+
+    async def fill_lever(self) -> FillResult:
+        """Fill a Lever application form using verified selectors.
+
+        Lever uses a single full-name field (no separate first/last).
+
+        Returns:
+            ``FillResult`` after filling all standard Lever fields.
+        """
+        sel = self._ATS_SELECTORS["lever"]
+
+        try:
+            await self.page.wait_for_selector(
+                sel["form"], timeout=15000
+            )
+        except Exception as exc:  # noqa: BLE001
+            self.logger.error(
+                "fill_lever: form container not found: %s", exc
+            )
+            self.result.errors.append(f"lever form not found: {exc}")
+            return self.result
+
+        for field_key, value in [
+            ("full_name", self.profile.full_name),
+            ("email",     self.profile.email),
+            ("phone",     self.profile.phone),
+        ]:
+            if value and field_key in sel:
+                ok = await self._human_fill_field(sel[field_key], value)
+                if ok:
+                    self.result.filled += 1
+                else:
+                    self.result.failed += 1
+                await self._human_delay()
+
+        if sel.get("resume"):
+            ok = await self._upload_resume(sel["resume"])
+            if ok:
+                self.result.filled += 1
+            else:
+                self.result.failed += 1
+
+        await self.fill_all_fields()
+        return self.result
+
+    async def fill_workable(self) -> FillResult:
+        """Fill a Workable application form using verified selectors.
+
+        Returns:
+            ``FillResult`` after filling all standard Workable fields.
+        """
+        sel = self._ATS_SELECTORS["workable"]
+
+        try:
+            await self.page.wait_for_selector(
+                sel["form"], timeout=15000
+            )
+        except Exception as exc:  # noqa: BLE001
+            self.logger.error(
+                "fill_workable: form container not found: %s", exc
+            )
+            self.result.errors.append(f"workable form not found: {exc}")
+            return self.result
+
+        for field_key, value in [
+            ("first_name", self.profile.first_name),
+            ("last_name",  self.profile.last_name),
+            ("email",      self.profile.email),
+            ("phone",      self.profile.phone),
+        ]:
+            if value and field_key in sel:
+                ok = await self._human_fill_field(sel[field_key], value)
+                if ok:
+                    self.result.filled += 1
+                else:
+                    self.result.failed += 1
+                await self._human_delay()
+
+        if sel.get("resume"):
+            ok = await self._upload_resume(sel["resume"])
+            if ok:
+                self.result.filled += 1
+            else:
+                self.result.failed += 1
+
+        await self.fill_all_fields()
+        return self.result
+
+    # ------------------------------------------------------------------
+    # fill_and_submit — orchestrator with DRY_RUN submit guard
+    # ------------------------------------------------------------------
+
+    @operation
+    async def fill_and_submit(self) -> FillResult:
+        """Route to the correct per-platform fill method and submit.
+
+        Steps:
+          1. Route to ``fill_greenhouse``, ``fill_lever``, or
+             ``fill_workable`` based on ``self.ats_type``.
+             Falls back to ``fill_all_fields`` for unknown ATS.
+          2. Check ``DRY_RUN`` — if true, log and skip click.
+          3. Click the platform-specific submit button.
+          4. Wait for navigation / network idle.
+
+        Returns:
+            Populated ``FillResult``.
+        """
+        # Step 1 — Route to per-platform fill
+        ats_lower: str = self.ats_type.lower()
+        if ats_lower == "greenhouse":
+            await self.fill_greenhouse()
+        elif ats_lower == "lever":
+            await self.fill_lever()
+        elif ats_lower == "workable":
+            await self.fill_workable()
+        else:
+            await self.fill_all_fields()
+
+        # Step 2 — DRY_RUN guard on submit
+        dry_run = os.getenv("DRY_RUN", "false").lower() == "true"
+        if dry_run or self.dry_run:
+            self.logger.info(
+                "[DRY_RUN] fill_and_submit: skipping submit click "
+                "(ats=%s, fields_filled=%d)",
+                self.ats_type,
+                self.result.filled,
+            )
+            self.result.success = True
+            return self.result
+
+        # Step 3 — Click submit
+        submitted: bool = False
+        primary_sel: str = self._SUBMIT_SELECTORS.get(ats_lower, "")
+        selectors_to_try: list[str] = (
+            [primary_sel] + self._SUBMIT_FALLBACKS if primary_sel
+            else self._SUBMIT_FALLBACKS
+        )
+
+        for sel in selectors_to_try:
+            try:
+                btn = await self.page.query_selector(sel)
+                if btn:
+                    await self._human_delay(500, 1200)
+                    await btn.click()
+                    submitted = True
+                    self.logger.info(
+                        "fill_and_submit: clicked submit via '%s'", sel
+                    )
+                    break
+            except Exception as exc:  # noqa: BLE001
+                self.logger.warning(
+                    "fill_and_submit: submit selector '%s' failed: %s",
+                    sel,
+                    exc,
+                )
+                continue
+
+        if not submitted:
+            self.logger.error(
+                "fill_and_submit: no submit button found for ats=%s",
+                self.ats_type,
+            )
+            self.result.errors.append("submit_button_not_found")
+            self.result.success = False
+            return self.result
+
+        # Step 4 — Wait for navigation
+        try:
+            await self.page.wait_for_load_state(
+                "networkidle", timeout=15000
+            )
+        except Exception as exc:  # noqa: BLE001
+            self.logger.warning(
+                "fill_and_submit: post-submit wait failed: %s", exc
+            )
+
+        self.result.success = True
+        return self.result
+
     @operation
     async def fill_field(
         self,
@@ -1579,3 +1861,46 @@ async def fill_field(
         dry_run=DRY_RUN,
     )
     return await filler.fill_field(selector, value, field_type)
+
+
+# ---------------------------------------------------------------------------
+# Module-level human_type and human_delay
+# ---------------------------------------------------------------------------
+async def human_type(page: Page, selector: str, text: str) -> bool:
+    """Type text into a field with human-like keystroke simulation.
+
+    Standalone function that creates a temporary ``FormFiller`` to leverage
+    the full human-simulation pipeline (random delays between keystrokes,
+    occasional typo correction, scroll-into-view).
+
+    Args:
+        page: Playwright ``Page`` object.
+        selector: CSS selector for the target input.
+        text: Text to type.
+
+    Returns:
+        ``True`` if the text was typed successfully, ``False`` otherwise.
+    """
+    filler = FormFiller(
+        page=page,
+        job_title="",
+        job_description="",
+        company="",
+        resume_filename="",
+        ats_type="native",
+        dry_run=DRY_RUN,
+    )
+    return await filler._human_fill_field(selector, text)
+
+
+async def human_delay(min_ms: int = 500, max_ms: int = 1500) -> None:
+    """Sleep for a random duration to simulate human pause.
+
+    Standalone async function — no ``FormFiller`` instance needed.
+
+    Args:
+        min_ms: Minimum delay in milliseconds.
+        max_ms: Maximum delay in milliseconds.
+    """
+    delay_s: float = random.randint(min_ms, max_ms) / 1000
+    await asyncio.sleep(delay_s)
