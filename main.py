@@ -77,15 +77,38 @@ class ServiceHealth:
     timeout: float = 5.0
 
 
+# Service host/port resolution via environment with Compose defaults
+POSTGRES_HOST = os.getenv("LOCAL_POSTGRES_HOST","ai_postgres")
+POSTGRES_PORT = int(os.getenv("LOCAL_POSTGRES_PORT", "5432"))
+
+REDIS_HOST = os.getenv("REDIS_HOST","ai_redis")
+REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
+
+CHROMA_HOST = os.getenv("CHROMA_HOST", "ai_chromadb")
+CHROMA_PORT = int(os.getenv("CHROMA_PORT", "8001"))
+
+RAG_HOST = os.getenv("RAG_SERVER_HOST", "ai_rag_server")
+RAG_PORT = int(os.getenv("RAG_SERVER_PORT", "8090"))
+
+FASTAPI_HOST = os.getenv("FASTAPI_HOST", "ai_api_server")
+FASTAPI_PORT = int(os.getenv("FASTAPI_PORT", "8000"))
+
+PLAYWRIGHT_SCRAPER_HOST = os.getenv("PLAYWRIGHT_SCRAPER_HOST",  "ai_playwright_scraper")
+PLAYWRIGHT_SCRAPER_PORT = int(os.getenv("PLAYWRIGHT_SCRAPER_PORT", "8001"))
+
+PLAYWRIGHT_APPLY_HOST = os.getenv("PLAYWRIGHT_APPLY_HOST", "ai_playwright_apply")
+PLAYWRIGHT_APPLY_PORT = int(os.getenv("PLAYWRIGHT_APPLY_PORT", "8003"))
+
+
 # All 7 services that must be healthy before pipeline starts
 REQUIRED_SERVICES: list[ServiceHealth] = [
-    ServiceHealth("postgres", "http://postgres:5432", 5432, timeout=3.0),  # TCP only
-    ServiceHealth("redis", "http://redis:6379", 6379, timeout=3.0),  # TCP only
-    ServiceHealth("chromadb", "http://chromadb:8000/api/v1/heartbeat", 8000),
-    ServiceHealth("ragserver", "http://rag-server:8090/health", 8090),
-    ServiceHealth("apiserver", "http://api-server:8080/health", 8080),
-    ServiceHealth("pwscraper", "http://playwright-scraper:8001/health", 8001),
-    ServiceHealth("pwapply", "http://playwright-apply:8003/health", 8003),
+    ServiceHealth("database", f"http://{POSTGRES_HOST}:{POSTGRES_PORT}", POSTGRES_PORT, timeout=3.0),
+    ServiceHealth("cache", f"http://{REDIS_HOST}:{REDIS_PORT}", REDIS_PORT, timeout=3.0),
+    ServiceHealth("chromadb", f"http://{CHROMA_HOST}:{CHROMA_PORT}/api/v2/heartbeat", CHROMA_PORT),
+    ServiceHealth("rag_server", f"http://{RAG_HOST}:{RAG_PORT}/health", RAG_PORT),
+    ServiceHealth("api_server", f"http://{FASTAPI_HOST}:{FASTAPI_PORT}/health", FASTAPI_PORT),
+    ServiceHealth("pw_scraper", f"http://{PLAYWRIGHT_SCRAPER_HOST}:{PLAYWRIGHT_SCRAPER_PORT}/health", PLAYWRIGHT_SCRAPER_PORT),
+    ServiceHealth("pw_apply", f"http://{PLAYWRIGHT_APPLY_HOST}:{PLAYWRIGHT_APPLY_PORT}/health", PLAYWRIGHT_APPLY_PORT),
 ]
 
 
@@ -146,7 +169,7 @@ class SessionBootstrapper:
             )
             
             # TCP-only for Postgres and Redis
-            if service.name in ("postgres", "redis"):
+            if service.name in ("database", "cache"):
                 host = service.url.replace("http://", "").split(":")[0]
                 healthy = await self._check_tcp_service(host, service.port, service.timeout)
             else:
