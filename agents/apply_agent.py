@@ -191,6 +191,106 @@ class ApplyAgent:
         return {}
 
     # ------------------------------------------------------------------
+    # Internal: ATS detection from URL
+    # ------------------------------------------------------------------
+
+    def _detect_ats(self, url: str) -> str:
+        """Detect ATS platform from job URL.
+
+        Args:
+            url: Job application URL.
+
+        Returns:
+            ATS platform string: greenhouse, lever, workable, linkedin,
+            or unknown.
+        """
+        url_lower = url.lower()
+        if "greenhouse.io" in url_lower:
+            return "greenhouse"
+        if "lever.co" in url_lower:
+            return "lever"
+        if "workable.com" in url_lower:
+            return "workable"
+        if "linkedin.com/jobs" in url_lower:
+            return "linkedin"
+        return "unknown"
+
+    # ------------------------------------------------------------------
+    # Internal: atomic DB write for applications + queued_jobs
+    # ------------------------------------------------------------------
+
+    def _write_application(
+        self,
+        job: Dict[str, Any],
+        status: str,
+        mode: str,
+        error_code: Optional[str] = None,
+        resume_id: Optional[str] = None,
+    ) -> str:
+        """Write application record atomically. Returns application UUID.
+
+        Wraps applications INSERT + queued_jobs INSERT (when manual_queued)
+        in a single transaction via get_db_conn().
+
+        Args:
+            job: Job dict with at minimum 'id' and 'url' keys.
+            status: Application status (applied, failed, manual_queued).
+            mode: Application mode (auto, manual).
+            error_code: Optional error code for failed/queued applications.
+            resume_id: Optional UUID of the resume used.
+
+        Returns:
+            Application UUID string, or empty string on conflict/failure.
+        """
+        conn = get_db_conn()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """INSERT INTO applications
+                           (job_post_id, resume_id, user_id, mode,
+                            status, platform, error_code)
+                           VALUES (%s, %s, %s, %s, %s, %s, %s)
+                           ON CONFLICT DO NOTHING
+                           RETURNING id""",
+                        (
+                            job.get("id", job.get("job_post_id", "")),
+                            resume_id,
+                            os.getenv("CANDIDATE_USER_ID", self.user_id),
+                            mode,
+                            status,
+                            self._detect_ats(job.get("url", "")),
+                            error_code,
+                        ),
+                    )
+                    row = cur.fetchone()
+                    if not row:
+                        return ""
+                    application_id = str(row[0])
+                    if status == "manual_queued":
+                        cur.execute(
+                            """INSERT INTO queued_jobs
+                               (application_id, job_post_id, priority, notes)
+                               VALUES (%s, %s, %s, %s)""",
+                            (
+                                application_id,
+                                job.get("id", job.get("job_post_id", "")),
+                                5,
+                                error_code,
+                            ),
+                        )
+            return application_id
+        except Exception as exc:
+            self.logger.error(
+                "_write_application: transaction failed for job %s: %s",
+                job.get("id", ""),
+                exc,
+            )
+            return ""
+        finally:
+            conn.close()
+
+    # ------------------------------------------------------------------
     # Internal: pre-apply safety check
     # ------------------------------------------------------------------
 
@@ -298,8 +398,8 @@ class ApplyAgent:
     def _apply_single_job(self, job: Dict[str, Any]) -> Dict[str, Any]:
         """Execute the full apply flow for a single job posting.
 
-        Runs: safety check → ATS detection → rate limit wait → form fill
-        → result handling (applied / re-routed / failed).
+        Runs: DRY_RUN guard (FIRST) → ATS detection → safety check →
+        rate limit wait → form fill → result handling.
 
         A failure in this method **never** propagates to the caller.
         Failed jobs are re-routed to the manual queue.
@@ -323,7 +423,43 @@ class ApplyAgent:
         fit_score: float = float(job.get("fit_score", 0.0))
 
         try:
-            # Step 1 — Safety check
+            # ── STEP 1 — DRY_RUN guard (ALWAYS FIRST) ────────────────
+            dry_run = os.getenv("DRY_RUN", "false").lower() == "true"
+            if dry_run:
+                self.logger.info(
+                    "[DRY_RUN] Would apply to %s at %s — skipping browser",
+                    job.get("title"), job.get("company"),
+                )
+                self._write_application(
+                    job=job,
+                    status="applied",
+                    mode="auto",
+                    error_code="dry_run",
+                )
+                self._applied_count += 1
+                return {"status": "dry_run", "job_id": job.get("id")}
+
+            # ── STEP 2 — ATS detection from URL ──────────────────────
+            ats = self._detect_ats(job_url)
+            if ats == "unknown":
+                self.logger.warning(
+                    "Unknown ATS for %s — routing to manual_queued",
+                    job_url,
+                )
+                self._write_application(
+                    job=job,
+                    status="manual_queued",
+                    mode="manual",
+                    error_code="unknown_ats",
+                )
+                self._rerouted_count += 1
+                return {
+                    "status": "manual_queued",
+                    "job_id": job.get("id"),
+                    "reason": "unknown_ats",
+                }
+
+            # ── STEP 3 — Safety check ────────────────────────────────
             safety: Dict[str, Any] = self._pre_apply_safety_check(job)
             if not safety.get("proceed", False):
                 reason: str = safety.get("reason", "unknown_safety_failure")
@@ -344,22 +480,7 @@ class ApplyAgent:
                 "resume_to_use", run_config.default_resume
             )
 
-            # Step 2 — Detect ATS platform
-            ats_platform: str = "direct"
-            try:
-                ats_raw: str = detect_ats_platform.func(
-                    job_url=job_url, run_batch_id=self.run_batch_id
-                )
-                ats_result: Dict[str, Any] = json.loads(ats_raw)
-                ats_platform = ats_result.get("ats", "direct")
-            except Exception as exc:  # noqa: BLE001
-                self.logger.warning(
-                    "_apply_single_job: ATS detection failed for %s: %s",
-                    job_url,
-                    exc,
-                )
-
-            # Step 3 — Rate limit wait
+            # ── STEP 4 — Rate limit wait ─────────────────────────────
             try:
                 config_raw: str = get_platform_config.func(platform=platform)
                 pconfig: Dict[str, Any] = json.loads(config_raw)
@@ -372,39 +493,14 @@ class ApplyAgent:
             if rate_limit > 0:
                 time.sleep(rate_limit)
 
-            # Step 4 — DRY_RUN gate at agent level
-            if run_config.dry_run:
-                self.logger.info(
-                    "_apply_single_job: DRY_RUN=true — skipping %s at %s",
-                    job_title,
-                    company,
-                )
-                log_event.func(
-                    run_batch_id=self.run_batch_id,
-                    level="INFO",
-                    event_type="dry_run_skip",
-                    message=(
-                        f"dry_run|{company}|{job_title}|{job_url}"
-                    ),
-                    job_post_id=job_post_id,
-                )
-                self._applied_count += 1  # count as applied for reporting
-                return {
-                    "applied": True,
-                    "status": "applied",
-                    "dry_run": True,
-                    "job_post_id": job_post_id,
-                    "job_url": job_url,
-                }
-
-            # Step 5 — Execute apply via fill_standard_form
+            # ── STEP 5 — Execute apply via fill_standard_form ────────
             result_raw: str = fill_standard_form.func(
                 job_url=job_url,
                 job_post_id=job_post_id,
                 resume_filename=resume_to_use,
                 run_batch_id=self.run_batch_id,
                 user_id=self.user_id,
-                ats_platform=ats_platform,
+                ats_platform=ats,
             )
 
             result: Dict[str, Any] = {}
@@ -417,7 +513,7 @@ class ApplyAgent:
                     job_url,
                 )
 
-            # Step 6 — Handle result
+            # ── STEP 6 — Handle result ───────────────────────────────
             if result.get("dry_run", False):
                 # fill_standard_form returned dry_run=True — count but do not
                 # treat as a real application.
@@ -428,7 +524,7 @@ class ApplyAgent:
                     event_type="dry_run_skip",
                     message=(
                         f"dry_run_skip — no actual submission | "
-                        f"{company} — {job_title} | ats={ats_platform}"
+                        f"{company} — {job_title} | ats={ats}"
                     ),
                     job_post_id=job_post_id,
                 )
@@ -446,7 +542,7 @@ class ApplyAgent:
                     event_type="job_applied",
                     message=(
                         f"Applied: {company} — {job_title} | "
-                        f"ats={ats_platform} | "
+                        f"ats={ats} | "
                         f"proof={result.get('proof_confidence', 'none')}"
                     ),
                     job_post_id=job_post_id,
@@ -1338,6 +1434,10 @@ ROUTING MANIFEST (JSON)
                     # Apply single job (fail-soft)
                     job_result: Dict[str, Any] = self._apply_single_job(job)
                     per_job_results.append(job_result)
+
+                    # Rate limiting between applications
+                    apply_delay_ms = int(os.getenv("APPLY_DELAY_MS", "3000"))
+                    time.sleep(apply_delay_ms / 1000)
 
             # ----------------------------------------------------------
             # Step 9: reconcile — safety net

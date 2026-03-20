@@ -21,11 +21,13 @@ Routing thresholds (from IDE_README.md SCORING AND ROUTING RULES):
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from itertools import islice
 from typing import Any, Optional
 
 import psycopg2
@@ -44,6 +46,27 @@ from utils.db_utils import get_db_conn
 logger = logging.getLogger(__name__)
 
 __all__ = ["AnalyserAgent"]
+
+# ---------------------------------------------------------------------------
+# Module-level helpers
+# ---------------------------------------------------------------------------
+
+
+def _chunk(lst: list, n: int):
+    """Yield successive n-sized chunks from lst.
+
+    Args:
+        lst: The list to split.
+        n: Maximum items per chunk.
+
+    Yields:
+        Non-overlapping sublists of length <= n.
+    """
+    it = iter(lst)
+    chunk = list(islice(it, n))
+    while chunk:
+        yield chunk
+        chunk = list(islice(it, n))
 
 # ---------------------------------------------------------------------------
 # Module-level helpers
@@ -546,7 +569,223 @@ class AnalyserAgent:
         return results
 
     # ------------------------------------------------------------------
-    # Internal: LLM fallback chain
+    # Internal: LLM fallback chain (Fix 4)
+    # ------------------------------------------------------------------
+
+    async def _call_llm(
+        self,
+        messages: list[dict],
+        temperature: float = 0.1,
+    ) -> str:
+        """Call the configured LLM provider chain with exponential backoff.
+
+        Attempts ANALYSER_LLM_PRIMARY first, then ANALYSER_LLM_FALLBACK_1,
+        then ANALYSER_LLM_FALLBACK_2. Logs a warning between every attempt.
+        Raises RuntimeError if all providers fail.
+
+        Args:
+            messages: List of role/content message dicts.
+            temperature: Sampling temperature for the LLM call.
+
+        Returns:
+            Raw response string from the first successful provider.
+
+        Raises:
+            RuntimeError: When all configured providers are exhausted.
+        """
+        from integrations import llm_interface as _llm_interface
+
+        providers = [
+            os.getenv("ANALYSER_LLM_PRIMARY"),
+            os.getenv("ANALYSER_LLM_FALLBACK_1"),
+            os.getenv("ANALYSER_LLM_FALLBACK_2"),
+        ]
+        last_error: Optional[Exception] = None
+        valid_providers = [p for p in providers if p]
+
+        for attempt, model in enumerate(valid_providers, 1):
+            try:
+                response = await _llm_interface.call_with_fallback(
+                    model=model,
+                    messages=messages,
+                    temperature=temperature,
+                    max_tokens=int(os.getenv("ANALYSER_MAX_TOKENS", "2048")),
+                )
+                return response
+            except Exception as exc:
+                last_error = exc
+                self.logger.warning(
+                    "LLM attempt %d/%d failed (model=%s): %s",
+                    attempt,
+                    len(valid_providers),
+                    model,
+                    exc,
+                )
+                await asyncio.sleep(2 ** attempt)
+
+        self.logger.error("All LLM providers failed. Last: %s", last_error)
+        raise RuntimeError("LLM fallback chain exhausted") from last_error
+
+    # ------------------------------------------------------------------
+    # Internal: per-job scoring fallback (Fix 3)
+    # ------------------------------------------------------------------
+
+    async def _score_jobs_individually(
+        self,
+        jobs: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Score jobs one at a time using _call_llm when batch parse fails.
+
+        Args:
+            jobs: List of job dicts to score individually.
+
+        Returns:
+            List of score dicts (same format as batch parse output).
+        """
+        results: list[dict[str, Any]] = []
+        for idx, job in enumerate(jobs, 1):
+            prompt = (
+                "You are a job fit scorer. Score this job for candidate fit.\n"
+                "Return ONLY a valid JSON object (no markdown, no explanation).\n"
+                'Format: {"job_index": 1, "fit_score": 0.85, '
+                '"route": "auto_apply", "reason": "strong Python/ML match"}\n\n'
+                "Rules:\n"
+                "  fit_score: 0.0 to 1.0\n"
+                "  route: auto_apply (fit_score>=0.75), "
+                "manual_review (0.50-0.74), skip (<0.50)\n\n"
+                f"Job to score:\n"
+                f"[{idx}] {job.get('title', 'N/A')} at {job.get('company', 'N/A')}\n"
+                f"Description: {str(job.get('description', ''))[:800]}\n"
+            )
+            try:
+                response_text = await self._call_llm(messages=[
+                    {"role": "system", "content": "Return only valid JSON objects. No markdown."},
+                    {"role": "user", "content": prompt},
+                ])
+                score = json.loads(response_text)
+                score["job_index"] = idx
+                results.append(score)
+            except Exception as exc:
+                self.logger.warning(
+                    "_score_jobs_individually: failed for job %s: %s — skipping",
+                    job.get("id", "?"),
+                    exc,
+                )
+        return results
+
+    # ------------------------------------------------------------------
+    # Internal: batch scoring via LLM (Fix 3)
+    # ------------------------------------------------------------------
+
+    async def _run_batch_scoring(
+        self,
+        jobs: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Score jobs in batches of ANALYSER_BATCH_SIZE using _call_llm.
+
+        Sends ANALYSER_BATCH_SIZE jobs per LLM call. On JSON parse failure,
+        falls back to _score_jobs_individually for that batch. Results are
+        written to job_scores using the confirmed schema.
+
+        Args:
+            jobs: Full list of job dicts for the current run batch.
+
+        Returns:
+            List of routing result dicts with job_post_id, fit_score,
+            eligibility_pass, route, and reasons_json.
+        """
+        batch_size = int(os.getenv("ANALYSER_BATCH_SIZE", "10"))
+        all_results: list[dict[str, Any]] = []
+
+        for batch in _chunk(jobs, batch_size):
+            batch_prompt = (
+                "You are a job fit scorer. Score each job for candidate fit.\n"
+                "Return ONLY a valid JSON array. One object per job, same order as input.\n"
+                'Format: [{"job_index": 1, "fit_score": 0.85, '
+                '"route": "auto_apply", "reason": "strong Python/ML match"}, ...]\n\n'
+                "Rules:\n"
+                "  fit_score: 0.0 to 1.0\n"
+                "  route: auto_apply (fit_score>=0.75), "
+                "manual_review (0.50-0.74), skip (<0.50)\n\n"
+                "Jobs to score:\n"
+            )
+            for idx, job in enumerate(batch, 1):
+                batch_prompt += (
+                    f"[{idx}] {job.get('title', 'N/A')} at {job.get('company', 'N/A')}\n"
+                    f"Description: {str(job.get('description', ''))[:800]}\n---\n"
+                )
+
+            try:
+                response_text = await self._call_llm(messages=[
+                    {"role": "system", "content": "Return only valid JSON arrays. No markdown."},
+                    {"role": "user", "content": batch_prompt},
+                ])
+            except RuntimeError as exc:
+                self.logger.error(
+                    "_run_batch_scoring: LLM exhausted for batch of %d jobs: %s — skipping batch",
+                    len(batch),
+                    exc,
+                )
+                continue
+
+            try:
+                scores = json.loads(response_text)
+                if not isinstance(scores, list):
+                    raise ValueError("Response is not a JSON array")
+            except (json.JSONDecodeError, ValueError) as exc:
+                self.logger.warning(
+                    "Batch JSON parse failed (%s). Falling back to per-job scoring.", exc
+                )
+                scores = await self._score_jobs_individually(batch)
+
+            for result in scores:
+                if not isinstance(result, dict):
+                    continue
+                raw_idx = result.get("job_index", 1)
+                try:
+                    job_idx = int(raw_idx) - 1
+                except (TypeError, ValueError):
+                    job_idx = 0
+                if job_idx < 0 or job_idx >= len(batch):
+                    job_idx = 0
+
+                job = batch[job_idx]
+                job_post_id = str(job.get("id", ""))
+                fit_score = float(result.get("fit_score", 0.0) or 0.0)
+                fit_score = max(0.0, min(1.0, fit_score))
+                eligibility_pass = fit_score >= 0.75
+                route = str(result.get("route", "skip") or "skip")
+                reason = str(result.get("reason", "") or "")
+
+                reasons_json: dict[str, Any] = {
+                    "route": route,
+                    "reason": reason,
+                }
+
+                resume_id: Optional[str] = self._resolve_resume_id(
+                    os.getenv("DEFAULT_RESUME", "AarjunGen.pdf")
+                )
+
+                self._save_score_direct(
+                    job_post_id=job_post_id,
+                    resume_id=resume_id,
+                    fit_score=fit_score,
+                    eligibility_pass=eligibility_pass,
+                    reasons_json=reasons_json,
+                )
+
+                all_results.append({
+                    "job_post_id": job_post_id,
+                    "fit_score": fit_score,
+                    "eligibility_pass": eligibility_pass,
+                    "route": route,
+                    "reasons_json": reasons_json,
+                })
+
+        return all_results
+
+    # ------------------------------------------------------------------
+    # Internal: LLM fallback chain (CrewAI-level switch)
     # ------------------------------------------------------------------
 
     def _switch_to_fallback(self, failed_provider: str) -> bool:
