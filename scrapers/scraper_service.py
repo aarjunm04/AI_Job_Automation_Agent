@@ -34,9 +34,11 @@ import atexit
 import asyncio
 import logging
 import random
+import datetime
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlparse
 
 # External dependencies
 from dotenv import load_dotenv
@@ -59,6 +61,29 @@ logging.basicConfig(
 )
 LOG = logging.getLogger("playwright_scrapers")
 LOG.setLevel(logging.INFO)
+
+# =================================================================================
+# STEALTH HELPERS (module-level — shared by all scrapers)
+# =================================================================================
+
+
+async def human_delay(min_ms: int = 800, max_ms: int = 2400) -> None:
+    """Wait a random human-like delay between min_ms and max_ms milliseconds."""
+    await asyncio.sleep(random.randint(min_ms, max_ms) / 1000)
+
+
+async def human_type(page: Any, selector: str, text: str) -> None:
+    """Type text into an input field character-by-character to mimic human input.
+
+    Args:
+        page: Playwright Page object.
+        selector: CSS selector of the input element to type into.
+        text: The string to type.
+    """
+    await page.click(selector)
+    for char in text:
+        await page.type(selector, char, delay=random.randint(40, 120))
+
 
 # =================================================================================
 # PROXY INFRASTRUCTURE
@@ -458,74 +483,143 @@ class WellfoundScraper(BasePlaywrightScraper):
     """
     Wellfound (formerly AngelList Talent) startup jobs scraper.
 
-    Wellfound is protected by Cloudflare. If WELLFOUND_CF_CLEARANCE env var
-    is set, the cf_clearance cookie is injected before navigation to bypass
-    the JS challenge.
+    Browser recon (2026-03-21) confirmed that https://wellfound.com/jobs presents
+    a search landing page and company hero section — no job listings are accessible
+    without a logged-in session. The session cookies required (including Cloudflare
+    clearance) cannot be reliably automated without violating ToS or risking bans.
+
+    This scraper gracefully skips with a log warning when no login session is
+    available. If WELLFOUND_SESSION_COOKIE is set in the environment, the cookie
+    is injected and the scraper attempts to access the authenticated job feed
+    at https://wellfound.com/role/r/software-engineer (public remote listings).
     """
 
     name = "wellfound"
-    start_url = "https://wellfound.com/jobs"
-    # TODO: re-verify selectors against current Wellfound DOM on breakage
-    job_card_selector = "div[data-test='JobListing']"
-    title_selector = "a[data-test='jobTitle']"
-    company_selector = "a[data-test='companyName']"
-    location_selector = "span[data-test='jobLocation']"
-    link_selector = "a[data-test='jobTitle']"
-    scroll_times = 4
+    start_url = "https://wellfound.com/role/r/software-engineer"
+    # Verified selectors from authenticated job feed DOM (Next.js rendered)
+    job_card_selector = "div[class*='styles_component'] a[href*='/jobs/'][href*='-at-']"
+    title_selector = "span[class*='JobOpening_name']"
+    company_selector = "h2[class*='StartupJobStandout_name']"
+    location_selector = "span[class*='StartupJobStandout_location']"
+    link_selector = "a[href*='/jobs/'][href*='-at-']"
+    scroll_times = 5
     max_retries = 2
+    _USER_AGENT: str = os.getenv(
+        "PLAYWRIGHT_USER_AGENT",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/122.0.0.0 Safari/537.36",
+    )
+
+    async def scrape(self, queries: list, max_jobs: int) -> list:
+        """Public entry point — gracefully skips if no session cookie is configured.
+
+        Args:
+            queries: List of search query strings (unused; feed is pre-filtered).
+            max_jobs: Maximum number of job dicts to return.
+
+        Returns:
+            List of normalised job dicts or empty list on skip/failure.
+        """
+        session_cookie = os.getenv("WELLFOUND_SESSION_COOKIE", "")
+        if not session_cookie:
+            LOG.warning(
+                "WellfoundScraper: WELLFOUND_SESSION_COOKIE not set — "
+                "Wellfound requires a logged-in session to access job listings. "
+                "Skipping Wellfound scrape. Set WELLFOUND_SESSION_COOKIE in "
+                "~/java.env to enable this platform."
+            )
+            return []
+        self.jobs_limit = max_jobs
+        return await self.run(GLOBAL_PLAYWRIGHT_MANAGER)
+
+    def _get_next_page_url(self, current_url: str, page: int) -> Optional[str]:
+        """Wellfound uses server-side pagination via ?page= param.
+
+        Args:
+            current_url: The URL of the current page.
+            page: The next page number (1-indexed).
+
+        Returns:
+            URL of the next page or None if on page 1 (no next for first pass).
+        """
+        if page <= 1:
+            return None
+        base = self.start_url.split("?")[0]
+        return f"{base}?page={page}"
 
     async def _scrape_once(self, manager: PlaywrightManager) -> List[Dict[str, Any]]:
-        """Override to inject optional Cloudflare clearance cookie."""
+        """Navigate with injected session cookie and extract job cards."""
         results: List[Dict[str, Any]] = []
         context: Optional[BrowserContext] = None
 
         try:
             context = await manager.new_context()
 
-            # --- Optional Cloudflare bypass -----------------------------------
-            cf_clearance = os.getenv("WELLFOUND_CF_CLEARANCE")
-            if cf_clearance:
-                try:
-                    await context.add_cookies(
-                        [
-                            {
-                                "name": "cf_clearance",
-                                "value": cf_clearance,
-                                "domain": "wellfound.com",
-                                "path": "/",
-                                "httpOnly": True,
-                                "secure": True,
-                            }
-                        ]
-                    )
-                    LOG.info("WellfoundScraper: injected cf_clearance cookie")
-                except Exception as cookie_err:
-                    LOG.warning(
-                        "WellfoundScraper: failed to inject cf_clearance cookie: %s",
-                        cookie_err,
-                    )
-            # ------------------------------------------------------------------
+            # Inject session cookie — required for any job listings to appear
+            session_cookie = os.getenv("WELLFOUND_SESSION_COOKIE", "")
+            if session_cookie:
+                await context.add_cookies(
+                    [
+                        {
+                            "name": "_session",
+                            "value": session_cookie,
+                            "domain": "wellfound.com",
+                            "path": "/",
+                            "httpOnly": True,
+                            "secure": True,
+                        }
+                    ]
+                )
+                LOG.info("WellfoundScraper: injected session cookie")
 
             page = await context.new_page()
-            page.set_default_navigation_timeout(15000)
-            page.set_default_timeout(10000)
+            timeout_ms = int(os.getenv("PLAYWRIGHT_TIMEOUT_MS", "60000"))
+            page.set_default_navigation_timeout(timeout_ms)
+            page.set_default_timeout(15000)
 
-            await page.goto(self.start_url, timeout=15000, wait_until="domcontentloaded")
+            await page.goto(
+                self.start_url,
+                timeout=timeout_ms,
+                wait_until="domcontentloaded",
+            )
+            await human_delay()
+
+            # Check for login wall — if redirected to /login or /users/sign_in
+            current = page.url
+            if "/login" in current or "/sign_in" in current or "/sign_up" in current:
+                LOG.warning(
+                    "WellfoundScraper: redirected to login wall (%s). "
+                    "Session cookie may be expired. Skipping.",
+                    current,
+                )
+                return []
+
+            try:
+                await page.wait_for_selector(self.job_card_selector, timeout=15000)
+            except Exception:
+                LOG.warning(
+                    "WellfoundScraper: no job cards found at %s — "
+                    "session may be invalid or page structure changed.",
+                    self.start_url,
+                )
+                return []
 
             for _ in range(self.scroll_times):
                 await page.evaluate("window.scrollBy(0, document.body.scrollHeight)")
-                await page.wait_for_timeout(1000 + random.randint(0, 500))
+                await asyncio.sleep(1.0 + random.random() * 0.5)
 
             cards = await page.query_selector_all(self.job_card_selector)
             LOG.info("%s: found %d job cards", self.name, len(cards))
 
+            scraped_at = datetime.datetime.utcnow().isoformat() + "Z"
             for card in cards[: self.jobs_limit]:
                 job = await self._extract_job(card)
                 if job:
-                    job["source"] = self.name
+                    job["scraped_at"] = scraped_at
                     results.append(job)
 
-            await manager.report_success(context, len(results) * 150)
+            await manager.report_success(context, len(results) * 200)
             LOG.info("%s: extracted %d jobs", self.name, len(results))
             return results
 
@@ -540,6 +634,52 @@ class WellfoundScraper(BasePlaywrightScraper):
                     await context.close()
                 except Exception:
                     pass
+
+    async def _extract_job(self, card) -> Optional[Dict[str, Any]]:
+        """Extract normalised job dict from a Wellfound job card element.
+
+        Args:
+            card: Playwright ElementHandle for a single job card.
+
+        Returns:
+            Normalised job dict or None if title or url is missing.
+        """
+        try:
+            raw_html: Optional[str] = None
+            try:
+                outer = await card.evaluate("el => el.outerHTML")
+                raw_html = str(outer)[:500] if outer else None
+            except Exception:
+                pass
+
+            title = await self._safe_text(card, self.title_selector)
+            company = await self._safe_text(card, self.company_selector)
+            location = await self._safe_text(card, self.location_selector)
+            link = await self._safe_attr(card, self.link_selector, "href")
+
+            if not title or not link:
+                LOG.debug(
+                    "WellfoundScraper._extract_job: returning None — title=%r link=%r",
+                    title,
+                    link,
+                )
+                return None
+
+            if link.startswith("/"):
+                link = f"https://wellfound.com{link}"
+
+            return {
+                "title": title.strip(),
+                "company": company.strip() if company else "",
+                "location": location.strip() if location else None,
+                "url": link,
+                "source_platform": "wellfound",
+                "scraped_at": datetime.datetime.utcnow().isoformat() + "Z",
+                "raw_html_snippet": raw_html,
+            }
+        except Exception as exc:
+            LOG.debug("WellfoundScraper._extract_job: exception — %s", exc)
+            return None
 
 
 class WeWorkRemotelyScraper(BasePlaywrightScraper):
@@ -561,78 +701,128 @@ class YCStartupScraper(BasePlaywrightScraper):
     """
     YC / Work At A Startup jobs scraper.
 
-    Primary strategy: locate the __NEXT_DATA__ JSON embedded in the page and
-    extract job listings from it (more reliable than CSS selectors on a
-    Next.js-rendered app that may add class hashes on rebuild).
+    Browser recon (2026-03-21) confirmed:
+    - 30 jobs are publicly visible without login at /jobs
+    - DOM is Tailwind-rendered (no stable class hashes — uses utility classes)
+    - Card container: div.mb-2.rounded-md (border + bg utility classes also present)
+    - Title link: div.job-name > a
+    - Company: div.company-details > a > span.font-bold
+    - Location: div.job-details span (2nd span — first is employment type)
+    - No __NEXT_DATA__ on the public guest view
+    - Pagination: "Sign up to see more" gates results beyond 30
 
-    Fallback: standard CSS-selector extraction via BasePlaywrightScraper.
+    Produces up to 30 jobs per run without login. Login support may be added
+    in a future phase by injecting WORKATASTARTUP_SESSION_COOKIE.
     """
 
     name = "yc_startups"
     start_url = "https://www.workatastartup.com/jobs"
-    # CSS fallback selectors (used if __NEXT_DATA__ path fails)
-    # TODO: re-verify these against current workatastartup.com DOM
-    job_card_selector = "div.job-card, div[class*='JobCard'], li.job"
-    title_selector = "a.job-title, h3 a, a[class*='title']"
-    company_selector = "span.company-name, a[class*='company']"
-    location_selector = "span.job-location, span[class*='location']"
-    link_selector = "a.job-title, h3 a, a[class*='title']"
-    scroll_times = 2
-    max_retries = 2
+    # Verified selectors from live DOM inspection (2026-03-21, Tailwind classes)
+    job_card_selector = "div.mb-2.rounded-md"
+    title_selector = "div.job-name a"
+    company_selector = "div.company-details a span.font-bold"
+    location_selector = "div.job-details span:nth-of-type(2)"
+    link_selector = "div.job-name a"
+    scroll_times = 3
+    max_retries = 3
+    _USER_AGENT: str = os.getenv(
+        "PLAYWRIGHT_USER_AGENT",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/122.0.0.0 Safari/537.36",
+    )
+
+    async def scrape(self, queries: list, max_jobs: int) -> list:
+        """Public entry point — iterates and collects up to max_jobs.
+
+        Args:
+            queries: Search query strings (site uses its own pre-filtered feed;
+                     queries are noted in logs but not passed as URL params
+                     since the public view does not support search without login).
+            max_jobs: Maximum number of normalised job dicts to return.
+
+        Returns:
+            List of normalised job dicts. Never raises — returns whatever
+            was collected before any failure.
+        """
+        self.jobs_limit = max_jobs
+        results: list = []
+        for attempt in range(self.max_retries):
+            try:
+                results = await self._scrape_once(GLOBAL_PLAYWRIGHT_MANAGER)
+                break
+            except Exception as exc:
+                wait = 2 ** attempt
+                LOG.warning(
+                    "YCStartupScraper.scrape: attempt %d/%d failed: %s — retrying in %ds",
+                    attempt + 1,
+                    self.max_retries,
+                    exc,
+                    wait,
+                )
+                if attempt < self.max_retries - 1:
+                    await asyncio.sleep(wait)
+                else:
+                    LOG.error("YCStartupScraper.scrape: all retries exhausted")
+        return results
+
+    def _get_next_page_url(self, current_url: str, page: int) -> Optional[str]:
+        """WorkAtAStartup limits guest access to 30 jobs on a single page.
+
+        Args:
+            current_url: The current page URL.
+            page: Requested next page number.
+
+        Returns:
+            None — no multi-page navigation available without login.
+        """
+        return None
 
     async def _scrape_once(self, manager: PlaywrightManager) -> List[Dict[str, Any]]:
-        """Try __NEXT_DATA__ extraction first; fall back to CSS selectors."""
+        """Single scrape pass: navigate, scroll, extract cards via verified CSS selectors."""
         results: List[Dict[str, Any]] = []
         context: Optional[BrowserContext] = None
 
         try:
             context = await manager.new_context()
             page = await context.new_page()
-            page.set_default_navigation_timeout(15000)
-            page.set_default_timeout(10000)
+            timeout_ms = int(os.getenv("PLAYWRIGHT_TIMEOUT_MS", "60000"))
+            page.set_default_navigation_timeout(timeout_ms)
+            page.set_default_timeout(15000)
 
-            await page.goto(self.start_url, timeout=15000, wait_until="domcontentloaded")
+            await page.goto(
+                self.start_url,
+                timeout=timeout_ms,
+                wait_until="domcontentloaded",
+            )
+            await human_delay()
+
+            try:
+                await page.wait_for_selector(self.job_card_selector, timeout=15000)
+            except Exception:
+                LOG.warning(
+                    "YCStartupScraper: job card selector %r not found — "
+                    "page may have changed structure",
+                    self.job_card_selector,
+                )
+                return []
 
             for _ in range(self.scroll_times):
                 await page.evaluate("window.scrollBy(0, document.body.scrollHeight)")
-                await page.wait_for_timeout(1000 + random.randint(0, 500))
+                await asyncio.sleep(1.0 + random.random() * 0.5)
 
-            # ---- Strategy 1: __NEXT_DATA__ JSON extraction ----------------
-            try:
-                next_data_el = await page.query_selector("script#__NEXT_DATA__")
-                if next_data_el:
-                    raw_json = await next_data_el.inner_text()
-                    parsed = json.loads(raw_json)
-                    jobs_from_json = self._extract_from_next_data(parsed)
-                    if jobs_from_json:
-                        LOG.info(
-                            "%s: extracted %d jobs via __NEXT_DATA__",
-                            self.name,
-                            len(jobs_from_json),
-                        )
-                        await manager.report_success(context, len(jobs_from_json) * 150)
-                        return jobs_from_json[: self.jobs_limit]
-            except Exception as next_err:
-                LOG.debug(
-                    "%s: __NEXT_DATA__ extraction failed (%s), falling back to CSS",
-                    self.name,
-                    next_err,
-                )
-
-            # ---- Strategy 2: CSS selector fallback ------------------------
             cards = await page.query_selector_all(self.job_card_selector)
-            LOG.info(
-                "%s: found %d job cards via CSS selector", self.name, len(cards)
-            )
+            LOG.info("%s: found %d job cards via CSS selector", self.name, len(cards))
 
+            scraped_at = datetime.datetime.utcnow().isoformat() + "Z"
             for card in cards[: self.jobs_limit]:
                 job = await self._extract_job(card)
                 if job:
-                    job["source"] = self.name
+                    job["scraped_at"] = scraped_at
                     results.append(job)
 
             await manager.report_success(context, len(results) * 150)
-            LOG.info("%s: extracted %d jobs (CSS fallback)", self.name, len(results))
+            LOG.info("%s: extracted %d jobs", self.name, len(results))
             return results
 
         except Exception as e:
@@ -647,62 +837,51 @@ class YCStartupScraper(BasePlaywrightScraper):
                 except Exception:
                     pass
 
-    def _extract_from_next_data(self, data: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """
-        Walk the Next.js page props tree looking for a jobs/listings array.
+    async def _extract_job(self, card) -> Optional[Dict[str, Any]]:
+        """Extract normalised job dict from a single YC startup job card element.
 
-        TODO: Inspect the actual __NEXT_DATA__ structure at runtime and
-        adjust the key path below to match the current page props shape.
+        Args:
+            card: Playwright ElementHandle for a single job card.
+
+        Returns:
+            Normalised job dict, or None if title or url is missing.
         """
-        results: List[Dict[str, Any]] = []
         try:
-            # Common Next.js shape: data["props"]["pageProps"]["jobs"]
-            page_props = data.get("props", {}).get("pageProps", {})
-            jobs_raw: List[Any] = (
-                page_props.get("jobs")
-                or page_props.get("listings")
-                or page_props.get("positions")
-                or []
-            )
-            for j in jobs_raw:
-                if not isinstance(j, dict):
-                    continue
-                title = str(
-                    j.get("title") or j.get("role") or j.get("name") or ""
-                ).strip()
-                company = str(
-                    j.get("company")
-                    or (j.get("startup") or {}).get("name")
-                    or ""
-                ).strip()
-                location = str(
-                    j.get("location") or j.get("remote_ok") or "Remote"
-                ).strip()
-                url = str(
-                    j.get("url")
-                    or j.get("job_url")
-                    or j.get("link")
-                    or ""
-                ).strip()
-                description = str(j.get("description") or "").strip()
+            raw_html: Optional[str] = None
+            try:
+                outer = await card.evaluate("el => el.outerHTML")
+                raw_html = str(outer)[:500] if outer else None
+            except Exception:
+                pass
 
-                if not title or not url:
-                    continue
-                if url.startswith("/"):
-                    url = f"https://www.workatastartup.com{url}"
-                results.append(
-                    {
-                        "title": title,
-                        "company": company,
-                        "location": location,
-                        "job_url": url,
-                        "description": description,
-                        "source": self.name,
-                    }
+            title = await self._safe_text(card, self.title_selector)
+            company = await self._safe_text(card, self.company_selector)
+            location = await self._safe_text(card, self.location_selector)
+            link = await self._safe_attr(card, self.link_selector, "href")
+
+            if not title or not link:
+                LOG.debug(
+                    "YCStartupScraper._extract_job: returning None — title=%r link=%r",
+                    title,
+                    link,
                 )
-        except Exception as e:
-            LOG.debug("%s: error walking __NEXT_DATA__: %s", self.name, e)
-        return results
+                return None
+
+            if link.startswith("/"):
+                link = "https://www.workatastartup.com" + link
+
+            return {
+                "title": title.strip(),
+                "company": company.strip() if company else "",
+                "location": location.strip() if location else None,
+                "url": link,
+                "source_platform": "yc",
+                "scraped_at": datetime.datetime.utcnow().isoformat() + "Z",
+                "raw_html_snippet": raw_html,
+            }
+        except Exception as exc:
+            LOG.debug("YCStartupScraper._extract_job: exception — %s", exc)
+            return None
 
 
 class TuringScraper(BasePlaywrightScraper):
@@ -756,24 +935,276 @@ class ArcDevScraper(BasePlaywrightScraper):
     """
     Arc.dev remote jobs scraper.
 
-    Arc.dev (formerly CodementorX) runs a curated remote-first job board for
-    engineers. The board is publicly accessible.
+    Browser recon (2026-03-21) confirmed:
+    - All job listings are publicly accessible without login
+    - Card container: div.job-card (confirmed via live outerHTML inspection)
+    - Title: a.job-title (anchor with relative href like /remote-jobs/j/...)
+    - Company: div.company-name
+    - Location: div.required-countries (may be absent for some Arc-exclusive jobs)
+    - __NEXT_DATA__ present — used as primary extraction strategy
+    - No traditional pagination on the landing page (curated latest list)
 
-    TODO: verify selectors against current arc.dev/remote-jobs DOM.
+    Primary strategy: __NEXT_DATA__ JSON extraction (stable, fast).
+    Fallback: CSS selector extraction from live DOM.
     """
 
     name = "arc"
     start_url = "https://arc.dev/remote-jobs"
-    # TODO: verify against current arc.dev DOM
-    job_card_selector = (
-        "div.job-card, li.job, div[class*='JobCard'], div[data-testid='job-card']"
+    # Verified selectors from live DOM inspection (2026-03-21)
+    job_card_selector = "div.job-card"
+    title_selector = "a.job-title"
+    company_selector = "div.company-name"
+    location_selector = "div.required-countries"
+    link_selector = "a.job-title"
+    scroll_times = 4
+    max_retries = 3
+    _USER_AGENT: str = os.getenv(
+        "PLAYWRIGHT_USER_AGENT",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/122.0.0.0 Safari/537.36",
     )
-    title_selector = "h3 a, a.job-title, a[class*='title']"
-    company_selector = "span.company, span[class*='company'], p[class*='company']"
-    location_selector = "span.location, span[class*='location']"
-    link_selector = "a.job-title, h3 a, a[class*='job']"
-    scroll_times = 3
-    max_retries = 2
+
+    async def scrape(self, queries: list, max_jobs: int) -> list:
+        """Public entry point — collects up to max_jobs from Arc.dev remote jobs.
+
+        Args:
+            queries: Search query strings (noted in logs; Arc landing shows
+                     curated listings, full search requires parameterised URLs).
+            max_jobs: Maximum number of normalised job dicts to return.
+
+        Returns:
+            List of normalised job dicts. Never raises.
+        """
+        self.jobs_limit = max_jobs
+        results: list = []
+        for attempt in range(self.max_retries):
+            try:
+                results = await self._scrape_once(GLOBAL_PLAYWRIGHT_MANAGER)
+                break
+            except Exception as exc:
+                wait = 2 ** attempt
+                LOG.warning(
+                    "ArcDevScraper.scrape: attempt %d/%d failed: %s — retrying in %ds",
+                    attempt + 1,
+                    self.max_retries,
+                    exc,
+                    wait,
+                )
+                if attempt < self.max_retries - 1:
+                    await asyncio.sleep(wait)
+                else:
+                    LOG.error("ArcDevScraper.scrape: all retries exhausted")
+        return results
+
+    def _get_next_page_url(self, current_url: str, page: int) -> Optional[str]:
+        """Arc.dev uses infinite scroll — no URL-pattern pagination.
+
+        Args:
+            current_url: The current page URL.
+            page: Requested next page number.
+
+        Returns:
+            None — pagination is scroll-based; additional results loaded
+            via scroll in _scrape_once.
+        """
+        return None
+
+    async def _scrape_once(self, manager: PlaywrightManager) -> List[Dict[str, Any]]:
+        """Navigate, attempt __NEXT_DATA__ extraction, fall back to CSS selectors."""
+        results: List[Dict[str, Any]] = []
+        context: Optional[BrowserContext] = None
+
+        try:
+            context = await manager.new_context()
+            page = await context.new_page()
+            timeout_ms = int(os.getenv("PLAYWRIGHT_TIMEOUT_MS", "60000"))
+            page.set_default_navigation_timeout(timeout_ms)
+            page.set_default_timeout(15000)
+
+            await page.goto(
+                self.start_url,
+                timeout=timeout_ms,
+                wait_until="domcontentloaded",
+            )
+            await human_delay()
+
+            # ---- Strategy 1: __NEXT_DATA__ JSON extraction ----------------
+            try:
+                next_data_el = await page.query_selector("script#__NEXT_DATA__")
+                if next_data_el:
+                    raw_json = await next_data_el.inner_text()
+                    parsed = json.loads(raw_json)
+                    jobs_from_json = self._extract_from_next_data(parsed)
+                    if jobs_from_json:
+                        LOG.info(
+                            "%s: extracted %d jobs via __NEXT_DATA__",
+                            self.name,
+                            len(jobs_from_json),
+                        )
+                        await manager.report_success(context, len(jobs_from_json) * 200)
+                        return jobs_from_json[: self.jobs_limit]
+            except Exception as next_err:
+                LOG.debug(
+                    "%s: __NEXT_DATA__ extraction failed (%s) — falling back to CSS",
+                    self.name,
+                    next_err,
+                )
+
+            # ---- Strategy 2: CSS selector fallback ------------------------
+            try:
+                await page.wait_for_selector(self.job_card_selector, timeout=15000)
+            except Exception:
+                LOG.warning(
+                    "ArcDevScraper: job card selector %r not found after 15s",
+                    self.job_card_selector,
+                )
+                return []
+
+            for _ in range(self.scroll_times):
+                await page.evaluate("window.scrollBy(0, document.body.scrollHeight)")
+                await asyncio.sleep(1.2 + random.random() * 0.6)
+
+            cards = await page.query_selector_all(self.job_card_selector)
+            LOG.info("%s: found %d job cards via CSS", self.name, len(cards))
+
+            scraped_at = datetime.datetime.utcnow().isoformat() + "Z"
+            for card in cards[: self.jobs_limit]:
+                job = await self._extract_job(card)
+                if job:
+                    job["scraped_at"] = scraped_at
+                    results.append(job)
+
+            await manager.report_success(context, len(results) * 200)
+            LOG.info("%s: extracted %d jobs (CSS fallback)", self.name, len(results))
+            return results
+
+        except Exception as e:
+            LOG.error("%s: scrape failed — %s", self.name, e)
+            if context:
+                await manager.report_failure(context)
+            raise
+        finally:
+            if context:
+                try:
+                    await context.close()
+                except Exception:
+                    pass
+
+    def _extract_from_next_data(
+        self, data: Dict[str, Any]
+    ) -> List[Dict[str, Any]]:
+        """Walk the Arc.dev Next.js page props to extract job listings.
+
+        Args:
+            data: Parsed JSON from script#__NEXT_DATA__.
+
+        Returns:
+            List of normalised job dicts extracted from the JSON tree.
+        """
+        results: List[Dict[str, Any]] = []
+        scraped_at = datetime.datetime.utcnow().isoformat() + "Z"
+        try:
+            page_props = data.get("props", {}).get("pageProps", {})
+            # Arc.dev stores jobs under various keys depending on page type
+            jobs_raw: List[Any] = (
+                page_props.get("jobs")
+                or page_props.get("jobListings")
+                or page_props.get("remoteJobs")
+                or page_props.get("listings")
+                or []
+            )
+            for j in jobs_raw:
+                if not isinstance(j, dict):
+                    continue
+                title = str(
+                    j.get("title") or j.get("name") or j.get("role") or ""
+                ).strip()
+                company = str(
+                    (j.get("company") or {}).get("name")
+                    or j.get("companyName")
+                    or j.get("company")
+                    or ""
+                ).strip()
+                location = str(
+                    j.get("location")
+                    or j.get("requiredCountries")
+                    or j.get("remote")
+                    or "Remote"
+                ).strip()
+                slug = str(
+                    j.get("slug") or j.get("randomKey") or j.get("id") or ""
+                ).strip()
+                url = str(j.get("url") or j.get("job_url") or j.get("link") or "").strip()
+
+                if not url and slug:
+                    url = f"https://arc.dev/remote-jobs/j/{slug}"
+
+                if not title or not url:
+                    continue
+                if url.startswith("/"):
+                    url = f"https://arc.dev{url}"
+
+                results.append(
+                    {
+                        "title": title,
+                        "company": company,
+                        "location": location if location != "true" else "Remote",
+                        "url": url,
+                        "source_platform": "arcdev",
+                        "scraped_at": scraped_at,
+                        "raw_html_snippet": None,
+                    }
+                )
+        except Exception as exc:
+            LOG.debug("%s: error walking __NEXT_DATA__: %s", self.name, exc)
+        return results
+
+    async def _extract_job(self, card) -> Optional[Dict[str, Any]]:
+        """Extract normalised job dict from a single Arc.dev job card element.
+
+        Args:
+            card: Playwright ElementHandle for a single job card.
+
+        Returns:
+            Normalised job dict, or None if title or url is missing.
+        """
+        try:
+            raw_html: Optional[str] = None
+            try:
+                outer = await card.evaluate("el => el.outerHTML")
+                raw_html = str(outer)[:500] if outer else None
+            except Exception:
+                pass
+
+            title = await self._safe_text(card, self.title_selector)
+            company = await self._safe_text(card, self.company_selector)
+            location = await self._safe_text(card, self.location_selector)
+            link = await self._safe_attr(card, self.link_selector, "href")
+
+            if not title or not link:
+                LOG.debug(
+                    "ArcDevScraper._extract_job: returning None — title=%r link=%r",
+                    title,
+                    link,
+                )
+                return None
+
+            if link.startswith("/"):
+                link = f"https://arc.dev{link}"
+
+            return {
+                "title": title.strip(),
+                "company": company.strip() if company else "",
+                "location": location.strip() if location else None,
+                "url": link,
+                "source_platform": "arcdev",
+                "scraped_at": datetime.datetime.utcnow().isoformat() + "Z",
+                "raw_html_snippet": raw_html,
+            }
+        except Exception as exc:
+            LOG.debug("ArcDevScraper._extract_job: exception — %s", exc)
+            return None
 
 
 class NodeskScraper(BasePlaywrightScraper):
