@@ -1,0 +1,212 @@
+{
+  "run_config": {
+    "jobs_per_run_target": 80,
+    "max_daily_applications": 30,
+    "max_auto_apply_per_run": 20,
+    "max_manual_queue_per_run": 40,
+    "run_sessions_per_week": 3,
+    "hours_old_max": 72,
+    "location_filter": "Remote",
+    "country_indeed": "worldwide"
+  },
+  "platform_settings": {
+    "playwright_platforms": [
+      "wellfound",
+      "arcdev"
+    ],
+    "platforms": {
+      "linkedin": {
+        "active": true,
+        "max_jobs_per_scrape": 150,
+        "scoring_threshold": 65,
+        "budget_cap_usd": 2.0,
+        "rag_settings": {
+          "use_company_context": true,
+          "max_context_tokens": 1500
+        }
+      },
+      "indeed": {
+        "active": true,
+        "max_jobs_per_scrape": 100,
+        "scoring_threshold": 70,
+        "budget_cap_usd": 1.5,
+        "rag_settings": {
+          "use_company_context": true,
+          "max_context_tokens": 1500
+        }
+      },
+      "glassdoor": {
+        "active": true,
+        "max_jobs_per_scrape": 50,
+        "scoring_threshold": 75,
+        "budget_cap_usd": 1.0,
+        "rag_settings": {
+          "use_company_context": false,
+          "max_context_tokens": 1000
+        }
+      },
+      "ziprecruiter": {
+        "active": false,
+        "max_jobs_per_scrape": 50,
+        "scoring_threshold": 80,
+        "budget_cap_usd": 0.5,
+        "rag_settings": {
+          "use_company_context": false,
+          "max_context_tokens": 1000
+        }
+      },
+      "google_jobs": {
+        "active": true,
+        "max_jobs_per_scrape": 200,
+        "scoring_threshold": 60,
+        "budget_cap_usd": 2.5,
+        "rag_settings": {
+          "use_company_context": true,
+          "max_context_tokens": 2000
+        }
+      },
+      "remoteok": {
+        "active": true,
+        "max_jobs_per_scrape": 50,
+        "scoring_threshold": 75,
+        "budget_cap_usd": 1.0,
+        "rag_settings": {
+          "use_company_context": true,
+          "max_context_tokens": 1000
+        }
+      },
+      "himalayas": {
+        "active": true,
+        "max_jobs_per_scrape": 50,
+        "scoring_threshold": 70,
+        "budget_cap_usd": 1.0,
+        "rag_settings": {
+          "use_company_context": true,
+          "max_context_tokens": 1000
+        }
+      },
+      "remotive": {
+        "active": true,
+        "max_jobs_per_scrape": 100,
+        "scoring_threshold": 65,
+        "budget_cap_usd": 1.5,
+        "rag_settings": {
+          "use_company_context": true,
+          "max_context_tokens": 1500
+        }
+      },
+      "jooble": {
+        "active": true,
+        "max_jobs_per_scrape": 100,
+        "scoring_threshold": 65,
+        "budget_cap_usd": 1.0,
+        "rag_settings": {
+          "use_company_context": false,
+          "max_context_tokens": 1000
+        }
+      },
+      "weworkremotely": {
+        "active": true,
+        "max_jobs_per_scrape": 50,
+        "scoring_threshold": 75,
+        "budget_cap_usd": 1.0,
+        "rag_settings": {
+          "use_company_context": false,
+          "max_context_tokens": 1000
+        }
+      },
+      "wellfound": {
+        "active": true,
+        "max_jobs_per_scrape": 40,
+        "scoring_threshold": 80,
+        "budget_cap_usd": 1.0,
+        "rag_settings": {
+          "use_company_context": true,
+          "max_context_tokens": 1500
+        }
+      },
+      "arcdev": {
+        "active": true,
+        "max_jobs_per_scrape": 30,
+        "scoring_threshold": 85,
+        "budget_cap_usd": 1.0,
+        "rag_settings": {
+          "use_company_context": true,
+          "max_context_tokens": 1000
+        }
+      },
+      "nodesk": {
+        "active": false,
+        "max_jobs_per_scrape": 50,
+        "scoring_threshold": 70,
+        "budget_cap_usd": 0.5,
+        "rag_settings": {
+          "use_company_context": true,
+          "max_context_tokens": 1000
+        }
+      }
+    }
+  },
+  "scoring_thresholds": {
+    "skip": 0.4,
+    "low_conf": 0.5,
+    "mid_conf": 0.6,
+    "auto_eligible": 0.65,
+    "high_conf": 0.75,
+    "force_manual": 0.9
+  },
+  "apply_settings": {
+    "auto_apply_enabled": true,
+    "dry_run": false,
+    "max_playwright_sessions": 3,
+    "apply_delay_min_seconds": 45,
+    "apply_delay_max_seconds": 120,
+    "captcha_skip": true,
+    "captcha_skip_score_threshold": 0.7
+  },
+  "rag_settings": {
+    "chunk_size_tokens": 512,
+    "chunk_overlap_tokens": 128,
+    "top_k_results": 5,
+    "min_cosine_score": 0.4,
+    "embedding_dims_primary": 1024,
+    "embedding_dims_fallback": 768
+  },
+  "budget_settings": {
+    "total_monthly_budget_usd": 10.0,
+    "xai_monthly_budget_usd": 5.0,
+    "perplexity_monthly_budget_usd": 5.0,
+    "xai_cost_cap_per_run_usd": 0.38,
+    "llm_batch_size": 15
+  },
+  "job_filters": {
+    "exclude_seniority_keywords": [
+      "Staff",
+      "Principal",
+      "Director",
+      "VP",
+      "Head of",
+      "CTO",
+      "CEO",
+      "C-level"
+    ],
+    "minimum_ai_ml_percentage": 0.5,
+    "exclude_job_types": [
+      "Unpaid internship"
+    ],
+    "required_keywords_any": [
+      "AI",
+      "ML",
+      "machine learning",
+      "deep learning",
+      "LLM",
+      "RAG",
+      "Python",
+      "automation",
+      "data science",
+      "NLP",
+      "generative AI",
+      "artificial intelligence"
+    ]
+  }
+}
