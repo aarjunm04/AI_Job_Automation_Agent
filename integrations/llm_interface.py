@@ -519,13 +519,12 @@ class LLMInterface:
         return results
 
     # =========================================================================
-    # ASYNC COMPLETE — 5-Provider Fallback Chain
+    # ASYNC COMPLETE — Spec-Compliant Fallback Chain (caller-driven)
     # =========================================================================
-    # 1. Perplexity (llama-3.1-sonar-large) — if budget allows
-    # 2. xAI Grok (grok-beta) — if 429, fallback
-    # 3. Groq (llama-3.3-70b-versatile) — FREE
-    # 4. Cerebras (llama3.1-70b) — FREE
-    # 5. SambaNova (Meta-Llama-3.1-70B-Instruct) — FREE
+    # If caller == "scraper":
+    #   0) Perplexity → 1) Groq → 2) Cerebras
+    # Else (default: analyser/apply):
+    #   0) xAI → 1) SambaNova → 2) Cerebras
     # =========================================================================
 
     async def complete(
@@ -536,10 +535,7 @@ class LLMInterface:
         budget_remaining: Optional[float] = None,
     ) -> str:
         """
-        Execute an LLM completion with 5-provider fallback chain.
-
-        Checks budget first — if < $0.50, skips paid providers (Perplexity, xAI)
-        and goes straight to free tier (Groq, Cerebras, SambaNova).
+        Execute an LLM completion with a spec-compliant fallback chain.
 
         Args:
             prompt: The prompt to send to the LLM.
@@ -553,102 +549,174 @@ class LLMInterface:
         Raises:
             LLMExhaustedError: If all 5 providers fail.
         """
-        import httpx
+        try:
+            from tools.agentops_tools import record_fallback_event
+        except Exception:  # pragma: no cover
+            record_fallback_event = None  # type: ignore[assignment]
 
-        # Fallback chain configuration
-        # Format: (provider_name, model, api_key_env, base_url, is_paid)
-        FALLBACK_CHAIN: list[tuple[str, str, str, Optional[str], bool]] = [
-            ("perplexity", "llama-3.1-sonar-large", "PERPLEXITY_API_KEY", "https://api.perplexity.ai", True),
-            ("xai", "grok-beta", "XAI_API_KEY", "https://api.x.ai/v1", True),
-            ("groq", "llama-3.3-70b-versatile", "GROQ_API_KEY", "https://api.groq.com/openai/v1", False),
-            ("cerebras", "llama3.1-70b", "CEREBRAS_API_KEY", "https://api.cerebras.ai/v1", False),
-            ("sambanova", "Meta-Llama-3.1-70B-Instruct", "SAMBANOVA_API_KEY", "https://api.sambanova.ai/v1", False),
+        try:
+            from tools.postgres_tools import log_event
+        except Exception:  # pragma: no cover
+            log_event = None  # type: ignore[assignment]
+
+        caller = (purpose or "").strip().lower()
+        if caller != "scraper":
+            caller = caller or "analyser"
+
+        # Fallback chain configuration (provider, model, api_key_env, base_url, is_paid)
+        analyser_apply_chain: list[tuple[str, str, str, str, bool]] = [
+            (
+                "xai",
+                os.getenv("XAI_MODEL", "grok-3-mini"),
+                "XAI_API_KEY",
+                os.getenv("XAI_BASE_URL", "https://api.x.ai/v1"),
+                True,
+            ),
+            (
+                "sambanova",
+                os.getenv("SAMBANOVA_MODEL", "Meta-Llama-3.3-70B-Instruct"),
+                "SAMBANOVA_API_KEY",
+                os.getenv("SAMBANOVA_BASE_URL", "https://api.sambanova.ai/v1"),
+                False,
+            ),
+            (
+                "cerebras",
+                os.getenv("CEREBRAS_MODEL", "llama3.1-70b"),
+                "CEREBRAS_API_KEY",
+                os.getenv("CEREBRAS_BASE_URL", "https://api.cerebras.ai/v1"),
+                False,
+            ),
         ]
 
-        # Check budget — if low, skip paid providers
-        skip_paid = False
-        if budget_remaining is not None and budget_remaining < 0.50:
-            self.logger.warning(
-                "Budget remaining $%.2f < $0.50, skipping paid providers",
-                budget_remaining,
+        scraper_chain: list[tuple[str, str, str, str, bool]] = [
+            (
+                "perplexity",
+                os.getenv("PERPLEXITY_MODEL", "sonar"),
+                "PERPLEXITY_API_KEY",
+                os.getenv("PERPLEXITY_BASE_URL", "https://api.perplexity.ai"),
+                True,
+            ),
+            (
+                "groq",
+                os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile"),
+                "GROQ_API_KEY",
+                os.getenv("GROQ_BASE_URL", "https://api.groq.com/openai/v1"),
+                False,
+            ),
+            (
+                "cerebras",
+                os.getenv("CEREBRAS_MODEL", "llama3.1-70b"),
+                "CEREBRAS_API_KEY",
+                os.getenv("CEREBRAS_BASE_URL", "https://api.cerebras.ai/v1"),
+                False,
+            ),
+        ]
+
+        chain = scraper_chain if caller == "scraper" else analyser_apply_chain
+
+        # Budget gate: Level 0 only (no retries/levels attempted if blocked)
+        provider0 = chain[0][0]
+        projected_tokens_in = max(1, len(prompt) // 4)
+        projected_tokens_out = max_tokens
+        projected_cost_usd = (
+            (projected_tokens_in + projected_tokens_out) / 1000.0
+        ) * self._COST_PER_1K_TOKENS.get(provider0, 0.0)
+        if budget_remaining is not None and projected_cost_usd > budget_remaining:
+            raise BudgetExceededError(
+                f"BudgetExceededError: projected_cost={projected_cost_usd:.6f} > remaining={budget_remaining:.6f}"
             )
-            skip_paid = True
 
         last_error: Optional[Exception] = None
 
-        for provider_name, model, api_key_env, base_url, is_paid in FALLBACK_CHAIN:
-            # Skip paid providers if budget is low
-            if skip_paid and is_paid:
-                self.logger.debug("Skipping paid provider %s due to low budget", provider_name)
-                continue
-
+        for level, (provider_name, model, api_key_env, base_url, is_paid) in enumerate(chain):
             # Check if provider is marked unavailable
             if provider_name in self._unavailable:
                 self.logger.debug("Skipping unavailable provider %s", provider_name)
                 continue
 
-            # Get API key
             api_key = os.getenv(api_key_env, "").strip()
             if not api_key:
-                self.logger.debug("No API key for %s, skipping", provider_name)
-                continue
+                last_error = RuntimeError(f"Missing or empty {api_key_env}")
+            else:
+                for attempt in range(3):
+                    try:
+                        response_text = await self._call_provider(
+                            provider_name=provider_name,
+                            model=model,
+                            api_key=api_key,
+                            base_url=base_url,
+                            prompt=prompt,
+                            max_tokens=max_tokens,
+                        )
 
-            # Try this provider with 2 retries
-            for attempt in range(2):
+                        if is_paid:
+                            await self._track_cost_async(
+                                provider_name, projected_tokens_in, max_tokens
+                            )
+
+                        self.logger.info(
+                            "complete() success: caller=%s provider=%s purpose=%s tokens~%d",
+                            caller,
+                            provider_name,
+                            purpose,
+                            max_tokens,
+                        )
+                        return response_text
+                    except Exception as e:
+                        last_error = e
+                        error_str = str(e).lower()
+
+                        # Auth errors — mark unavailable
+                        if any(s in error_str for s in self._AUTH_SIGNALS):
+                            self.logger.error("Provider %s auth error: %s", provider_name, e)
+                            self._unavailable.add(provider_name)
+                            break
+
+                        if attempt == 2:
+                            break
+
+                        delay = 2 ** attempt  # 1s, 2s, 4s
+                        self.logger.warning(
+                            "Provider %s attempt %d/3 failed: %s — retrying in %ds",
+                            provider_name,
+                            attempt + 1,
+                            e,
+                            delay,
+                        )
+                        await asyncio.sleep(delay)
+
+            # Level failed after 3 retries (or missing key): log and fall through to next level
+            if last_error is not None:
+                self.logger.warning(
+                    "Provider %s failed after 3 attempts: %s", provider_name, last_error
+                )
+                if log_event is not None:
+                    try:
+                        log_event(
+                            run_batch_id="async_call",
+                            level="ERROR",
+                            event_type="llm_provider_failed",
+                            message=f"caller={caller} provider={provider_name} error={last_error}",
+                        )
+                    except Exception:  # noqa: BLE001
+                        pass
+
+            # Record fallback event when advancing to the next level
+            if level < len(chain) - 1 and record_fallback_event is not None:
+                next_provider = chain[level + 1][0]
                 try:
-                    response_text = await self._call_provider(
-                        provider_name=provider_name,
-                        model=model,
-                        api_key=api_key,
-                        base_url=base_url,
-                        prompt=prompt,
-                        max_tokens=max_tokens,
+                    record_fallback_event(
+                        agent_type="LLMInterface",
+                        from_provider=provider_name,
+                        to_provider=next_provider,
+                        run_batch_id="async_call",
+                        fallback_level=level + 1,
+                        reason=str(last_error) if last_error else "",
                     )
+                except Exception:  # noqa: BLE001
+                    pass
 
-                    # Track cost for paid providers
-                    if is_paid:
-                        await self._track_cost_async(provider_name, len(prompt) // 4, max_tokens)
-
-                    self.logger.info(
-                        "complete() success: provider=%s, purpose=%s, tokens~%d",
-                        provider_name, purpose, max_tokens,
-                    )
-                    return response_text
-
-                except Exception as e:
-                    last_error = e
-                    error_str = str(e).lower()
-
-                    # Check for quota exceeded (429)
-                    if "429" in error_str or "quota" in error_str or "rate limit" in error_str:
-                        self.logger.warning(
-                            "Provider %s quota exceeded, moving to next provider", provider_name
-                        )
-                        break  # Don't retry, move to next provider
-
-                    # Auth errors — mark unavailable
-                    if any(s in error_str for s in self._AUTH_SIGNALS):
-                        self.logger.error("Provider %s auth error: %s", provider_name, e)
-                        self._unavailable.add(provider_name)
-                        break
-
-                    # Other errors — retry once
-                    if attempt < 1:
-                        self.logger.warning(
-                            "Provider %s attempt %d failed: %s, retrying...",
-                            provider_name, attempt + 1, e
-                        )
-                        await asyncio.sleep(2)
-                    else:
-                        self.logger.warning(
-                            "Provider %s failed after 2 attempts: %s",
-                            provider_name, e
-                        )
-
-        # All providers exhausted
-        raise LLMExhaustedError(
-            f"All LLM providers exhausted. Last error: {last_error}"
-        )
+        raise RuntimeError(f"LLM fallback chain exhausted for caller={caller}")
 
     async def _call_provider(
         self,
@@ -730,6 +798,11 @@ class LLMInterface:
 
 class LLMExhaustedError(Exception):
     """Raised when all LLM providers in the fallback chain are exhausted."""
+    pass
+
+
+class BudgetExceededError(Exception):
+    """Raised when a projected LLM call exceeds the remaining budget."""
     pass
 
 
