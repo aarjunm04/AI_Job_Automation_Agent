@@ -67,9 +67,9 @@ def _get_client() -> NotionClient:
     return _notion_client
 
 
-@agentops.track_tool
 @tool
 @operation
+@agentops.track_tool
 def sync_application_to_job_tracker(
     application_id: str,
     job_post_id: str,
@@ -118,25 +118,33 @@ def sync_application_to_job_tracker(
         applied_via = "Auto"
 
         # Create page in Job Tracker DB
-        def _do_notion():
-            return client.create_job_tracker_page(
-                title=title,
-                company=company,
-                job_url=job_url,
-                stage="Applied",
-                date_applied=date_applied,
-                platform=platform,
-                applied_via=applied_via,
-                ctc=ctc,
-                notes=notes,
-                job_type=job_type,
-                location=location,
-                resume_used=resume_used,
-            )
-        
         try:
-            response = _retry_call(_do_notion)
-        except RuntimeError as e:
+            response = None
+            for attempt in range(3):
+                try:
+                    response = client.create_job_tracker_page(
+                        title=title,
+                        company=company,
+                        job_url=job_url,
+                        stage="Applied",
+                        date_applied=date_applied,
+                        platform=platform,
+                        applied_via=applied_via,
+                        ctc=ctc,
+                        notes=notes,
+                        job_type=job_type,
+                        location=location,
+                        resume_used=resume_used,
+                    )
+                    break
+                except Exception as e:
+                    if attempt == 2:
+                        logger.error("Notion create_job_tracker_page failed: %s", e)
+                        raise
+                    time.sleep(2 ** attempt)
+            if response is None:
+                return None
+        except Exception as e:
             logger.warning("Notion sync failed after retries: %s", e)
             return None
 
@@ -177,9 +185,9 @@ def sync_application_to_job_tracker(
         return json.dumps({"synced": False, "error": str(e), "db": "job_tracker"})
 
 
-@agentops.track_tool
 @tool
 @operation
+@agentops.track_tool
 def queue_job_to_applications_db(
     job_post_id: str,
     run_batch_id: str,
@@ -231,26 +239,34 @@ def queue_job_to_applications_db(
             priority = "Low"
 
         # Create page in Applications DB
-        def _do_notion():
-            return client.create_applications_page(
-                title=title,
-                company=company,
-                job_url=job_url,
-                deadline=deadline,
-                platform=platform,
-                status="Queued",
-                ctc=ctc,
-                priority=priority,
-                fit_score=fit_score,
-                job_type=job_type,
-                location=location,
-                notes=notes,
-                resume_suggested=resume_suggested,
-            )
-        
         try:
-            response = _retry_call(_do_notion)
-        except RuntimeError as e:
+            response = None
+            for attempt in range(3):
+                try:
+                    response = client.create_applications_page(
+                        title=title,
+                        company=company,
+                        job_url=job_url,
+                        deadline=deadline,
+                        platform=platform,
+                        status="Queued",
+                        ctc=ctc,
+                        priority=priority,
+                        fit_score=fit_score,
+                        job_type=job_type,
+                        location=location,
+                        notes=notes,
+                        resume_suggested=resume_suggested,
+                    )
+                    break
+                except Exception as e:
+                    if attempt == 2:
+                        logger.error("Notion create_applications_page failed: %s", e)
+                        raise
+                    time.sleep(2 ** attempt)
+            if response is None:
+                return None
+        except Exception as e:
             logger.warning("Notion sync failed after retries: %s", e)
             return None
 
@@ -294,9 +310,9 @@ def queue_job_to_applications_db(
         return json.dumps({"queued": False, "error": str(e), "db": "applications"})
 
 
-@agentops.track_tool
 @tool
 @operation
+@agentops.track_tool
 def update_notion_page_status(
     page_id: str, status: str, run_batch_id: str
 ) -> str:
@@ -314,12 +330,20 @@ def update_notion_page_status(
     try:
         client = _get_client()
 
-        def _do_notion():
-            return client.update_page_status(page_id=page_id, status=status)
-            
         try:
-            response = _retry_call(_do_notion)
-        except RuntimeError as e:
+            response = None
+            for attempt in range(3):
+                try:
+                    response = client.update_page_status(page_id=page_id, status=status)
+                    break
+                except Exception as e:
+                    if attempt == 2:
+                        logger.error("Notion update_page_status failed: %s", e)
+                        raise
+                    time.sleep(2 ** attempt)
+            if response is None:
+                return None
+        except Exception as e:
             logger.warning("Notion sync failed after retries: %s", e)
             return None
 
@@ -353,9 +377,9 @@ def update_notion_page_status(
         )
 
 
-@agentops.track_tool
 @tool
 @operation
+@agentops.track_tool
 def get_pending_manual_queue(run_batch_id: str) -> str:
     """
     Get all pending jobs from the Notion Applications database.
@@ -438,9 +462,9 @@ def get_pending_manual_queue(run_batch_id: str) -> str:
         return json.dumps([])
 
 
-@agentops.track_tool
 @tool
 @operation
+@agentops.track_tool
 def check_notion_connection(run_batch_id: str) -> str:
     """
     Check Notion API connection health.

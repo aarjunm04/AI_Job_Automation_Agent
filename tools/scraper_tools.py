@@ -32,7 +32,6 @@ from scrapers.scraper_service import (
     GLOBAL_PLAYWRIGHT_MANAGER,
     WellfoundScraper,
     WeWorkRemotelyScraper,
-    ArcDevScraper,
     NodeskScraper,
 )
 from tools.postgres_tools import upsert_job_post, log_event, get_platform_config
@@ -101,6 +100,7 @@ def _with_retry(func, max_retries: int = 3):
 
 @tool
 @operation
+@agentops.track_tool
 def run_jobspy_scrape(
     run_batch_id: str,
     search_query: str,
@@ -127,7 +127,7 @@ def run_jobspy_scrape(
         except Exception:
             allowed_countries = []
 
-        hours_old = int(os.getenv("JOBSPY_HOURS_OLD", "168"))
+        hours_old = 72
         adapter = JobSpyAdapter(
             jobs_per_site=int(results_wanted),
             concurrency=4,
@@ -194,6 +194,7 @@ def run_jobspy_scrape(
 
 @tool
 @operation
+@agentops.track_tool
 def run_rest_api_scrape(
     run_batch_id: str, platforms: str = "remoteok,himalayas"
 ) -> str:
@@ -298,6 +299,7 @@ def run_rest_api_scrape(
 
 @tool
 @operation
+@agentops.track_tool
 def run_playwright_scrape(
     run_batch_id: str, platform: str, max_jobs: int = 30
 ) -> str:
@@ -306,14 +308,14 @@ def run_playwright_scrape(
 
     Args:
         run_batch_id: UUID of the run batch.
-        platform: Platform name (wellfound, weworkremotely, arcdev, nodesk).
+        platform: Platform name (wellfound, weworkremotely, nodesk).
         max_jobs: Maximum number of jobs to scrape.
 
     Returns:
         JSON string with scraping results and statistics.
     """
     try:
-        playwright_timeout_ms = int(os.getenv("PLAYWRIGHT_TIMEOUT_MS", "60000"))
+        playwright_timeout_ms = 30000
         playwright_timeout_s = max(1.0, playwright_timeout_ms / 1000.0)
 
         # Get proxy from environment
@@ -325,7 +327,6 @@ def run_playwright_scrape(
         scraper_map = {
             "wellfound": WellfoundScraper,
             "weworkremotely": WeWorkRemotelyScraper,
-            "arcdev": ArcDevScraper,
             "nodesk": NodeskScraper,
         }
 
@@ -439,6 +440,7 @@ def run_playwright_scrape(
 
 @tool
 @operation
+@agentops.track_tool
 def run_serpapi_scrape(
     run_batch_id: str,
     query: str,
@@ -551,6 +553,7 @@ def run_serpapi_scrape(
 
 @tool
 @operation
+@agentops.track_tool
 def run_safety_net_scrape(run_batch_id: str, current_job_count: int) -> str:
     """
     Run safety-net scrapers (Nodesk) if minimum job count not met.
@@ -637,6 +640,7 @@ def run_safety_net_scrape(run_batch_id: str, current_job_count: int) -> str:
 
 @tool
 @operation
+@agentops.track_tool
 def normalise_and_dedup(run_batch_id: str) -> str:
     """
     Normalize and deduplicate jobs for the current run batch.
@@ -726,6 +730,7 @@ def normalise_and_dedup(run_batch_id: str) -> str:
 
 @tool
 @operation
+@agentops.track_tool
 def get_scrape_summary(run_batch_id: str) -> str:
     """
     Get summary statistics for the current scrape run.

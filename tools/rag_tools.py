@@ -14,7 +14,7 @@ from agentops.sdk.decorators import agent, operation
 from tools.postgres_tools import _fetch_user_config
 
 # RAG server connection — set in docker-compose environment block
-RAG_SERVER_URL: str = os.getenv("RAG_SERVER_URL", "http://rag-server:8090")
+RAG_SERVER_URL: str = os.getenv("RAG_SERVER_URL", "http://ai_rag_server:8090")
 RAG_API_KEY: str = os.getenv("SCRAPER_SERVICE_API_KEY", "")
 
 
@@ -59,9 +59,9 @@ def _safe_json_dumps(payload: Dict[str, Any]) -> str:
         return json.dumps({"error": "serialization_failed"})
 
 
-@agentops.track_tool
 @tool
 @operation
+@agentops.track_tool
 def query_resume_match(job_description: str, job_title: str, required_skills: str) -> str:
     """Suggest the best resume for a given job description.
 
@@ -141,9 +141,9 @@ def query_resume_match(job_description: str, job_title: str, required_skills: st
     })
 
 
-@agentops.track_tool
 @tool
 @operation
+@agentops.track_tool
 def get_resume_context(resume_filename: str, job_description: str) -> str:
     """Return formatted resume text chunks relevant to the given job description.
 
@@ -188,9 +188,9 @@ def get_resume_context(resume_filename: str, job_description: str) -> str:
         return ""
 
 
-@agentops.track_tool
 @tool
 @operation
+@agentops.track_tool
 def embed_job_description(job_url: str, job_description: str) -> str:
     """Trigger embedding of a job description via the RAG server.
 
@@ -235,9 +235,9 @@ def embed_job_description(job_url: str, job_description: str) -> str:
         )
 
 
-@agentops.track_tool
 @tool
 @operation
+@agentops.track_tool
 def get_resume_pdf_path(resume_filename: str) -> str:
     """
     Return the absolute path and existence flag for a given resume PDF.
@@ -271,4 +271,3 @@ def get_resume_pdf_path(resume_filename: str) -> str:
             "filename": resume_filename,
         }
         return _safe_json_dumps(response)
-

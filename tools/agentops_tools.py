@@ -62,21 +62,29 @@ def _log_to_db(
             
         conn.autocommit = False
         cursor = conn.cursor()
-        cursor.execute(
-            """
-            INSERT INTO audit_logs
-                (run_batch_id, level, event_type, message, job_post_id, application_id)
-            VALUES (%s, %s, %s, %s, %s, %s)
-            """,
-            (
-                run_batch_id,
-                level,
-                event_type,
-                message,
-                job_post_id or None,
-                application_id or None,
-            ),
-        )
+        for attempt in range(3):
+            try:
+                cursor.execute(
+                    """
+                    INSERT INTO audit_logs
+                        (run_batch_id, level, event_type, message, job_post_id, application_id)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        run_batch_id,
+                        level,
+                        event_type,
+                        message,
+                        job_post_id or None,
+                        application_id or None,
+                    ),
+                )
+                break
+            except psycopg2.OperationalError as e:
+                if attempt == 2:
+                    logger.error("DB execute failed after 3 attempts: %s", e)
+                    raise
+                time.sleep(2 ** attempt)
         conn.commit()
     except Exception as exc:  # noqa: BLE001
         if conn:
@@ -95,6 +103,7 @@ def _log_to_db(
 
 @tool
 @operation
+@agentops.track_tool
 def record_agent_error(
     agent_type: str,
     error_message: str,
@@ -170,6 +179,7 @@ def record_agent_error(
 
 @tool
 @operation
+@agentops.track_tool
 def record_fallback_event(
     agent_type: str,
     from_provider: str,

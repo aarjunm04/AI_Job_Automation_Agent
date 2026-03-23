@@ -17,6 +17,7 @@ from functools import wraps
 
 import psycopg2
 import psycopg2.extras
+import agentops
 from psycopg2.extensions import connection as PgConnection
 from utils.db_utils import get_db_conn
  
@@ -135,6 +136,7 @@ def _fetch_user_config() -> dict[str, Any]:
 
 @tool
 @operation
+@agentops.track_tool
 def upsert_job_post(
     run_batch_id: str,
     source_platform: str,
@@ -168,29 +170,36 @@ def upsert_job_post(
             cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
             posted_at_value = posted_at if posted_at else None
-
-            cursor.execute(
-                """
-                INSERT INTO jobs (run_batch_id, source_platform, title, company, url, location, posted_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (url) DO UPDATE SET
-                    title = EXCLUDED.title,
-                    company = EXCLUDED.company,
-                    location = EXCLUDED.location,
-                    source_platform = EXCLUDED.source_platform,
-                    run_batch_id = EXCLUDED.run_batch_id
-                RETURNING id, (xmax = 0) AS inserted
-                """,
-                (
-                    run_batch_id,
-                    source_platform,
-                    title,
-                    company,
-                    url,
-                    location,
-                    posted_at_value,
-                ),
-            )
+            for attempt in range(3):
+                try:
+                    cursor.execute(
+                        """
+                        INSERT INTO jobs (run_batch_id, source_platform, title, company, url, location, posted_at)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (url) DO UPDATE SET
+                            title = EXCLUDED.title,
+                            company = EXCLUDED.company,
+                            location = EXCLUDED.location,
+                            source_platform = EXCLUDED.source_platform,
+                            run_batch_id = EXCLUDED.run_batch_id
+                        RETURNING id, (xmax = 0) AS inserted
+                        """,
+                        (
+                            run_batch_id,
+                            source_platform,
+                            title,
+                            company,
+                            url,
+                            location,
+                            posted_at_value,
+                        ),
+                    )
+                    break
+                except psycopg2.OperationalError as e:
+                    if attempt == 2:
+                        logger.error("DB execute failed after 3 attempts: %s", e)
+                        raise
+                    time.sleep(2 ** attempt)
 
             result = cursor.fetchone()
             conn.commit()
@@ -221,6 +230,7 @@ def upsert_job_post(
 
 @tool
 @operation
+@agentops.track_tool
 def save_job_score(
     job_post_id: str,
     resume_id: str,
@@ -285,6 +295,7 @@ def save_job_score(
 
 @tool
 @operation
+@agentops.track_tool
 def create_application(
     job_post_id: str,
     resume_id: str,
@@ -398,6 +409,7 @@ def create_application(
 
 @tool
 @operation
+@agentops.track_tool
 def update_application_status(
     application_id: str, status: str, error_code: str = ""
 ) -> str:
@@ -463,6 +475,7 @@ def update_application_status(
 
 @tool
 @operation
+@agentops.track_tool
 def create_run_batch(run_index_in_week: int) -> str:
     """
     Create a new run batch for the current date.
@@ -524,6 +537,7 @@ def create_run_batch(run_index_in_week: int) -> str:
 
 @tool
 @operation
+@agentops.track_tool
 def update_run_batch_stats(
     run_batch_id: str, jobs_discovered: int, jobs_auto_applied: int, jobs_queued: int
 ) -> str:
@@ -592,6 +606,7 @@ def update_run_batch_stats(
 
 @tool
 @operation
+@agentops.track_tool
 def log_event(
     run_batch_id: str,
     level: str,
@@ -653,6 +668,7 @@ def log_event(
 
 @tool
 @operation
+@agentops.track_tool
 def get_queued_jobs(limit: int = 50) -> str:
     """
     Retrieve queued jobs ordered by priority and queue time.
@@ -731,6 +747,7 @@ def get_queued_jobs(limit: int = 50) -> str:
 
 @tool
 @operation
+@agentops.track_tool
 def get_platform_config(platform: str) -> str:
     """Retrieve per-platform rate-limit config from ``users.platform_settings`` JSONB column.
 
@@ -774,6 +791,7 @@ def get_platform_config(platform: str) -> str:
 
 @tool
 @operation
+@agentops.track_tool
 def get_run_stats(run_batch_id: str) -> str:
     """
     Retrieve run batch statistics including error count.
@@ -849,6 +867,7 @@ def get_run_stats(run_batch_id: str) -> str:
 
 @tool
 @operation
+@agentops.track_tool
 def get_recent_applications(limit: int = 20) -> str:
     """
     Retrieve most recent application records.
@@ -875,6 +894,7 @@ def get_recent_applications(limit: int = 20) -> str:
 
 @tool
 @operation
+@agentops.track_tool
 def get_pending_manual_queue(limit: int = 50) -> str:
     """
     Retrieve applications marked as manual_queued.

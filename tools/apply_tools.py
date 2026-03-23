@@ -53,6 +53,7 @@ import agentops
 from agentops.sdk.decorators import agent, operation
 import psycopg2
 import psycopg2.extras
+import requests
 from crewai.tools import tool
 from playwright.async_api import Page, TimeoutError as PlaywrightTimeoutError, async_playwright
 
@@ -131,9 +132,9 @@ def _get_proxy() -> Optional[dict[str, str]]:
 # ---------------------------------------------------------------------------
 # TOOL 1 — ATS platform detection (Playwright + ATSDetector)
 # ---------------------------------------------------------------------------
-@agentops.track_tool
 @tool
 @operation
+@agentops.track_tool
 def detect_ats_platform(job_url: str, run_batch_id: str) -> str:
     """Detect the ATS platform powering a job application page.
 
@@ -244,9 +245,9 @@ def detect_ats_platform(job_url: str, run_batch_id: str) -> str:
 # ---------------------------------------------------------------------------
 # TOOL 2 — Proof of submission capture (UNCHANGED)
 # ---------------------------------------------------------------------------
-@agentops.track_tool
 @tool
 @operation
+@agentops.track_tool
 def capture_proof(page_html: str, page_url: str, job_url: str) -> str:
     """Extract proof-of-submission signals from a post-apply page snapshot.
 
@@ -353,9 +354,9 @@ def capture_proof(page_html: str, page_url: str, job_url: str) -> str:
 # ---------------------------------------------------------------------------
 # TOOL 3 — CAPTCHA detection (UNCHANGED)
 # ---------------------------------------------------------------------------
-@agentops.track_tool
 @tool
 @operation
+@agentops.track_tool
 def check_captcha_present(page_html: str, job_url: str) -> str:
     """Detect CAPTCHA or bot-challenge presence in page HTML.
 
@@ -829,9 +830,9 @@ async def _run_apply(
 # ---------------------------------------------------------------------------
 # TOOL 4 — Fill standard form (sync wrapper around _run_apply)
 # ---------------------------------------------------------------------------
-@agentops.track_tool
 @tool
 @operation
+@agentops.track_tool
 def fill_standard_form(
     job_url: str,
     job_post_id: str,
@@ -961,9 +962,9 @@ def fill_standard_form(
 # ---------------------------------------------------------------------------
 # TOOL 5 — Per-run apply summary (UNCHANGED)
 # ---------------------------------------------------------------------------
-@agentops.track_tool
 @tool
 @operation
+@agentops.track_tool
 def get_apply_summary(run_batch_id: str) -> str:
     """Aggregate application counts by status for a given run batch.
 
@@ -1048,9 +1049,9 @@ def get_apply_summary(run_batch_id: str) -> str:
 # ---------------------------------------------------------------------------
 # TOOL 6 — Route and Apply (HTTP call to apply_service)
 # ---------------------------------------------------------------------------
-@agentops.track_tool
 @tool
 @operation
+@agentops.track_tool
 def route_and_apply(
     job_id: str,
     job_url: str,
@@ -1081,9 +1082,10 @@ def route_and_apply(
     Returns:
         JSON string with apply result from apply_service.
     """
-    import requests
-    
-    apply_service_url = os.getenv("SCRAPER_SERVICE_URL", "http://playwright-apply:8001")
+    apply_service_url = os.getenv(
+        "AUTO_APPLY_SERVICE_URL",
+        "http://ai_auto_apply:8003",
+    )
     
     # Detect platform from URL if not provided
     if not platform:
@@ -1104,18 +1106,25 @@ def route_and_apply(
             "company": company,
         }
         
-        def _do_post():
-            return requests.post(
-                f"{apply_service_url}/apply",
-                json=payload,
-                timeout=120,  # 2 minute timeout for Playwright operations
-            )
-            
-        try:
-            response = _retry_call(_do_post)
-        except RuntimeError as e:
-            logger.error("route_and_apply: %s", e)
-            return json.dumps({"success": False, "error": str(e)})
+        response = None
+        url = f"{apply_service_url}/apply"
+        for attempt in range(3):
+            try:
+                response = requests.post(
+                    url,
+                    json=payload,
+                    timeout=120,  # 2 minute timeout for Playwright operations
+                )
+                if response.status_code >= 500:
+                    response.raise_for_status()
+                break
+            except requests.RequestException as e:
+                if attempt == 2:
+                    logger.error("requests.post failed after 3 attempts: %s", e)
+                    raise
+                time.sleep(2 ** attempt)
+        if response is None:
+            return json.dumps({"success": False, "error": "apply_service_no_response"})
         
         if response.status_code == 200:
             result = response.json()
@@ -1168,9 +1177,9 @@ def route_and_apply(
 # ---------------------------------------------------------------------------
 # TOOL 7 — Save Application Result to Postgres
 # ---------------------------------------------------------------------------
-@agentops.track_tool
 @tool
 @operation
+@agentops.track_tool
 def save_application_result(
     job_id: str,
     user_id: str,
@@ -1249,9 +1258,9 @@ def save_application_result(
 # ---------------------------------------------------------------------------
 # TOOL 8 — Save to Manual Queue
 # ---------------------------------------------------------------------------
-@agentops.track_tool
 @tool
 @operation
+@agentops.track_tool
 def save_to_queue(
     job_id: str,
     user_id: str,
@@ -1334,9 +1343,9 @@ def save_to_queue(
 # ---------------------------------------------------------------------------
 # TOOL 9 — Get Best Resume via RAG
 # ---------------------------------------------------------------------------
-@agentops.track_tool
 @tool
 @operation
+@agentops.track_tool
 def get_best_resume(
     job_title: str,
     job_description: str,
@@ -1355,9 +1364,10 @@ def get_best_resume(
     Returns:
         JSON string with resume_path and match_score, or error.
     """
-    import requests
-    
-    rag_service_url = os.getenv("RAG_SERVICE_URL", "http://localhost:8002")
+    rag_service_url = os.getenv(
+        "RAG_SERVER_URL",
+        "http://ai_rag_server:8090",
+    )
     default_resume = os.getenv("DEFAULT_RESUME", "AarjunGen.pdf")
     
     try:
@@ -1367,17 +1377,25 @@ def get_best_resume(
             "company": company,
         }
         
-        def _do_post():
-            return requests.post(
-                f"{rag_service_url}/match",
-                json=payload,
-                timeout=30,
-            )
-        try:
-            response = _retry_call(_do_post)
-        except RuntimeError as e:
-            logger.error("get_best_resume: %s", e)
-            return json.dumps({"success": False, "error": str(e)})
+        response = None
+        url = f"{rag_service_url}/match"
+        for attempt in range(3):
+            try:
+                response = requests.post(
+                    url,
+                    json=payload,
+                    timeout=30,
+                )
+                if response.status_code >= 500:
+                    response.raise_for_status()
+                break
+            except requests.RequestException as e:
+                if attempt == 2:
+                    logger.error("requests.post failed after 3 attempts: %s", e)
+                    raise
+                time.sleep(2 ** attempt)
+        if response is None:
+            return json.dumps({"success": False, "error": "rag_service_no_response"})
         
         if response.status_code == 200:
             result = response.json()
@@ -1431,9 +1449,9 @@ def get_best_resume(
 # ---------------------------------------------------------------------------
 # TOOL 10 — Verify Apply Budget
 # ---------------------------------------------------------------------------
-@agentops.track_tool
 @tool
 @operation
+@agentops.track_tool
 def verify_apply_budget(
     projected_cost: float,
     run_batch_id: str,

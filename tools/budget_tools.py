@@ -12,14 +12,43 @@ import os
 import json
 import logging
 import time
+from typing import Any
 
-import psycopg2
-import psycopg2.extras
-from crewai.tools import tool
-import agentops
-from agentops.sdk.decorators import agent, operation
+try:
+    import psycopg2
+    import psycopg2.extras
+except ModuleNotFoundError:  # pragma: no cover
+    psycopg2 = None  # type: ignore[assignment]
 
 from utils.db_utils import get_db_conn
+
+try:
+    from crewai.tools import tool
+except ModuleNotFoundError:  # pragma: no cover
+    def tool(func=None, *args, **kwargs):  # type: ignore[override]
+        if callable(func):
+            return func
+        def decorator(f):
+            return f
+        return decorator
+
+try:
+    import agentops  # type: ignore
+    from agentops.sdk.decorators import agent, operation  # type: ignore
+except ModuleNotFoundError:  # pragma: no cover
+    agentops = None  # type: ignore[assignment]
+    def agent(func=None, *args, **kwargs):  # type: ignore[override]
+        if callable(func):
+            return func
+        def decorator(f):
+            return f
+        return decorator
+    def operation(func=None, *args, **kwargs):  # type: ignore[override]
+        if callable(func):
+            return func
+        def decorator(f):
+            return f
+        return decorator
 
 # Module-level logger
 logger = logging.getLogger(__name__)
@@ -42,6 +71,10 @@ __all__ = [
     "get_cost_summary",
 ]
 
+def _get_conn() -> Any:
+    """Return a live Postgres connection via the central db_utils factory."""
+    return get_db_conn()
+
 
 def _log_to_db(
     run_batch_id: str, level: str, event_type: str, message: str
@@ -57,7 +90,7 @@ def _log_to_db(
     """
     conn = None
     try:
-        conn = get_db_conn()
+        conn = _get_conn()
         if not conn:
             logger.warning("budget_tools._log_to_db: DB connection failed — skipping DB log")
             return
@@ -65,13 +98,30 @@ def _log_to_db(
         conn.autocommit = False
         cursor = conn.cursor()
 
-        cursor.execute(
-            """
-            INSERT INTO audit_logs (run_batch_id, level, event_type, message)
-            VALUES (%s, %s, %s, %s)
-            """,
-            (run_batch_id, level, event_type, message),
-        )
+        if psycopg2 is None:
+            cursor.execute(
+                """
+                INSERT INTO audit_logs (run_batch_id, level, event_type, message)
+                VALUES (%s, %s, %s, %s)
+                """,
+                (run_batch_id, level, event_type, message),
+            )
+        else:
+            for attempt in range(3):
+                try:
+                    cursor.execute(
+                        """
+                        INSERT INTO audit_logs (run_batch_id, level, event_type, message)
+                        VALUES (%s, %s, %s, %s)
+                        """,
+                        (run_batch_id, level, event_type, message),
+                    )
+                    break
+                except psycopg2.OperationalError as e:
+                    if attempt == 2:
+                        logger.error("DB execute failed after 3 attempts: %s", e)
+                        raise
+                    time.sleep(2 ** attempt)
 
         conn.commit()
     except Exception as e:
@@ -85,6 +135,7 @@ def _log_to_db(
 
 @tool
 @operation
+@agentops.track_tool
 def reset_run_cost_tracker(run_batch_id: str) -> str:
     """
     Reset the run cost tracker for a new run.
@@ -110,6 +161,7 @@ def reset_run_cost_tracker(run_batch_id: str) -> str:
 
 @tool
 @operation
+@agentops.track_tool
 def record_llm_cost(
     provider: str, cost_usd: float, agent_type: str, run_batch_id: str
 ) -> str:
@@ -160,6 +212,7 @@ def record_llm_cost(
 
 @tool
 @operation
+@agentops.track_tool
 def check_xai_run_cap(run_batch_id: str) -> str:
     """
     Check if the xAI run cap has been exceeded.
@@ -215,6 +268,7 @@ def check_xai_run_cap(run_batch_id: str) -> str:
 
 @tool
 @operation
+@agentops.track_tool
 def check_monthly_budget(run_batch_id: str) -> str:
     """
     Check if the monthly budget has been exceeded.
@@ -230,10 +284,17 @@ def check_monthly_budget(run_batch_id: str) -> str:
     """
     conn = None
     try:
-        conn = get_db_conn()
+        conn = _get_conn()
         if not conn:
             logger.error("budget_tools.check_monthly_budget: DB connection failed.")
             return json.dumps({"error": "db_connection_failed"})
+
+        if psycopg2 is None:
+            logger.error(
+                "budget_tools.check_monthly_budget: psycopg2 is not installed in the active "
+                "Python environment."
+            )
+            return json.dumps({"error": "psycopg2_missing"})
 
         cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
@@ -295,6 +356,7 @@ def check_monthly_budget(run_batch_id: str) -> str:
 
 @tool
 @operation
+@agentops.track_tool
 def get_cost_summary(run_batch_id: str) -> str:
     """
     Get current run cost summary.
