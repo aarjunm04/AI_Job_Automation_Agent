@@ -8,9 +8,17 @@ from __future__ import annotations
 
 import logging
 import os
+from typing import Any, TYPE_CHECKING
 
-import psycopg2
-from psycopg2.extensions import connection as PgConnection
+try:
+    import psycopg2  # type: ignore
+except ModuleNotFoundError:  # pragma: no cover
+    psycopg2 = None  # type: ignore[assignment]
+
+if TYPE_CHECKING:
+    from psycopg2.extensions import connection as PgConnection
+else:
+    PgConnection = Any  # type: ignore[misc,assignment]
 
 __all__ = ["get_db_conn"]
 
@@ -43,6 +51,11 @@ def get_db_conn() -> PgConnection:
             "Database URL is not configured.  "
             "Set LOCAL_POSTGRES_URL or SUPABASE_URL in java.env and "
             "ACTIVE_DB=local|supabase."
+        )
+    if psycopg2 is None:
+        raise RuntimeError(
+            "psycopg2 is not installed in the active Python environment. "
+            "Install psycopg2 (or psycopg2-binary) to enable Postgres connectivity."
         )
     try:
         conn = psycopg2.connect(db_url)
