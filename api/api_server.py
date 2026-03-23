@@ -23,11 +23,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator
 import uvicorn
+import asyncio
 import psycopg2
 import psycopg2.extras
 import chromadb
 
 from config.settings import db_config, run_config, api_config
+from utils.db_utils import get_db_conn
 from tools.postgres_tools import (
     get_run_stats,
     get_recent_applications,
@@ -39,7 +41,7 @@ from tools.budget_tools import get_cost_summary
 from integrations.notion import NotionClient
 
 logger = logging.getLogger(__name__)
-API_KEY: str = os.getenv("RAG_SERVER_API_KEY", "")
+API_KEY: str = os.getenv("SCRAPER_SERVICE_API_KEY", "")
 
 __all__ = ["app", "main"]
 
@@ -90,192 +92,14 @@ class ApplicationStatusUpdate(BaseModel):
 
 
 class HealthResponse(BaseModel):
-    """Response model for the health check endpoint.
-
-    Attributes:
-        status: Overall server health — ``"healthy"`` or ``"degraded"``.
-        timestamp: UTC ISO8601 timestamp of the health check.
-        db_connected: Whether the Postgres database is reachable.
-        pipeline_mode: ``"dry_run"`` or ``"live"`` based on run_config.
-        dry_run: Raw boolean dry-run flag from run_config.
-        version: API server version string.
-    """
-
     status: str
     timestamp: str
-    db_connected: bool
-    pipeline_mode: str
-    dry_run: bool
-    version: str = "1.0.0"
+    version: str
+    db: str
 
 
 # ---------------------------------------------------------------------------
 # Chrome Extension Pydantic Models
-# ---------------------------------------------------------------------------
-
-
-class MatchRequest(BaseModel):
-    """Request payload for the /match endpoint (Chrome Extension).
-
-    Attributes:
-        job_url: Full URL of the job posting page.
-        jd_text: Job description text extracted by content script.
-    """
-
-    job_url: str
-    jd_text: str = Field(default="", alias="jd_text")
-
-    @field_validator("job_url")
-    @classmethod
-    def validate_url(cls, v: str) -> str:
-        v = v.strip()
-        if not v.startswith(("http://", "https://")):
-            raise ValueError("job_url must be a valid HTTP/HTTPS URL")
-        return v
-
-    @field_validator("jd_text")
-    @classmethod
-    def validate_jd(cls, v: str) -> str:
-        return v.strip()[:3000]
-
-
-class MatchResponse(BaseModel):
-    """Response payload for the /match endpoint.
-
-    Attributes:
-        resume_suggested: Filename of the recommended resume variant.
-        similarity_score: ChromaDB cosine similarity (0.0–1.0).
-        fit_score: Composite fit score (0.0–1.0).
-        match_reasoning: Human-readable reasoning string.
-        talking_points: List of interview preparation talking points.
-        autofill_ready: Whether autofill is available.
-    """
-
-    resume_suggested: str
-    similarity_score: float
-    fit_score: float
-    match_reasoning: str
-    talking_points: List[str]
-    autofill_ready: bool
-
-
-class ExtDetectedField(BaseModel):
-    """Schema for a single form field detected by the Chrome Extension.
-
-    Attributes:
-        index: Positional index in scan order.
-        id: Element id attribute.
-        name: Element name attribute.
-        placeholder: Element placeholder text.
-        label_text: Resolved label text.
-        field_type: Classified semantic type.
-        tag_name: HTML tag name (INPUT, SELECT, TEXTAREA).
-        react_controlled: Whether the field uses React.
-        shadow_dom: Whether the field is inside a shadow root.
-        element_ref_index: Index into live element reference array.
-        ats_hint: Detected ATS platform hint.
-    """
-
-    index: int = 0
-    id: str = ""
-    name: str = ""
-    placeholder: str = ""
-    label_text: str = ""
-    field_type: str = "text"
-    tag_name: str = "INPUT"
-    react_controlled: bool = False
-    shadow_dom: bool = False
-    element_ref_index: int = 0
-    ats_hint: str = "unknown"
-
-
-class AutofillRequest(BaseModel):
-    """Request payload for the /autofill endpoint.
-
-    Attributes:
-        job_url: Full URL of the job posting page.
-        detected_fields: List of form fields detected by content script.
-    """
-
-    job_url: str
-    detected_fields: List[ExtDetectedField]
-
-
-class AutofillResponse(BaseModel):
-    """Response payload for the /autofill endpoint.
-
-    Attributes:
-        field_mappings: Map of field id/name to profile value.
-        unmapped_fields: List of field keys that could not be mapped.
-        mapped_count: Number of fields successfully mapped.
-    """
-
-    field_mappings: Dict[str, str]
-    unmapped_fields: List[str]
-    mapped_count: int
-
-
-class QueueCountResponse(BaseModel):
-    """Response payload for the /queue-count endpoint.
-
-    Attributes:
-        count: Number of pending manual-queue applications.
-    """
-
-    count: int
-
-
-class LogApplicationRequest(BaseModel):
-    """Request payload for the /log-application endpoint.
-
-    Attributes:
-        job_url: Full URL of the job posting that was applied to.
-        resume_used: Filename of the resume variant submitted.
-        platform: Job platform name.
-        applied_at: ISO8601 timestamp of when the user submitted.
-        notes: Optional free-text notes from the user.
-    """
-
-    job_url: str
-    resume_used: str
-    platform: str
-    applied_at: str
-    notes: Optional[str] = None
-
-    @field_validator("job_url")
-    @classmethod
-    def validate_url(cls, v: str) -> str:
-        v = v.strip()
-        if not v.startswith(("http://", "https://")):
-            raise ValueError("job_url must be a valid HTTP/HTTPS URL")
-        return v
-
-    @field_validator("applied_at")
-    @classmethod
-    def validate_timestamp(cls, v: str) -> str:
-        try:
-            datetime.fromisoformat(v.replace("Z", "+00:00"))
-        except ValueError:
-            raise ValueError("applied_at must be a valid ISO8601 timestamp")
-        return v
-
-
-class LogApplicationResponse(BaseModel):
-    """Response payload for the /log-application endpoint.
-
-    Attributes:
-        application_id: UUID of the created application record.
-        notion_page_id: Notion page ID (empty string if sync failed).
-        status: Always "success" on successful completion.
-    """
-
-    application_id: str
-    notion_page_id: str
-    status: str
-
-
-# ---------------------------------------------------------------------------
-# Auth Dependencies
 # ---------------------------------------------------------------------------
 
 
@@ -305,33 +129,7 @@ def verify_api_key(x_api_key: str = Header(..., alias="X-API-Key")) -> str:
     return x_api_key
 
 
-def verify_bearer_token(
-    authorization: str = Header("", alias="Authorization"),
-) -> bool:
-    """Verify Bearer token from the Chrome Extension.
-
-    Validates the ``Authorization: Bearer <token>`` header against
-    ``FASTAPI_API_KEY`` from the environment. When ``FASTAPI_API_KEY`` is
-    not set, authentication is disabled for local development.
-
-    Args:
-        authorization: Authorization header value.
-
-    Returns:
-        True on successful verification.
-
-    Raises:
-        HTTPException: 401 Unauthorized if the token does not match.
-    """
-    fastapi_key: str = os.getenv("FASTAPI_API_KEY", "")
-    if not fastapi_key:
-        logger.warning("FASTAPI_API_KEY not set — bearer auth disabled")
-        return True
-    expected: str = f"Bearer {fastapi_key}"
-    if authorization != expected:
-        raise HTTPException(status_code=401, detail="Invalid API key")
-    return True
-
+# Removed Bearer token auth logic
 
 # ---------------------------------------------------------------------------
 # Lifespan
@@ -392,33 +190,30 @@ app.add_middleware(
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
-
 class MatchRequest(BaseModel):
-    job_url: str
-    job_title: str
-    job_description: str
-    resume_label: str | None = None
+    title: str
+    company: str
+    description: str
+    url: str
 
 class MatchResponse(BaseModel):
     fit_score: float
+    resume_id: str
+    talking_points: list[str]
     route: str
-    reason: str
-    resume_label: str
-    scored_at: str
 
 @app.post("/match", response_model=MatchResponse)
-async def match(req: MatchRequest) -> MatchResponse:
+async def match(req: MatchRequest, _: str = Depends(verify_api_key)) -> MatchResponse:
     """Score a job against the best matching resume via RAG."""
     try:
         from rag_systems.rag_pipeline import create_default_pipeline
         from rag_systems.chromadb_store import ChromaStore
         import asyncio
-        import datetime
 
         def _sync_match():
             store = ChromaStore()
             pipeline = create_default_pipeline(store)
-            vec = pipeline.embed_query(req.job_description)
+            vec = pipeline.embed_query(req.description)
             anchors = pipeline.get_top_resume_anchors(vec, k=1)
             
             fit_score = 0.5
@@ -428,21 +223,17 @@ async def match(req: MatchRequest) -> MatchResponse:
                 fit_score = max(0.0, min(1.0, round(1.0 - dist, 4) * 0.85 + 0.10))
                 resume_label = anchors["metadatas"][0][0].get("filename", "Aarjun_Gen.pdf")
             
-            route = "manual_review"
-            reason = "Moderate match"
+            route = "manual"
             if fit_score >= 0.75:
-                route = "auto_apply"
-                reason = "Strong match"
+                route = "auto"
             elif fit_score < 0.45:
                 route = "skip"
-                reason = "Weak match"
                 
             return {
                 "fit_score": float(fit_score),
-                "route": route,
-                "reason": reason,
-                "resume_label": resume_label,
-                "scored_at": datetime.datetime.utcnow().isoformat() + "Z"
+                "resume_id": resume_label,
+                "talking_points": [],
+                "route": route
             }
 
         loop = asyncio.get_event_loop()
@@ -453,79 +244,66 @@ async def match(req: MatchRequest) -> MatchResponse:
         raise HTTPException(status_code=500, detail=str(exc))
 
 class AutofillRequest(BaseModel):
-    job_url: str
-    ats_platform: str = ""
-    detected_fields: list | None = None
+    job_id: str
+    platform: str
+    url: str
 
 class AutofillResponse(BaseModel):
-    first_name: str
-    last_name: str
-    email: str
-    phone: str
-    linkedin_url: str
-    resume_pdf_path: str
-    cover_letter: str | None = None
+    fields: dict[str, str]
 
 @app.post("/autofill", response_model=AutofillResponse)
-async def autofill(req: AutofillRequest) -> AutofillResponse:
+async def autofill(req: AutofillRequest, _: str = Depends(verify_api_key)) -> AutofillResponse:
     """Return candidate profile for Chrome Extension form pre-fill."""
     try:
         return AutofillResponse(
-            first_name=os.getenv("CANDIDATE_FIRST_NAME", ""),
-            last_name=os.getenv("CANDIDATE_LAST_NAME", ""),
-            email=os.getenv("CANDIDATE_EMAIL", ""),
-            phone=os.getenv("CANDIDATE_PHONE", ""),
-            linkedin_url=os.getenv("CANDIDATE_LINKEDIN_URL", ""),
-            resume_pdf_path=os.getenv("RESUME_PDF_PATH", ""),
-            cover_letter=None,
+            fields={
+                "first_name": os.getenv("CANDIDATE_FIRST_NAME", ""),
+                "last_name": os.getenv("CANDIDATE_LAST_NAME", ""),
+                "email": os.getenv("CANDIDATE_EMAIL", ""),
+                "phone": os.getenv("CANDIDATE_PHONE", ""),
+                "linkedin_url": os.getenv("CANDIDATE_LINKEDIN_URL", ""),
+                "resume_pdf_path": os.getenv("RESUME_PDF_PATH", ""),
+            }
         )
     except Exception as exc:
         logger.error("/autofill failed: %s", exc)
         raise HTTPException(status_code=500, detail=str(exc))
 
 class LogApplicationRequest(BaseModel):
-    job_post_id: str = ""
-    job_url: str = ""
-    platform: str = ""
-    status: str = ""
-    mode: str = ""
-    resume_used: str | None = None
-    applied_at: str | None = None
-    resume_label: str | None = None
-    error_code: str | None = None
+    job_id: str
+    platform: str
+    url: str
+    status: str
+    resume_id: str
+    user_id: str
 
 class LogApplicationResponse(BaseModel):
-    application_id: str
+    id: str
     status: str
-    logged_at: str
 
-@app.post("/log-application", response_model=LogApplicationResponse)
-async def log_application(req: LogApplicationRequest) -> LogApplicationResponse:
+@app.post("/log_application", response_model=LogApplicationResponse)
+async def log_application(req: LogApplicationRequest, _: str = Depends(verify_api_key)) -> LogApplicationResponse:
     """Log a job application from the Chrome Extension to Postgres."""
     try:
-        from utils.db_utils import get_db_conn
-        conn = get_db_conn()
+        conn = await asyncio.to_thread(get_db_conn)
         try:
             with conn:
                 with conn.cursor() as cur:
-                    job_id = req.job_post_id or req.job_url
-                    res_label = req.resume_label or req.resume_used
                     # On conflict do nothing
                     cur.execute(
                         """INSERT INTO applications
                            (job_post_id, user_id, mode, status,
-                            platform, error_code, resume_used)
-                           VALUES (%s, %s, %s, %s, %s, %s, %s)
+                            platform, resume_used)
+                           VALUES (%s, %s, %s, %s, %s, %s)
                            ON CONFLICT DO NOTHING
-                           RETURNING id, applied_at""",
+                           RETURNING id""",
                         (
-                            job_id,
-                            os.getenv("CANDIDATE_USER_ID"),
-                            req.mode or "manual",
+                            req.job_id,
+                            req.user_id,
+                            "manual",
                             req.status,
                             req.platform,
-                            req.error_code,
-                            res_label
+                            req.resume_id
                         ),
                     )
                     row = cur.fetchone()
@@ -535,46 +313,67 @@ async def log_application(req: LogApplicationRequest) -> LogApplicationResponse:
                             detail="Application already logged (duplicate)",
                         )
                     application_id = str(row[0])
-                    logged_at = str(row[1]) if row[1] else ""
         finally:
             conn.close()
             
         logger.info(
             "Logged application %s for job %s status=%s",
-            application_id, job_id, req.status,
+            application_id, req.job_id, req.status,
         )
         return LogApplicationResponse(
-            application_id=application_id,
+            id=application_id,
             status=req.status,
-            logged_at=logged_at,
         )
     except HTTPException:
         raise
     except Exception as exc:
-        import uuid
-        import datetime
-        logger.error("/log-application failed: %s", exc)
-        return LogApplicationResponse(
-            application_id=str(uuid.uuid4()),
-            status=req.status,
-            logged_at=datetime.datetime.utcnow().isoformat() + "Z"
-        )
+        logger.error("/log_application failed: %s", exc)
+        raise HTTPException(status_code=500, detail=str(exc))
 
-@app.get("/health")
-async def health() -> dict:
+@app.get("/health", response_model=HealthResponse)
+async def health() -> HealthResponse:
     """Liveness + DB connectivity check for Docker healthcheck."""
-    checks: dict[str, str] = {"api": "ok"}
+    db_ok = False
     try:
-        from utils.db_utils import get_db_conn
-        conn = get_db_conn()
-        with conn.cursor() as cur:
-            cur.execute("SELECT 1")
-        conn.close()
-        checks["postgres"] = "ok"
+        def _ping_db():
+            conn = get_db_conn()
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1")
+            conn.close()
+        await asyncio.to_thread(_ping_db)
+        db_ok = True
     except Exception as exc:
         logger.warning("Health check DB failed: %s", exc)
-        checks["postgres"] = f"error: {exc}"
-    return {"status": "ok", "checks": checks}
+        
+    return HealthResponse(
+        status="ok",
+        timestamp=datetime.utcnow().isoformat(),
+        version=os.getenv("APP_VERSION", "1.0.0"),
+        db="connected" if db_ok else "unreachable",
+    )
+
+class QueueCountResponse(BaseModel):
+    count: int
+
+@app.get("/queue/count", response_model=QueueCountResponse)
+async def queue_count(_: str = Depends(verify_api_key)) -> QueueCountResponse:
+    """Return current depth of the manual apply queue."""
+    try:
+        def _get_count():
+            conn = get_db_conn()
+            try:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT COUNT(*) FROM jobs WHERE route = 'manual' AND status = 'pending'")
+                    row = cur.fetchone()
+                    return row[0] if row else 0
+            finally:
+                conn.close()
+        
+        count = await asyncio.to_thread(_get_count)
+        return QueueCountResponse(count=count)
+    except Exception as exc:
+        logger.error("/queue/count failed: %s", exc)
+        return QueueCountResponse(count=0)
 
 # ---------------------------------------------------------------------------
 # ---------------------------------------------------------------------------
