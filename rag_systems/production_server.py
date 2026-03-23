@@ -34,8 +34,6 @@ Date: January 19, 2026
 
 from __future__ import annotations
 
-from fastapi import FastAPI, Depends, Header, HTTPException, Request, Response, status
-from pydantic import BaseModel, Field, field_validator, model_validator
 from typing import Any, Callable, Dict, List, Optional, Set
 import os
 import sys
@@ -53,27 +51,127 @@ from contextlib import asynccontextmanager
 import hashlib
 import traceback
 import uuid
-import agentops
-
-__all__ = ["app", "main"]
-
-logger = logging.getLogger(__name__)
-logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# STANDARD LIBRARY & THIRD-PARTY IMPORTS
-# ═══════════════════════════════════════════════════════════════════════════
 
 try:
+    import agentops  # type: ignore
+except ModuleNotFoundError:  # pragma: no cover
+    class _AgentOpsStub:
+        @staticmethod
+        def track_tool(func):  # type: ignore[no-untyped-def]
+            return func
+    agentops = _AgentOpsStub()  # type: ignore[assignment]
+
+FASTAPI_DEPS_AVAILABLE = True
+try:
+    from fastapi import FastAPI, Depends, Header, HTTPException, Request, Response, status
     from fastapi.responses import JSONResponse, PlainTextResponse
     from fastapi.middleware.cors import CORSMiddleware
     from fastapi.middleware.gzip import GZipMiddleware
     from fastapi.middleware.trustedhost import TrustedHostMiddleware
     import uvicorn
-except ImportError:
-    logger.error("ERROR: FastAPI dependencies missing. Install: pip install fastapi uvicorn pydantic")
-    sys.exit(1)
+    from pydantic import BaseModel, Field, field_validator, model_validator
+except ModuleNotFoundError:  # pragma: no cover
+    FASTAPI_DEPS_AVAILABLE = False
+
+    class _Status:
+        def __getattr__(self, name: str) -> int:
+            return 0
+
+    status = _Status()
+
+    def Depends(dependency=None, **kwargs):  # type: ignore[no-untyped-def]
+        return dependency
+
+    def Header(default=None, **kwargs):  # type: ignore[no-untyped-def]
+        return default
+
+    class HTTPException(Exception):
+        def __init__(self, status_code: int = 500, detail: Any = None, headers: Any = None):
+            super().__init__(detail)
+            self.status_code = status_code
+            self.detail = detail
+            self.headers = headers
+
+    class Request:  # noqa: D101
+        pass
+
+    class Response:  # noqa: D101
+        pass
+
+    class JSONResponse:  # noqa: D101
+        def __init__(self, *args, **kwargs):
+            pass
+
+    class PlainTextResponse:  # noqa: D101
+        def __init__(self, *args, **kwargs):
+            pass
+
+    class CORSMiddleware:  # noqa: D101
+        pass
+
+    class GZipMiddleware:  # noqa: D101
+        pass
+
+    class TrustedHostMiddleware:  # noqa: D101
+        pass
+
+    class FastAPI:  # noqa: D101
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def add_middleware(self, *args, **kwargs):
+            return None
+
+        def middleware(self, *args, **kwargs):
+            def decorator(func):
+                return func
+            return decorator
+
+        def get(self, *args, **kwargs):
+            def decorator(func):
+                return func
+            return decorator
+
+        def post(self, *args, **kwargs):
+            def decorator(func):
+                return func
+            return decorator
+
+        def delete(self, *args, **kwargs):
+            def decorator(func):
+                return func
+            return decorator
+
+        def exception_handler(self, *args, **kwargs):
+            def decorator(func):
+                return func
+            return decorator
+
+    class BaseModel:  # noqa: D101
+        pass
+
+    def Field(default=None, **kwargs):  # type: ignore[no-untyped-def]
+        return default
+
+    def field_validator(*args, **kwargs):  # type: ignore[no-untyped-def]
+        def decorator(func):
+            return func
+        return decorator
+
+    def model_validator(*args, **kwargs):  # type: ignore[no-untyped-def]
+        def decorator(func):
+            return func
+        return decorator
+
+    class uvicorn:  # noqa: N801
+        @staticmethod
+        def run(*args, **kwargs):
+            raise RuntimeError("uvicorn is not installed in the active Python environment")
+
+__all__ = ["app", "main"]
+
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 
 # ═══════════════════════════════════════════════════════════════════════════
 # LOCAL IMPORTS (from existing rag_systems files)
@@ -90,9 +188,20 @@ try:
     )
     from rag_systems.resume_engine import get_default_engine
     from rag_systems.rag_pipeline import EmbeddingService
-except ImportError:
-    logger.critical("Cannot import from rag_systems. Ensure rag_api.py and resume_engine.py exist.")
-    sys.exit(1)
+except Exception:  # pragma: no cover - env dependent
+    def _missing_local_dep(*args, **kwargs):  # type: ignore[no-untyped-def]
+        raise RuntimeError("Cannot import required local rag_systems modules in this environment")
+
+    select_resume = _missing_local_dep  # type: ignore[assignment]
+    get_resume_pdf_path = _missing_local_dep  # type: ignore[assignment]
+    get_rag_context = _missing_local_dep  # type: ignore[assignment]
+    reindex_resume = _missing_local_dep  # type: ignore[assignment]
+    list_resumes = _missing_local_dep  # type: ignore[assignment]
+    healthcheck = _missing_local_dep  # type: ignore[assignment]
+    get_default_engine = _missing_local_dep  # type: ignore[assignment]
+
+    class EmbeddingService:  # noqa: D101
+        pass
 
 # ═══════════════════════════════════════════════════════════════════════════
 # CONFIGURATION & CONSTANTS
@@ -117,7 +226,7 @@ REQUEST_TIMEOUT_SECONDS = 30
 MAX_CONCURRENT_REQUESTS = 50
 CORS_ORIGINS = ["*"]
 LOG_REQUESTS = True
-TRUSTED_HOSTS = ["*"]
+ALLOWED_HOSTS = ["*"]
 
 class ServerConfig:
     """Centralized server configuration"""
@@ -800,7 +909,7 @@ app.add_middleware(GZipMiddleware, minimum_size=1000)
 # Trusted Host Middleware (security)
 app.add_middleware(
     TrustedHostMiddleware,
-    allowed_hosts=TRUSTED_HOSTS
+    allowed_hosts=ALLOWED_HOSTS
 )
 
 
@@ -860,12 +969,11 @@ async def verify_api_key(
     """Verify API key from header"""
     
     # Collect all valid keys from environment, filtering out None/empty.
-    # Primary key: SCRAPER_SERVICE_API_KEY. RAG_API_KEY is accepted for backwards compatibility.
+    # Primary key: SCRAPER_SERVICE_API_KEY.
     valid_keys = {
         key
         for key in [
             os.getenv("SCRAPER_SERVICE_API_KEY"),
-            os.getenv("RAG_API_KEY"),
         ]
         if key
     }
@@ -890,7 +998,7 @@ async def verify_x_api_key(
     x_api_key: str = Header(..., alias="X-API-Key"),
 ) -> str:
     """Verify X-API-Key header for /match and /autofill endpoints."""
-    expected = os.getenv("RAG_SERVER_API_KEY", "")
+    expected = os.getenv("SCRAPER_SERVICE_API_KEY", "")
     if expected and x_api_key == expected:
         return x_api_key
     logger.warning("Invalid X-API-Key attempted: %s***", x_api_key[:4] if x_api_key else "")
@@ -915,15 +1023,15 @@ def check_rate_limit(api_key: str = Depends(verify_api_key)):
 # API ENDPOINTS
 # ═══════════════════════════════════════════════════════════════════════════
 
-@agentops.track_tool
 @app.get("/", response_class=PlainTextResponse)
+@agentops.track_tool
 async def root() -> str:
     """Root endpoint"""
     return "RAG Production Server v1.0.0 - Running ✓"
 
 
-@agentops.track_tool
 @app.get("/health")
+@agentops.track_tool
 async def health_check() -> JSONResponse:
     """Health check endpoint — always returns HTTP 200 with status fields."""
     result: Dict[str, Any] = {
@@ -965,8 +1073,8 @@ async def health_check() -> JSONResponse:
     return JSONResponse(content=result, status_code=200)
 
 
-@agentops.track_tool
 @app.post("/rag/query", tags=["RAG"])
+@agentops.track_tool
 def rag_query_context(
     request: RAGRequest,
     api_key: str = Depends(verify_api_key)
@@ -1032,8 +1140,8 @@ def rag_query_context(
         )
 
     
-@agentops.track_tool
 @app.post("/rag/select", tags=["RAG"])
+@agentops.track_tool
 def rag_select_resume(
     request: RAGRequest,
     api_key: str = Depends(verify_api_key)
@@ -1082,8 +1190,8 @@ def rag_select_resume(
         )
 
 
-@agentops.track_tool
 @app.get("/resumes", tags=["RAG"])
+@agentops.track_tool
 def list_resumes_endpoint(
     _: str = Depends(verify_api_key)
 ) -> dict:
@@ -1099,8 +1207,8 @@ def list_resumes_endpoint(
         raise HTTPException(status_code=500, detail=f"Failed to list resumes: {str(e)}")
 
 
-@agentops.track_tool
 @app.post("/resumes/select", response_model=ResumeSelectionResponse, tags=["RAG"])
+@agentops.track_tool
 async def select_best_resume(
     request: ResumeSelectionRequest,
     api_key: str = Depends(check_rate_limit)
@@ -1163,8 +1271,8 @@ async def select_best_resume(
         )
 
 
-@agentops.track_tool
 @app.get("/resumes/list", tags=["RAG"])
+@agentops.track_tool
 async def list_all_resumes(api_key: str = Depends(check_rate_limit)) -> dict:
     """List all available resumes"""
     import traceback
@@ -1202,8 +1310,8 @@ async def list_all_resumes(api_key: str = Depends(check_rate_limit)) -> dict:
         )
 
 
-@agentops.track_tool
 @app.post("/resumes/reindex/{resume_id}", tags=["RAG"])
+@agentops.track_tool
 def reindex_resume_endpoint(
     resume_id: str,
     api_key: str = Depends(check_rate_limit)
@@ -1225,8 +1333,8 @@ def reindex_resume_endpoint(
         )
 
 
-@agentops.track_tool
 @app.get("/sessions/{session_id}", tags=["Sessions"])
+@agentops.track_tool
 def get_session_info(
     session_id: str,
     api_key: str = Depends(check_rate_limit)
@@ -1247,8 +1355,8 @@ def get_session_info(
     }
 
 
-@agentops.track_tool
 @app.delete("/sessions/{session_id}", tags=["Sessions"])
+@agentops.track_tool
 def delete_session(
     session_id: str,
     api_key: str = Depends(check_rate_limit)
@@ -1269,8 +1377,8 @@ def delete_session(
     }
 
 
-@agentops.track_tool
 @app.post("/cache/invalidate", tags=["Admin"])
+@agentops.track_tool
 def invalidate_cache(
     api_key: str = Depends(verify_api_key)
 ) -> dict:
@@ -1290,8 +1398,8 @@ def invalidate_cache(
     }
 
 
-@agentops.track_tool
 @app.get("/metrics", tags=["Admin"])
+@agentops.track_tool
 def get_metrics(api_key: str = Depends(verify_api_key)) -> dict:
     """Get system metrics"""
     metrics = metrics_collector.get_metrics()
@@ -1314,8 +1422,8 @@ def get_metrics(api_key: str = Depends(verify_api_key)) -> dict:
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-@agentops.track_tool
 @app.post("/match", tags=["RAG"])
+@agentops.track_tool
 async def match_resume(
     request: MatchRequest,
     api_key: str = Depends(verify_x_api_key),
@@ -1342,8 +1450,8 @@ async def match_resume(
         )
 
 
-@agentops.track_tool
 @app.post("/autofill", tags=["RAG"])
+@agentops.track_tool
 async def autofill_context(
     request: AutofillRequest,
     api_key: str = Depends(verify_x_api_key),
@@ -1409,6 +1517,7 @@ async def general_exception_handler(request: Request, exc: Exception):
 # MAIN ENTRY POINT
 # ═══════════════════════════════════════════════════════════════════════════
 
+@agentops.track_tool
 def main() -> None:
     """Start production server"""
     logger.info("=" * 80)
@@ -1419,11 +1528,11 @@ def main() -> None:
     logger.info(f"Workers: 1 (production mode)")
     
     logger.info("API key configuration:")
-    server_key = os.getenv("RAG_SERVER_API_KEY", "")
+    server_key = os.getenv("SCRAPER_SERVICE_API_KEY", "")
     if server_key:
-        logger.info("  ✓ RAG_SERVER_API_KEY configured: %s***", server_key[:4])
+        logger.info("  ✓ SCRAPER_SERVICE_API_KEY configured: %s***", server_key[:4])
     else:
-        logger.warning("  ✗ RAG_SERVER_API_KEY is not configured")
+        logger.warning("  ✗ SCRAPER_SERVICE_API_KEY is not configured")
     
     logger.info(f"Rate Limit: {ServerConfig.RATE_LIMIT_REQUESTS} req/{ServerConfig.RATE_LIMIT_WINDOW_SECONDS}s")
     logger.info(f"Cache: {'Enabled' if ServerConfig.CACHE_ENABLED else 'Disabled'}")
@@ -1444,4 +1553,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

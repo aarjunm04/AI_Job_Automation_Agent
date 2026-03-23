@@ -8,14 +8,25 @@ from __future__ import annotations
 import os
 import re
 import time
-import httpx
 import logging
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Literal, Optional, Tuple
-import numpy as np
 
-from dotenv import load_dotenv
-load_dotenv()
+try:
+    import httpx
+except ModuleNotFoundError:  # pragma: no cover
+    httpx = None  # type: ignore[assignment]
+
+try:
+    import numpy as np
+except ModuleNotFoundError:  # pragma: no cover
+    np = None  # type: ignore[assignment]
+
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ModuleNotFoundError:  # pragma: no cover
+    pass
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -36,10 +47,11 @@ __all__ = [
 # ============================================================
 
 
+# Defaults: chunk_size = 512, chunk_overlap = 128
 def chunk_text(
     text: str,
-    chunk_size: int = 450,
-    chunk_overlap: int = 50,
+    chunk_size: int = 512,
+    chunk_overlap: int = 128,
 ) -> list[str]:
     """Split text into overlapping chunks for embedding.
 
@@ -82,7 +94,7 @@ class GeminiEmbedder(EmbeddingProvider):
     Supports 768, 1536, or 3072 dimensions with MRL
     """
     api_key: str = field(default_factory=lambda: os.getenv("GEMINI_API_KEY", ""))
-    model: str = field(default_factory=lambda: "models/text-embedding-004")
+    model: str = field(default_factory=lambda: "text-embedding-004")
     output_dimensionality: int = 768  # Match NVIDIA NIM dimension for consistent vector space
     task_type: str = "RETRIEVAL_DOCUMENT"  # For resume indexing
     timeout_seconds: float = 30
@@ -100,13 +112,20 @@ class GeminiEmbedder(EmbeddingProvider):
         if not self.api_key:
             raise RuntimeError("Missing GEMINI_API_KEY in environment variables")
 
+        if httpx is None:
+            raise RuntimeError("httpx is not installed in the active Python environment")
+
+        model_name = self.model
+        if model_name and not model_name.startswith("models/"):
+            model_name = f"models/{model_name}"
+
         url = (
             f"https://generativelanguage.googleapis.com/v1beta/"
-            f"{self.model}:embedContent?key={self.api_key}"
+            f"{model_name}:embedContent?key={self.api_key}"
         )
 
         payload = {
-            "model": self.model,
+            "model": model_name,
             "content": {
                 "parts": [{"text": text}]
             },
@@ -148,9 +167,8 @@ class GeminiEmbedder(EmbeddingProvider):
             if e.response.status_code == 404:
                 raise RuntimeError(
                     "Gemini embedding endpoint/model not found (404). "
-                    f"Configured model='{self.model}'. "
-                    "Set GEMINI_EMBEDDING_MODEL=models/text-embedding-004 "
-                    "or verify model access for your API key."
+                    f"Configured model='{model_name}'. "
+                    "Verify model access for your API key."
                 ) from e
             raise RuntimeError(f"Gemini API request failed: {e}") from e
         except httpx.RequestError as e:
@@ -166,6 +184,8 @@ class GeminiEmbedder(EmbeddingProvider):
         Normalize embedding vector to unit length
         Required for dimensions < 3072 for accurate similarity
         """
+        if np is None:
+            return embedding
         vec = np.array(embedding)
         norm = np.linalg.norm(vec)
         if norm > 0:
@@ -192,7 +212,7 @@ class NVIDIANIMEmbedder(EmbeddingProvider):
     """
 
     base_url: str = field(
-        default_factory=lambda: os.getenv("NVIDIA_NIM_BASE_URL", "https://integrate.api.nvidia.com/v1")
+        default_factory=lambda: os.getenv("RAG_SERVER_URL", "https://integrate.api.nvidia.com/v1")
     )
     api_key: str = field(default_factory=lambda: os.getenv("NVIDIA_NIM_API_KEY", ""))
     model: str = "nvidia/nv-embedqa-e5-v5"
@@ -205,6 +225,9 @@ class NVIDIANIMEmbedder(EmbeddingProvider):
         """
         if not self.api_key:
             raise RuntimeError("Missing NVIDIA_NIM_API_KEY in environment variables")
+
+        if httpx is None:
+            raise RuntimeError("httpx is not installed in the active Python environment")
 
         url = f"{self.base_url.rstrip('/')}/embeddings"
         headers = {
@@ -285,8 +308,10 @@ class EmbeddingService:
                 try:
                     vector = None
                     if isinstance(provider, NVIDIANIMEmbedder):
-                        input_type = "query" if is_query else "passage"
-                        vector = provider.embed_text(text, input_type=input_type)
+                        if is_query:
+                            vector = provider.embed_text(text, input_type="query")
+                        else:
+                            vector = provider.embed_text(text, input_type="passage")
                     elif isinstance(provider, GeminiEmbedder):
                         if is_query:
                             vector = provider.embed_query(text)

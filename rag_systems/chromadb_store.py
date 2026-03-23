@@ -39,9 +39,9 @@ except Exception:  # pragma: no cover - env dependent
 
 @dataclass
 class ChromaStoreConfig:
-    host: str = field(default_factory=lambda: os.getenv("CHROMADB_HOST", "chromadb"))
-    port: int = field(default_factory=lambda: int(os.getenv("CHROMADB_PORT", "8000")))
-    collection_name: str = "job_resumes"
+    host: str = field(default_factory=lambda: os.getenv("CHROMADB_HOST", "ai_chromadb"))
+    port: int = field(default_factory=lambda: int(os.getenv("CHROMADB_PORT", "8001")))
+    collection_name: str = "resumes"
     retry_attempts: int = 3
     retry_delay_seconds: float = 0.5
 

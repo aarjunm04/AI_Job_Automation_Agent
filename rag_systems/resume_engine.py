@@ -23,8 +23,11 @@ import time
 import logging
 from dataclasses import dataclass, asdict
 from typing import Any, Dict, List, Optional, Tuple
-from dotenv import load_dotenv
-load_dotenv()
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ModuleNotFoundError:  # pragma: no cover
+    pass
 
 
 import uuid
@@ -47,7 +50,7 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 
-RESUME_DIR = os.getenv("RESUME_DIR", "/app/resumes")
+RESUME_DIR = os.getenv("RESUME_DIR", "app/resumes")
 
 
 def _resolve_resume_path(filename: str) -> str:
@@ -70,7 +73,7 @@ class ResumeEntry:
     embedding_version: str
     vector_anchor_id: str
 
-    def to_dict(self) -> dict[str, Any]:
+    def to_dict(self) -> dict:
         """Serialize entry to dictionary.
 
         Returns:
@@ -216,7 +219,7 @@ class ResumeEngine:
         raw_text = self._extract_pdf_text(entry.local_path)
 
         # 1. CHUNK (chunk_text returns list[str]; wrap into dicts for ChromaDB)
-        chunk_strings = chunk_text(raw_text, chunk_size=450, chunk_overlap=50)
+        chunk_strings = chunk_text(raw_text, chunk_size=512, chunk_overlap=128)
         chunks = [
             {
                 "chunk_id": str(uuid.uuid4()),
