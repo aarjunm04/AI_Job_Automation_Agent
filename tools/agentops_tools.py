@@ -20,15 +20,10 @@ import agentops
 from agentops.sdk.decorators import agent, operation
 from crewai.tools import tool
 
+from utils.db_utils import get_db_conn
+
 logger = logging.getLogger(__name__)
 logger.setLevel(os.getenv("LOG_LEVEL", "INFO"))
-
-# Database URL selection
-_DB_URL: Optional[str] = (
-    os.getenv("LOCAL_POSTGRES_URL")
-    if os.getenv("ACTIVE_DB", "local") == "local"
-    else os.getenv("SUPABASE_URL")
-)
 
 __all__ = [
     "record_agent_error",
@@ -58,27 +53,12 @@ def _log_to_db(
         job_post_id: Optional FK to job_posts.id.
         application_id: Optional FK to applications.id.
     """
-    if not _DB_URL:
-        logger.warning("agentops_tools._log_to_db: DB_URL not configured — skipping DB log")
-        return
-
     conn = None
     try:
-        active_db = os.getenv("ACTIVE_DB", "local")
-        if active_db == "local":
-            conn = psycopg2.connect(
-                host=os.getenv("LOCAL_POSTGRES_HOST", "ai_postgres"),
-                port=int(os.getenv("LOCAL_POSTGRES_PORT", "5432")),
-                user=os.getenv("LOCAL_POSTGRES_USER", "aarjunm04"),
-                password=os.getenv("LOCAL_POSTGRES_PASSWORD"),
-                dbname=os.getenv("LOCAL_POSTGRES_DB", "ai_job_db"),
-                connect_timeout=10,
-            )
-        else:
-            db_url = os.getenv("SUPABASE_URL")
-            if not db_url:
-                raise RuntimeError("SUPABASE_URL not configured")
-            conn = psycopg2.connect(db_url)
+        conn = get_db_conn()
+        if not conn:
+            logger.warning("agentops_tools._log_to_db: DB connection failed — skipping DB log")
+            return
             
         conn.autocommit = False
         cursor = conn.cursor()

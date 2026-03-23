@@ -14,12 +14,31 @@ from agentops.sdk.decorators import agent, operation
 from tools.postgres_tools import _fetch_user_config
 
 # RAG server connection — set in docker-compose environment block
-RAG_SERVER_URL: str = os.getenv("RAG_SERVER_URL", "http://localhost:8090")
-RAG_API_KEY: str = os.getenv("RAG_SERVER_API_KEY", "")
+RAG_SERVER_URL: str = os.getenv("RAG_SERVER_URL", "http://rag-server:8090")
+RAG_API_KEY: str = os.getenv("SCRAPER_SERVICE_API_KEY", "")
 
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
+
+
+def _retry_call(fn, *args, max_retries: int = 3, **kwargs):
+    """Execute fn with exponential backoff retry."""
+    last_exc: Exception | None = None
+    for attempt in range(max_retries):
+        try:
+            return fn(*args, **kwargs)
+        except Exception as exc:
+            last_exc = exc
+            wait = 2.0 ** attempt
+            logger.warning(
+                "Attempt %d/%d failed: %s — retrying in %.1fs",
+                attempt + 1, max_retries, exc, wait,
+            )
+            time.sleep(wait)
+    raise RuntimeError(
+        f"All {max_retries} attempts failed. Last error: {last_exc}"
+    )
 
 
 __all__ = [
@@ -40,6 +59,7 @@ def _safe_json_dumps(payload: Dict[str, Any]) -> str:
         return json.dumps({"error": "serialization_failed"})
 
 
+@agentops.track_tool
 @tool
 @operation
 def query_resume_match(job_description: str, job_title: str, required_skills: str) -> str:
@@ -121,6 +141,7 @@ def query_resume_match(job_description: str, job_title: str, required_skills: st
     })
 
 
+@agentops.track_tool
 @tool
 @operation
 def get_resume_context(resume_filename: str, job_description: str) -> str:
@@ -137,13 +158,16 @@ def get_resume_context(resume_filename: str, job_description: str) -> str:
     Returns:
         Newline-separated ``[CHUNK N] ...`` string, or empty string on failure.
     """
-    try:
+    def _do_post():
         with httpx.Client(timeout=30.0) as client:
-            resp = client.post(
+            return client.post(
                 f"{RAG_SERVER_URL}/autofill",
                 headers={"X-API-Key": RAG_API_KEY, "Content-Type": "application/json"},
                 json={"resume_filename": resume_filename, "job_description": job_description},
             )
+
+    try:
+        resp = _retry_call(_do_post)
         if resp.status_code != 200:
             logger.warning(
                 "get_resume_context: rag_autofill_unavailable — HTTP %d", resp.status_code
@@ -164,6 +188,7 @@ def get_resume_context(resume_filename: str, job_description: str) -> str:
         return ""
 
 
+@agentops.track_tool
 @tool
 @operation
 def embed_job_description(job_url: str, job_description: str) -> str:
@@ -181,9 +206,9 @@ def embed_job_description(job_url: str, job_description: str) -> str:
         JSON string with keys: embedded (bool), job_url (str),
         and error (str, only present on failure).
     """
-    try:
+    def _do_post():
         with httpx.Client(timeout=30.0) as client:
-            resp = client.post(
+            return client.post(
                 f"{RAG_SERVER_URL}/match",
                 headers={"X-API-Key": RAG_API_KEY, "Content-Type": "application/json"},
                 json={
@@ -192,6 +217,9 @@ def embed_job_description(job_url: str, job_description: str) -> str:
                     "required_skills": "",
                 },
             )
+
+    try:
+        resp = _retry_call(_do_post)
         if resp.status_code == 200:
             return _safe_json_dumps({"embedded": True, "job_url": job_url})
         logger.warning(
@@ -207,6 +235,7 @@ def embed_job_description(job_url: str, job_description: str) -> str:
         )
 
 
+@agentops.track_tool
 @tool
 @operation
 def get_resume_pdf_path(resume_filename: str) -> str:

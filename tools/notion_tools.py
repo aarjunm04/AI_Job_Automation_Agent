@@ -8,6 +8,7 @@ All Notion sync operations are non-blocking - failures never stop the pipeline.
 import os
 import json
 import logging
+import time
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -21,6 +22,24 @@ from tools.postgres_tools import log_event
 # Module-level logger
 logger = logging.getLogger(__name__)
 logger.setLevel(os.getenv("LOG_LEVEL", "INFO"))
+
+def _retry_call(fn, *args, max_retries: int = 3, **kwargs):
+    """Execute fn with exponential backoff retry."""
+    last_exc: Exception | None = None
+    for attempt in range(max_retries):
+        try:
+            return fn(*args, **kwargs)
+        except Exception as exc:
+            last_exc = exc
+            wait = 2.0 ** attempt
+            logger.warning(
+                "Attempt %d/%d failed: %s — retrying in %.1fs",
+                attempt + 1, max_retries, exc, wait,
+            )
+            time.sleep(wait)
+    raise RuntimeError(
+        f"All {max_retries} attempts failed. Last error: {last_exc}"
+    )
 
 # Module-level lazy-initialized client
 _notion_client: Optional[NotionClient] = None
@@ -48,6 +67,7 @@ def _get_client() -> NotionClient:
     return _notion_client
 
 
+@agentops.track_tool
 @tool
 @operation
 def sync_application_to_job_tracker(
@@ -98,20 +118,27 @@ def sync_application_to_job_tracker(
         applied_via = "Auto"
 
         # Create page in Job Tracker DB
-        response = client.create_job_tracker_page(
-            title=title,
-            company=company,
-            job_url=job_url,
-            stage="Applied",
-            date_applied=date_applied,
-            platform=platform,
-            applied_via=applied_via,
-            ctc=ctc,
-            notes=notes,
-            job_type=job_type,
-            location=location,
-            resume_used=resume_used,
-        )
+        def _do_notion():
+            return client.create_job_tracker_page(
+                title=title,
+                company=company,
+                job_url=job_url,
+                stage="Applied",
+                date_applied=date_applied,
+                platform=platform,
+                applied_via=applied_via,
+                ctc=ctc,
+                notes=notes,
+                job_type=job_type,
+                location=location,
+                resume_used=resume_used,
+            )
+        
+        try:
+            response = _retry_call(_do_notion)
+        except RuntimeError as e:
+            logger.warning("Notion sync failed after retries: %s", e)
+            return None
 
         notion_page_id = response.get("id", "")
 
@@ -150,6 +177,7 @@ def sync_application_to_job_tracker(
         return json.dumps({"synced": False, "error": str(e), "db": "job_tracker"})
 
 
+@agentops.track_tool
 @tool
 @operation
 def queue_job_to_applications_db(
@@ -203,21 +231,28 @@ def queue_job_to_applications_db(
             priority = "Low"
 
         # Create page in Applications DB
-        response = client.create_applications_page(
-            title=title,
-            company=company,
-            job_url=job_url,
-            deadline=deadline,
-            platform=platform,
-            status="Queued",
-            ctc=ctc,
-            priority=priority,
-            fit_score=fit_score,
-            job_type=job_type,
-            location=location,
-            notes=notes,
-            resume_suggested=resume_suggested,
-        )
+        def _do_notion():
+            return client.create_applications_page(
+                title=title,
+                company=company,
+                job_url=job_url,
+                deadline=deadline,
+                platform=platform,
+                status="Queued",
+                ctc=ctc,
+                priority=priority,
+                fit_score=fit_score,
+                job_type=job_type,
+                location=location,
+                notes=notes,
+                resume_suggested=resume_suggested,
+            )
+        
+        try:
+            response = _retry_call(_do_notion)
+        except RuntimeError as e:
+            logger.warning("Notion sync failed after retries: %s", e)
+            return None
 
         notion_page_id = response.get("id", "")
 
@@ -259,6 +294,7 @@ def queue_job_to_applications_db(
         return json.dumps({"queued": False, "error": str(e), "db": "applications"})
 
 
+@agentops.track_tool
 @tool
 @operation
 def update_notion_page_status(
@@ -278,7 +314,14 @@ def update_notion_page_status(
     try:
         client = _get_client()
 
-        response = client.update_page_status(page_id=page_id, status=status)
+        def _do_notion():
+            return client.update_page_status(page_id=page_id, status=status)
+            
+        try:
+            response = _retry_call(_do_notion)
+        except RuntimeError as e:
+            logger.warning("Notion sync failed after retries: %s", e)
+            return None
 
         # Log success event
         log_event(
@@ -310,6 +353,7 @@ def update_notion_page_status(
         )
 
 
+@agentops.track_tool
 @tool
 @operation
 def get_pending_manual_queue(run_batch_id: str) -> str:
@@ -394,6 +438,7 @@ def get_pending_manual_queue(run_batch_id: str) -> str:
         return json.dumps([])
 
 
+@agentops.track_tool
 @tool
 @operation
 def check_notion_connection(run_batch_id: str) -> str:

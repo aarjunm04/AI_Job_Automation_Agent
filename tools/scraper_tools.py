@@ -32,34 +32,11 @@ from scrapers.scraper_service import (
     GLOBAL_PLAYWRIGHT_MANAGER,
     WellfoundScraper,
     WeWorkRemotelyScraper,
-    YCStartupScraper,
-    TuringScraper,
-    CrossoverScraper,
     ArcDevScraper,
     NodeskScraper,
-    ToptalScraper,
 )
-from tools.postgres_tools import upsert_job_post, log_event, get_platform_config, _get_conn
-
-# Module-level logger
-logger = logging.getLogger(__name__)
-logger.setLevel(os.getenv("LOG_LEVEL", "INFO"))
-
-# Module-level lazy-initialized engines
-_scraper_engine: Optional[ScraperEngine] = None
-_serpapi_key_index: int = 0
-
-
-def get_pg_conn():
-    """Return a psycopg2 connection using the shared Postgres DAL logic."""
-    return _get_conn()
-
-def _get_db_url() -> Optional[str]:
-    return (
-        os.getenv("LOCAL_POSTGRES_URL")
-        if os.getenv("ACTIVE_DB", "local") == "local"
-        else os.getenv("SUPABASE_URL")
-    )
+from tools.postgres_tools import upsert_job_post, log_event, get_platform_config
+from utils.db_utils import get_db_conn
 
 __all__ = [
     "run_jobspy_scrape",
@@ -329,7 +306,7 @@ def run_playwright_scrape(
 
     Args:
         run_batch_id: UUID of the run batch.
-        platform: Platform name (wellfound, weworkremotely, ycombinator, arc, turing, crossover).
+        platform: Platform name (wellfound, weworkremotely, arcdev, nodesk).
         max_jobs: Maximum number of jobs to scrape.
 
     Returns:
@@ -348,13 +325,8 @@ def run_playwright_scrape(
         scraper_map = {
             "wellfound": WellfoundScraper,
             "weworkremotely": WeWorkRemotelyScraper,
-            "ycombinator": YCStartupScraper,
-            "yc": YCStartupScraper,
-            "arc": ArcDevScraper,
-            "turing": TuringScraper,
-            "crossover": CrossoverScraper,
+            "arcdev": ArcDevScraper,
             "nodesk": NodeskScraper,
-            "toptal": ToptalScraper,
         }
 
         scraper_class = scraper_map.get(platform.lower())
@@ -581,7 +553,7 @@ def run_serpapi_scrape(
 @operation
 def run_safety_net_scrape(run_batch_id: str, current_job_count: int) -> str:
     """
-    Run safety-net scrapers (Nodesk, Toptal) if minimum job count not met.
+    Run safety-net scrapers (Nodesk) if minimum job count not met.
 
     Args:
         run_batch_id: UUID of the run batch.
@@ -607,16 +579,16 @@ def run_safety_net_scrape(run_batch_id: str, current_job_count: int) -> str:
             run_batch_id=run_batch_id,
             level="INFO",
             event_type="safety_net_triggered",
-            message=f"Only {current_job_count} jobs found, activating Nodesk + Toptal",
+            message=f"Only {current_job_count} jobs found, activating Nodesk",
         )
 
         logger.info(
-            f"Safety net triggered: {current_job_count}/{minimum} jobs. Running Nodesk and Toptal."
+            f"Safety net triggered: {current_job_count}/{minimum} jobs. Running Nodesk."
         )
 
         additional_jobs_found = 0
         additional_jobs_upserted = 0
-        platforms = ["nodesk", "toptal"]
+        platforms = ["nodesk"]
 
         for platform in platforms:
             try:
@@ -677,7 +649,7 @@ def normalise_and_dedup(run_batch_id: str) -> str:
     """
     conn = None
     try:
-        conn = get_pg_conn()
+        conn = get_db_conn()
         cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
         # Find duplicate URLs within this run batch
@@ -768,27 +740,15 @@ def get_scrape_summary(run_batch_id: str) -> str:
     for attempt in range(1, 4):
         conn = None
         try:
-            active_db = os.getenv("ACTIVE_DB", "local")
-            if active_db == "local":
-                conn = psycopg2.connect(
-                    host=os.getenv("LOCAL_POSTGRES_HOST", "ai_postgres"),
-                    port=int(os.getenv("LOCAL_POSTGRES_PORT", "5432")),
-                    user=os.getenv("LOCAL_POSTGRES_USER", "aarjunm04"),
-                    password=os.getenv("LOCAL_POSTGRES_PASSWORD"),
-                    dbname=os.getenv("LOCAL_POSTGRES_DB", "ai_job_db"),
-                    connect_timeout=10,
-                )
-            else:
-                db_url = os.getenv("SUPABASE_URL")
-                if not db_url:
-                    return json.dumps({
-                        "run_batch_id": run_batch_id,
-                        "total_jobs": 0,
-                        "by_platform": {},
-                        "minimum_met": False,
-                        "error": "SUPABASE_URL not configured",
-                    })
-                conn = psycopg2.connect(db_url)
+            conn = get_db_conn()
+            if not conn:
+                return json.dumps({
+                    "run_batch_id": run_batch_id,
+                    "total_jobs": 0,
+                    "by_platform": {},
+                    "minimum_met": False,
+                    "error": "DB connection failed",
+                })
             cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
             # Get platform breakdown

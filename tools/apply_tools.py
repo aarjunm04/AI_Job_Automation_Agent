@@ -31,6 +31,24 @@ import time
 from pathlib import Path
 from typing import Any, Optional
 
+def _retry_call(fn, *args, max_retries: int = 3, **kwargs):
+    """Execute fn with exponential backoff retry."""
+    last_exc: Exception | None = None
+    for attempt in range(max_retries):
+        try:
+            return fn(*args, **kwargs)
+        except Exception as exc:
+            last_exc = exc
+            wait = 2.0 ** attempt
+            logger.warning(
+                "Attempt %d/%d failed: %s — retrying in %.1fs",
+                attempt + 1, max_retries, exc, wait,
+            )
+            time.sleep(wait)
+    raise RuntimeError(
+        f"All {max_retries} attempts failed. Last error: {last_exc}"
+    )
+
 import agentops
 from agentops.sdk.decorators import agent, operation
 import psycopg2
@@ -46,6 +64,7 @@ from tools.budget_tools import check_xai_run_cap, record_llm_cost
 from tools.agentops_tools import record_agent_error
 from tools.notion_tools import queue_job_to_applications_db
 from config.settings import db_config, run_config, budget_config
+from utils.db_utils import get_db_conn
 
 # ---------------------------------------------------------------------------
 # Module-level logger
@@ -112,6 +131,7 @@ def _get_proxy() -> Optional[dict[str, str]]:
 # ---------------------------------------------------------------------------
 # TOOL 1 — ATS platform detection (Playwright + ATSDetector)
 # ---------------------------------------------------------------------------
+@agentops.track_tool
 @tool
 @operation
 def detect_ats_platform(job_url: str, run_batch_id: str) -> str:
@@ -224,6 +244,7 @@ def detect_ats_platform(job_url: str, run_batch_id: str) -> str:
 # ---------------------------------------------------------------------------
 # TOOL 2 — Proof of submission capture (UNCHANGED)
 # ---------------------------------------------------------------------------
+@agentops.track_tool
 @tool
 @operation
 def capture_proof(page_html: str, page_url: str, job_url: str) -> str:
@@ -332,6 +353,7 @@ def capture_proof(page_html: str, page_url: str, job_url: str) -> str:
 # ---------------------------------------------------------------------------
 # TOOL 3 — CAPTCHA detection (UNCHANGED)
 # ---------------------------------------------------------------------------
+@agentops.track_tool
 @tool
 @operation
 def check_captcha_present(page_html: str, job_url: str) -> str:
@@ -431,13 +453,14 @@ async def _run_apply(
     try:
         _cfg: dict[str, Any] = _fetch_user_config()
         _user_settings: dict[str, Any] = _cfg.get("user_settings", {})
-        _platform_settings: dict[str, Any] = _cfg.get("platform_settings", {})
+
+        config_dir = Path(__file__).parent.parent / "config"
+        platform_config_path = config_dir / "platform_config.json"
+        with open(platform_config_path, "r", encoding="utf-8") as f:
+            platform_config = json.load(f)
+        job_filters: dict[str, Any] = platform_config.get("job_filters", {})
+
         dry_run_effective = bool(_user_settings.get("dry_run", False))
-        default_resume_effective = str(
-            _user_settings.get("default_resume") or "AarjunGen.pdf"
-        )
-        auto_apply_enabled: bool = bool(_user_settings.get("auto_apply_enabled", True))
-        job_filters: dict[str, Any] = _platform_settings.get("job_filters", {})
         logger.info(
             "_run_apply: DB config — dry_run=%s default_resume=%s auto_apply_enabled=%s",
             dry_run_effective,
@@ -806,6 +829,7 @@ async def _run_apply(
 # ---------------------------------------------------------------------------
 # TOOL 4 — Fill standard form (sync wrapper around _run_apply)
 # ---------------------------------------------------------------------------
+@agentops.track_tool
 @tool
 @operation
 def fill_standard_form(
@@ -937,6 +961,7 @@ def fill_standard_form(
 # ---------------------------------------------------------------------------
 # TOOL 5 — Per-run apply summary (UNCHANGED)
 # ---------------------------------------------------------------------------
+@agentops.track_tool
 @tool
 @operation
 def get_apply_summary(run_batch_id: str) -> str:
@@ -954,22 +979,11 @@ def get_apply_summary(run_batch_id: str) -> str:
     """
     conn = None
     try:
-        active_db = os.getenv("ACTIVE_DB", "local")
-        if active_db == "local":
-            conn = psycopg2.connect(
-                host=os.getenv("LOCAL_POSTGRES_HOST", "ai_postgres"),
-                port=int(os.getenv("LOCAL_POSTGRES_PORT", "5432")),
-                user=os.getenv("LOCAL_POSTGRES_USER", "aarjunm04"),
-                password=os.getenv("LOCAL_POSTGRES_PASSWORD"),
-                dbname=os.getenv("LOCAL_POSTGRES_DB", "ai_job_db"),
-                connect_timeout=10,
-            )
-        else:
-            db_url = os.getenv("SUPABASE_URL")
-            if not db_url:
-                logger.error("get_apply_summary: SUPABASE_URL not configured")
-                return json.dumps({"error": "db_not_configured", "detail": "SUPABASE_URL not set"})
-            conn = psycopg2.connect(db_url)
+        conn = get_db_conn()
+        if not conn:
+            logger.error("get_apply_summary: DB connection failed")
+            return json.dumps({"error": "db_not_configured", "detail": "DB connection failed"})
+        
         cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
         cursor.execute(
@@ -1034,6 +1048,7 @@ def get_apply_summary(run_batch_id: str) -> str:
 # ---------------------------------------------------------------------------
 # TOOL 6 — Route and Apply (HTTP call to apply_service)
 # ---------------------------------------------------------------------------
+@agentops.track_tool
 @tool
 @operation
 def route_and_apply(
@@ -1068,7 +1083,7 @@ def route_and_apply(
     """
     import requests
     
-    apply_service_url = os.getenv("APPLY_SERVICE_URL", "http://localhost:8003")
+    apply_service_url = os.getenv("SCRAPER_SERVICE_URL", "http://playwright-apply:8001")
     
     # Detect platform from URL if not provided
     if not platform:
@@ -1089,11 +1104,18 @@ def route_and_apply(
             "company": company,
         }
         
-        response = requests.post(
-            f"{apply_service_url}/apply",
-            json=payload,
-            timeout=120,  # 2 minute timeout for Playwright operations
-        )
+        def _do_post():
+            return requests.post(
+                f"{apply_service_url}/apply",
+                json=payload,
+                timeout=120,  # 2 minute timeout for Playwright operations
+            )
+            
+        try:
+            response = _retry_call(_do_post)
+        except RuntimeError as e:
+            logger.error("route_and_apply: %s", e)
+            return json.dumps({"success": False, "error": str(e)})
         
         if response.status_code == 200:
             result = response.json()
@@ -1146,6 +1168,7 @@ def route_and_apply(
 # ---------------------------------------------------------------------------
 # TOOL 7 — Save Application Result to Postgres
 # ---------------------------------------------------------------------------
+@agentops.track_tool
 @tool
 @operation
 def save_application_result(
@@ -1179,18 +1202,10 @@ def save_application_result(
     """
     conn = None
     try:
-        active_db = os.getenv("ACTIVE_DB", "local")
-        if active_db == "local":
-            conn = psycopg2.connect(
-                host=os.getenv("LOCAL_POSTGRES_HOST", "ai_postgres"),
-                port=int(os.getenv("LOCAL_POSTGRES_PORT", "5432")),
-                user=os.getenv("LOCAL_POSTGRES_USER", "aarjunm04"),
-                password=os.getenv("LOCAL_POSTGRES_PASSWORD"),
-                dbname=os.getenv("LOCAL_POSTGRES_DB", "ai_job_db"),
-                connect_timeout=10,
-            )
-        else:
-            conn = psycopg2.connect(os.getenv("SUPABASE_URL"))
+        conn = get_db_conn()
+        if not conn:
+            logger.error("save_application_result: DB connection failed")
+            return json.dumps({"success": False, "error": "DB connection failed"})
         
         conn.autocommit = False
         cursor = conn.cursor()
@@ -1234,6 +1249,7 @@ def save_application_result(
 # ---------------------------------------------------------------------------
 # TOOL 8 — Save to Manual Queue
 # ---------------------------------------------------------------------------
+@agentops.track_tool
 @tool
 @operation
 def save_to_queue(
@@ -1260,18 +1276,10 @@ def save_to_queue(
     """
     conn = None
     try:
-        active_db = os.getenv("ACTIVE_DB", "local")
-        if active_db == "local":
-            conn = psycopg2.connect(
-                host=os.getenv("LOCAL_POSTGRES_HOST", "ai_postgres"),
-                port=int(os.getenv("LOCAL_POSTGRES_PORT", "5432")),
-                user=os.getenv("LOCAL_POSTGRES_USER", "aarjunm04"),
-                password=os.getenv("LOCAL_POSTGRES_PASSWORD"),
-                dbname=os.getenv("LOCAL_POSTGRES_DB", "ai_job_db"),
-                connect_timeout=10,
-            )
-        else:
-            conn = psycopg2.connect(os.getenv("SUPABASE_URL"))
+        conn = get_db_conn()
+        if not conn:
+            logger.error("save_to_queue: DB connection failed")
+            return json.dumps({"success": False, "error": "DB connection failed"})
         
         conn.autocommit = False
         cursor = conn.cursor()
@@ -1326,6 +1334,7 @@ def save_to_queue(
 # ---------------------------------------------------------------------------
 # TOOL 9 — Get Best Resume via RAG
 # ---------------------------------------------------------------------------
+@agentops.track_tool
 @tool
 @operation
 def get_best_resume(
@@ -1358,11 +1367,17 @@ def get_best_resume(
             "company": company,
         }
         
-        response = requests.post(
-            f"{rag_service_url}/match",
-            json=payload,
-            timeout=30,
-        )
+        def _do_post():
+            return requests.post(
+                f"{rag_service_url}/match",
+                json=payload,
+                timeout=30,
+            )
+        try:
+            response = _retry_call(_do_post)
+        except RuntimeError as e:
+            logger.error("get_best_resume: %s", e)
+            return json.dumps({"success": False, "error": str(e)})
         
         if response.status_code == 200:
             result = response.json()
@@ -1416,6 +1431,7 @@ def get_best_resume(
 # ---------------------------------------------------------------------------
 # TOOL 10 — Verify Apply Budget
 # ---------------------------------------------------------------------------
+@agentops.track_tool
 @tool
 @operation
 def verify_apply_budget(

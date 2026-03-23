@@ -11,11 +11,30 @@ import threading
 import json
 import logging
 import os
+import time
 import agentops
 from serpapi import GoogleSearch
 from typing import List, Dict, Any, Optional
 
 logger = logging.getLogger(__name__)
+
+def _retry_call(fn, *args, max_retries: int = 3, **kwargs):
+    """Execute fn with exponential backoff retry."""
+    last_exc: Exception | None = None
+    for attempt in range(max_retries):
+        try:
+            return fn(*args, **kwargs)
+        except Exception as exc:
+            last_exc = exc
+            wait = 2.0 ** attempt
+            logger.warning(
+                "Attempt %d/%d failed: %s — retrying in %.1fs",
+                attempt + 1, max_retries, exc, wait,
+            )
+            time.sleep(wait)
+    raise RuntimeError(
+        f"All {max_retries} attempts failed. Last error: {last_exc}"
+    )
 
 # Load all 4 keys at import time, filter empty strings
 _SERPAPI_KEYS: list[str] = [
@@ -79,63 +98,49 @@ def search_google_jobs(
         return json.dumps({"error": "no_serpapi_keys_configured"})
 
     max_attempts = min(3, len(_SERPAPI_KEYS))
-    for attempt in range(max_attempts):
+
+    def _do_search():
         key = _get_next_key()
         if not key:
-            break
-        try:
-            params = {
-                "engine": "google_jobs",
-                "q": query,
-                "location": location,
-                "num": num_results,
-                "api_key": key
-            }
-            results = GoogleSearch(params).get_dict()
+            raise RuntimeError("serpapi_all_keys_exhausted")
+        params = {
+            "engine": "google_jobs",
+            "q": query,
+            "location": location,
+            "num": num_results,
+            "api_key": key
+        }
+        results = GoogleSearch(params).get_dict()
+        if "error" in results:
+            raise RuntimeError(str(results["error"]))
+        return results
 
-            if "error" in results:
-                err_msg = str(results["error"]).lower()
-                if "out of searches" in err_msg or "quota" in err_msg:
-                    logger.warning(
-                        "SerpAPI key #%d quota exceeded, rotating",
-                        attempt + 1
-                    )
-                    continue
-                logger.warning(
-                    "SerpAPI error on attempt %d: %s",
-                    attempt + 1, results["error"]
-                )
-                continue
+    try:
+        results = _retry_call(_do_search, max_retries=max_attempts)
+    except Exception as e:
+        logger.error(
+            "SerpAPI: all %d key attempts failed for query='%s'",
+            max_attempts, query
+        )
+        return json.dumps({"error": "serpapi_all_keys_failed"})
 
-            raw_jobs = results.get("jobs_results", [])
-            normalised = []
-            for job in raw_jobs:
-                related = job.get("related_links") or [{}]
-                normalised.append({
-                    "title":       job.get("title", ""),
-                    "company":     job.get("company_name", ""),
-                    "job_url":     related[0].get("link", ""),
-                    "location":    job.get("location", location),
-                    "description": job.get("description", "")[:500],
-                    "platform":    "serpapi",
-                    "source":      "google_jobs"
-                })
-            logger.info(
-                "SerpAPI: %d jobs returned for query='%s'",
-                len(normalised), query
-            )
-            return json.dumps(normalised)
-
-        except Exception as e:
-            logger.warning(
-                "SerpAPI attempt %d exception: %s", attempt + 1, str(e)
-            )
-            continue
-
-    logger.error(
-        "SerpAPI: all %d key attempts failed for query='%s'",
-        max_attempts, query
+    raw_jobs = results.get("jobs_results", [])
+    normalised = []
+    for job in raw_jobs:
+        related = job.get("related_links") or [{}]
+        normalised.append({
+            "title":       job.get("title", ""),
+            "company":     job.get("company_name", ""),
+            "job_url":     related[0].get("link", ""),
+            "location":    job.get("location", location),
+            "description": job.get("description", "")[:500],
+            "platform":    "serpapi",
+            "source":      "google_jobs"
+        })
+    logger.info(
+        "SerpAPI: %d jobs returned for query='%s'",
+        len(normalised), query
     )
-    return json.dumps({"error": "serpapi_all_keys_failed"})
+    return json.dumps(normalised)
 
 __all__ = ["search_google_jobs"]
