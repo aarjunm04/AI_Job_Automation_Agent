@@ -582,27 +582,30 @@ class FilterEngine:
     """
 
     def __init__(self, filters_path: Path = None):
-        config_dir = os.getenv(
+        config_dir = Path(os.getenv(
             "CONFIG_DIR",
-            os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "config")),
-        )
-        config_path = os.path.join(config_dir, "platform_settings.json")
+            Path(__file__).parent.parent / "config",
+        ))
+        platform_config_path = config_dir / "platform_config.json"
+        user_profile_path = config_dir / "user_profile.json"
 
         platform_config: Dict[str, Any] = {}
+        user_profile: Dict[str, Any] = {}
+
         try:
-            if os.path.exists(config_path):
-                with open(config_path, "r", encoding="utf-8") as f:
-                    platform_config = json.load(f)
-            else:
-                LOG.warning(
-                    "FilterEngine config missing: %s (set CONFIG_DIR to override) — using defaults",
-                    config_path,
-                )
-        except Exception as e:
+            with open(platform_config_path, "r", encoding="utf-8") as f:
+                platform_config = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError) as e:
             LOG.warning(
-                "FilterEngine failed to load config: %s (%s) — using defaults",
-                config_path,
-                e,
+                "FilterEngine failed to load platform_config.json: %s — using defaults", e
+            )
+
+        try:
+            with open(user_profile_path, "r", encoding="utf-8") as f:
+                user_profile = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError) as e:
+            LOG.warning(
+                "FilterEngine failed to load user_profile.json: %s — using defaults", e
             )
 
         filter_config = platform_config.get("filters", {})
@@ -623,7 +626,9 @@ class FilterEngine:
         self.filters_data = platform_config.get("job_filters", {})
         ai = self.filters_data.setdefault("ai_scoring", {})
         ai.setdefault("weights", {}).update(platform_config.get("scoring_weights", {}))
-        self.filters_data.setdefault("search_criteria", {})["job_titles"] = platform_config.get("search_queries", [])
+        self.filters_data.setdefault("search_criteria", {})["job_titles"] = (
+            user_profile.get("job_preferences", {}).get("target_titles", [])
+        )
         self.allowed_countries = self.filters_data.get("locations", {}).get("allowed_countries", [])
 
         LOG.info(
