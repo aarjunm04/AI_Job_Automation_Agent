@@ -33,6 +33,8 @@ from typing import List, Dict, Any, Iterable
 import math
 import pandas as pd
 
+from utils.proxy_rate_limit import get_proxy_dict
+
 # ================================================================================
 # LOGGING
 # ================================================================================
@@ -328,6 +330,13 @@ class JobSpyAdapter:
                     country_arg,
                 )
 
+                proxy = None
+                try:
+                    proxy = get_proxy_dict(platform="jobspy")
+                except Exception as e:  # noqa: BLE001
+                    LOG.warning("JobSpy proxy config failed — running without proxy: %s", e)
+                    proxy = None
+
                 df: pd.DataFrame = scrape_jobs(
                     site_name=[site],
                     search_term=None,  # Broad discovery; engine filters later
@@ -335,6 +344,7 @@ class JobSpyAdapter:
                     results_wanted=self.jobs_per_site,
                     country_indeed=country_arg,
                     hours_old=self.hours_old,
+                    proxy=proxy,
                     verbose=0,
                 )
 
@@ -405,4 +415,3 @@ class JobSpyAdapter:
 
         # Fallback for any unexpected site
         return DEFAULT_COUNTRY
-

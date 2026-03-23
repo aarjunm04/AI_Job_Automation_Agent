@@ -61,9 +61,10 @@ import pandas as pd
 from dateutil import parser as date_parser
 
 from .jobspy_adapter import JobSpyAdapter
-from tools.serpapi_tool import search_google_jobs
+from tools.serp_api_tool import search_google_jobs
 from tools.postgres_tools import _fetch_user_config
-from utils.proxy_ratelimit import get_proxy_dict, get_next_proxy, reset_proxy_cycle
+from utils.db_utils import get_db_conn
+from utils.proxy_rate_limit import get_proxy_dict, get_next_proxy, reset_proxy_cycle
 
 logging.basicConfig(
     level=logging.INFO,
@@ -134,6 +135,37 @@ def _make_proxied_request(
     if method.upper() == "POST":
         return requests.post(url, **kwargs)
     return requests.get(url, **kwargs)
+
+
+# ================================================================================
+# SYSTEM CONFIG HELPERS
+# ================================================================================
+
+
+def _load_search_queries_from_db() -> list[str]:
+    """Load `search_queries` from system_config (fail-soft)."""
+    conn = None
+    try:
+        conn = get_db_conn()
+        if not conn:
+            LOG.warning("search_queries load: DB connection unavailable — using []")
+            return []
+        cur = conn.cursor()
+        cur.execute("SELECT value FROM system_config WHERE key = 'search_queries'")
+        row = cur.fetchone()
+        queries = json.loads(row[0]) if row else []
+        if not isinstance(queries, list):
+            return []
+        return [str(q) for q in queries if str(q).strip()]
+    except Exception as e:  # noqa: BLE001
+        LOG.warning("search_queries load failed — using []: %s", e)
+        return []
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except Exception:  # noqa: BLE001
+                pass
 
 # ================================================================================
 # PATHS
@@ -930,11 +962,16 @@ class JoobleAPIScraper(BaseAPIScraper):
     def __init__(
         self,
         jobs_per_site: int,
-        keywords: str = "AI engineer machine learning data scientist",
+        keywords: str = "",
     ):
         super().__init__(jobs_per_site)
         self.api_key = os.getenv("JOOBLE_API_KEY")
-        self.keywords = keywords
+        if keywords:
+            self.keywords = keywords
+        else:
+            queries = _load_search_queries_from_db()
+            keywords_list = queries[:5] if queries else ["AI engineer remote"]
+            self.keywords = " ".join(keywords_list)
 
     def _run_sync(self) -> List[Dict[str, Any]]:
         """Scrape jobs from Jooble API."""
@@ -1347,11 +1384,12 @@ class ScraperEngine:
                 "(threshold: %d) — activating SerpAPI",
                 len(all_raw_jobs), SAFETY_NET_THRESHOLD,
             )
-            serp_query = os.getenv(
-                "SERPAPI_DEFAULT_QUERY",
-                "AI engineer OR machine learning engineer OR "
-                "data scientist remote",
-            )
+            queries = _load_search_queries_from_db()
+            serp_query = (queries[0] if queries else "").strip()
+            if not serp_query:
+                LOG.warning(
+                    "SerpAPI safety-net: no search_queries configured in system_config — using empty query"
+                )
             try:
                 serp_json_str = search_google_jobs(
                     query=serp_query,
