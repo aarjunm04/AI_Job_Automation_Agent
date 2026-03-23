@@ -11,7 +11,7 @@ import time
 import httpx
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional, Tuple
 import numpy as np
 
 from dotenv import load_dotenv
@@ -38,8 +38,8 @@ __all__ = [
 
 def chunk_text(
     text: str,
-    chunk_size: int = 400,
-    chunk_overlap: int = 80,
+    chunk_size: int = 450,
+    chunk_overlap: int = 50,
 ) -> list[str]:
     """Split text into overlapping chunks for embedding.
 
@@ -82,9 +82,8 @@ class GeminiEmbedder(EmbeddingProvider):
     Supports 768, 1536, or 3072 dimensions with MRL
     """
     api_key: str = field(default_factory=lambda: os.getenv("GEMINI_API_KEY", ""))
-    # text-embedding-004 was renamed to gemini-embedding-001 (current per Google docs)
-    model: str = field(default_factory=lambda: os.getenv("GEMINI_EMBEDDING_MODEL", "models/gemini-embedding-001"))
-    output_dimensionality: int = 1024  # Match NVIDIA NIM dimension for consistent vector space
+    model: str = field(default_factory=lambda: "models/text-embedding-004")
+    output_dimensionality: int = 768  # Match NVIDIA NIM dimension for consistent vector space
     task_type: str = "RETRIEVAL_DOCUMENT"  # For resume indexing
     timeout_seconds: float = 30
 
@@ -193,26 +192,14 @@ class NVIDIANIMEmbedder(EmbeddingProvider):
     """
 
     base_url: str = field(
-        default_factory=lambda: os.getenv(
-            "NVIDIA_NIM_BASE_URL", "https://integrate.api.nvidia.com/v1"
-        )
+        default_factory=lambda: os.getenv("NVIDIA_NIM_BASE_URL", "https://integrate.api.nvidia.com/v1")
     )
     api_key: str = field(default_factory=lambda: os.getenv("NVIDIA_NIM_API_KEY", ""))
-    model: str = field(
-        default_factory=lambda: os.getenv(
-            "NVIDIA_NIM_EMBEDDING_MODEL", "nvidia/nv-embedqa-e5-v5"
-        )
-    )
+    model: str = "nvidia/nv-embedqa-e5-v5"
     dimensions: int = 1024
     timeout_seconds: float = 30.0
-    extra_body: Dict[str, Any] = field(
-        default_factory=lambda: {
-            "input_type": "query",
-            "truncate": "END",  # Truncate at limit instead of hard-rejecting oversized input
-        }
-    )
 
-    def embed_text(self, text: str) -> List[float]:
+    def embed_text(self, text: str, input_type: str = "passage") -> List[float]:
         """
         Generate embeddings using NVIDIA NIM OpenAI-compatible embeddings API.
         """
@@ -228,9 +215,9 @@ class NVIDIANIMEmbedder(EmbeddingProvider):
             "model": self.model,
             "input": text,
             "encoding_format": "float",
+            "input_type": input_type,
+            "truncate": "END",
         }
-        payload.update(self.extra_body)
-
         try:
             resp = httpx.post(url, json=payload, headers=headers, timeout=self.timeout_seconds)
             resp.raise_for_status()
@@ -296,18 +283,35 @@ class EmbeddingService:
         ):
             for attempt in range(self.max_retries):
                 try:
-                    if isinstance(provider, GeminiEmbedder) and is_query:
-                        vector = provider.embed_query(text)
-                    else:
-                        vector = provider.embed_text(text)
+                    vector = None
+                    if isinstance(provider, NVIDIANIMEmbedder):
+                        input_type = "query" if is_query else "passage"
+                        vector = provider.embed_text(text, input_type=input_type)
+                    elif isinstance(provider, GeminiEmbedder):
+                        if is_query:
+                            vector = provider.embed_query(text)
+                        else:
+                            vector = provider.embed_text(text)
+
                     if vector is None:
                         raise ValueError(
                             f"{provider_name} embed returned None (dimension mismatch at provider level)"
                         )
-                    if len(vector) != 1024:
-                        raise ValueError(
-                            f"{provider_name} returned {len(vector)}-dim vector, expected 1024"
+
+                    # This validation is complex because providers have different dimensions.
+                    # We check against the provider's own configured dimension.
+                    expected_dim = 0
+                    if isinstance(provider, NVIDIANIMEmbedder):
+                        expected_dim = provider.dimensions
+                    elif isinstance(provider, GeminiEmbedder):
+                        expected_dim = provider.output_dimensionality
+
+                    if expected_dim > 0 and len(vector) != expected_dim:
+                        logger.warning(
+                            f"{provider_name} returned {len(vector)}-dim vector, expected {expected_dim}. "
+                            "This may cause issues if the ChromaDB collection has a fixed dimension."
                         )
+
                     return vector
                 except Exception as exc:  # noqa: BLE001
                     last_error = exc

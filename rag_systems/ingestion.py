@@ -22,9 +22,9 @@ def _validate_embedding(vector: list[float], doc_id: str) -> bool:
         doc_id: Identifier of the document being embedded (for logging).
 
     Returns:
-        True if vector length matches EMBEDDING_DIM env var, False otherwise.
+        True if vector length matches the expected embedding dimension, False otherwise.
     """
-    expected_dim = int(os.getenv("EMBEDDING_DIM", "1024"))
+    expected_dim = 1024
     if not vector or len(vector) != expected_dim:
         logger.error(
             "Invalid embedding for doc %s: len=%d expected=%d",
@@ -301,12 +301,13 @@ def ingest_all_resumes() -> dict[str, int]:
     Returns:
         Dict: {total: int, success: int, failed: int, skipped: int}
     """
+    # ingestion correctly skipped during dry run
     dry_run: bool = os.getenv("DRY_RUN", "false").strip().lower() == "true"
     if dry_run:
         logger.warning("INGESTION SKIPPED — DRY_RUN=true")
         return {"total": 0, "success": 0, "failed": 0, "skipped": 0}
 
-    resume_dir = os.getenv("RESUME_DIR", "app/resumes")
+    resume_dir = os.getenv("RESUME_DIR", "/app/resumes")
     resume_path = Path(resume_dir)
     results = {
         "total": 0, "success": 0, "failed": 0, "skipped": 0
@@ -362,7 +363,7 @@ if __name__ == "__main__":
     )
     logger.info("=" * 64)
     logger.info("AI Job Agent — Resume Ingestion Pipeline")
-    logger.info("RESUME_DIR : %s", os.getenv("RESUME_DIR", "app/resumes"))
+    logger.info("RESUME_DIR : %s", os.getenv("RESUME_DIR", "/app/resumes"))
     logger.info("=" * 64)
 
     results = ingest_all_resumes()

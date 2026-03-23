@@ -53,6 +53,12 @@ from contextlib import asynccontextmanager
 import hashlib
 import traceback
 import uuid
+import agentops
+
+__all__ = ["app", "main"]
+
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -66,7 +72,7 @@ try:
     from fastapi.middleware.trustedhost import TrustedHostMiddleware
     import uvicorn
 except ImportError:
-    print("ERROR: FastAPI dependencies missing. Install: pip install fastapi uvicorn pydantic")
+    logger.error("ERROR: FastAPI dependencies missing. Install: pip install fastapi uvicorn pydantic")
     sys.exit(1)
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -89,38 +95,41 @@ except ImportError:
     sys.exit(1)
 
 # ═══════════════════════════════════════════════════════════════════════════
-# LOGGING CONFIGURATION
+# CONFIGURATION & CONSTANTS
 # ═══════════════════════════════════════════════════════════════════════════
-
-logger = logging.getLogger("production_server")
-logger.setLevel(logging.INFO)
-
-console_handler = logging.StreamHandler()
-console_handler.setLevel(logging.INFO)
-
-formatter = logging.Formatter(
-    "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-)
-console_handler.setFormatter(formatter)
-
-logger.addHandler(console_handler)
-
 
 # ═══════════════════════════════════════════════════════════════════════════
 # CONFIGURATION & CONSTANTS
 # ═══════════════════════════════════════════════════════════════════════════
 
+# ── SERVER CONFIG CONSTANTS
+SESSION_TIMEOUT_MINUTES = 30
+SESSION_MAX_HISTORY = 10
+SESSION_CLEANUP_INTERVAL = 300
+RATE_LIMIT_REQUESTS = 100
+RATE_LIMIT_WINDOW_SECONDS = 60
+CIRCUIT_BREAKER_THRESHOLD = 5
+CIRCUIT_BREAKER_TIMEOUT = 60
+CACHE_ENABLED = True
+CACHE_TTL_SECONDS = 300
+CACHE_MAX_SIZE = 1000
+REQUEST_TIMEOUT_SECONDS = 30
+MAX_CONCURRENT_REQUESTS = 50
+CORS_ORIGINS = ["*"]
+LOG_REQUESTS = True
+TRUSTED_HOSTS = ["*"]
+
 class ServerConfig:
     """Centralized server configuration"""
     
     # Server Settings
-    HOST: str = os.getenv("RAG_SERVER_HOST", "0.0.0.0")
-    PORT: int = int(os.getenv("RAG_SERVER_PORT", "8090"))
-    RELOAD: bool = os.getenv("RAG_SERVER_RELOAD", "false").lower() == "true"
-    WORKERS: int = int(os.getenv("RAG_SERVER_WORKERS", "1"))
+    HOST: str = "0.0.0.0"
+    PORT: int = 8090
+    RELOAD: bool = False
+    WORKERS: int = 1
 
     # API Key (single server-wide key)
-    API_KEY: str = os.getenv("RAG_SERVER_API_KEY", "")
+    API_KEY: str = os.getenv("SCRAPER_SERVICE_API_KEY", "")
     MASTER_API_KEY: str = API_KEY
     
     # Collect all valid client keys (single-key model, kept as a set for compatibility)
@@ -132,36 +141,33 @@ class ServerConfig:
     }
     
     # Session Management
-    SESSION_TIMEOUT_MINUTES: int = int(os.getenv("SESSION_TIMEOUT_MINUTES", "30"))
-    SESSION_MAX_HISTORY: int = int(os.getenv("SESSION_MAX_HISTORY", "50"))
-    SESSION_CLEANUP_INTERVAL: int = int(os.getenv("SESSION_CLEANUP_INTERVAL", "300"))
+    SESSION_TIMEOUT_MINUTES: int = SESSION_TIMEOUT_MINUTES
+    SESSION_MAX_HISTORY: int = SESSION_MAX_HISTORY
+    SESSION_CLEANUP_INTERVAL: int = SESSION_CLEANUP_INTERVAL
     
     # Rate Limiting
-    RATE_LIMIT_REQUESTS: int = int(os.getenv("RATE_LIMIT_REQUESTS", "100"))
-    RATE_LIMIT_WINDOW_SECONDS: int = int(os.getenv("RATE_LIMIT_WINDOW_SECONDS", "60"))
+    RATE_LIMIT_REQUESTS: int = RATE_LIMIT_REQUESTS
+    RATE_LIMIT_WINDOW_SECONDS: int = RATE_LIMIT_WINDOW_SECONDS
     
     # Circuit Breaker
-    CIRCUIT_BREAKER_THRESHOLD: int = int(os.getenv("CIRCUIT_BREAKER_THRESHOLD", "5"))
-    CIRCUIT_BREAKER_TIMEOUT: int = int(os.getenv("CIRCUIT_BREAKER_TIMEOUT", "60"))
+    CIRCUIT_BREAKER_THRESHOLD: int = CIRCUIT_BREAKER_THRESHOLD
+    CIRCUIT_BREAKER_TIMEOUT: int = CIRCUIT_BREAKER_TIMEOUT
     
     # Cache Settings
-    CACHE_ENABLED: bool = os.getenv("CACHE_ENABLED", "true").lower() == "true"
-    CACHE_TTL_SECONDS: int = int(os.getenv("CACHE_TTL_SECONDS", "3600"))
-    CACHE_MAX_SIZE: int = int(os.getenv("CACHE_MAX_SIZE", "1000"))
+    CACHE_ENABLED: bool = CACHE_ENABLED
+    CACHE_TTL_SECONDS: int = CACHE_TTL_SECONDS
+    CACHE_MAX_SIZE: int = CACHE_MAX_SIZE
     
     # Performance
-    REQUEST_TIMEOUT_SECONDS: int = int(os.getenv("REQUEST_TIMEOUT_SECONDS", "30"))
-    MAX_CONCURRENT_REQUESTS: int = int(os.getenv("MAX_CONCURRENT_REQUESTS", "50"))
+    REQUEST_TIMEOUT_SECONDS: int = REQUEST_TIMEOUT_SECONDS
+    MAX_CONCURRENT_REQUESTS: int = MAX_CONCURRENT_REQUESTS
     
     # CORS
-    CORS_ORIGINS: List[str] = os.getenv(
-        "CORS_ORIGINS",
-        "http://localhost:*,chrome-extension://*,https://*.company.com"
-    ).split(",")
+    CORS_ORIGINS: List[str] = CORS_ORIGINS
     
     # Logging
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
-    LOG_REQUESTS: bool = os.getenv("LOG_REQUESTS", "true").lower() == "true"
+    LOG_REQUESTS: bool = LOG_REQUESTS
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -792,13 +798,9 @@ app.add_middleware(
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 # Trusted Host Middleware (security)
-_trusted_hosts = os.getenv(
-    "TRUSTED_HOSTS",
-    "localhost,127.0.0.1,*.local,rag-server,ai_rag_server,agentrunner,ai_agentrunner"
-).split(",")
 app.add_middleware(
     TrustedHostMiddleware,
-    allowed_hosts=[h.strip() for h in _trusted_hosts]
+    allowed_hosts=TRUSTED_HOSTS
 )
 
 
@@ -858,16 +860,15 @@ async def verify_api_key(
     """Verify API key from header"""
     
     # Collect all valid keys from environment, filtering out None/empty.
-    # Primary key: RAG_SERVER_API_KEY. RAG_API_KEY is accepted for backwards compatibility.
+    # Primary key: SCRAPER_SERVICE_API_KEY. RAG_API_KEY is accepted for backwards compatibility.
     valid_keys = {
         key
         for key in [
-            os.getenv("RAG_SERVER_API_KEY"),
+            os.getenv("SCRAPER_SERVICE_API_KEY"),
             os.getenv("RAG_API_KEY"),
         ]
-        if key and key.strip()
+        if key
     }
-    
     # Also check ServerConfig.API_KEYS / MASTER_API_KEY
     valid_keys.update(ServerConfig.API_KEYS)
     if ServerConfig.MASTER_API_KEY:
@@ -914,14 +915,16 @@ def check_rate_limit(api_key: str = Depends(verify_api_key)):
 # API ENDPOINTS
 # ═══════════════════════════════════════════════════════════════════════════
 
+@agentops.track_tool
 @app.get("/", response_class=PlainTextResponse)
-async def root():
+async def root() -> str:
     """Root endpoint"""
     return "RAG Production Server v1.0.0 - Running ✓"
 
 
+@agentops.track_tool
 @app.get("/health")
-async def health_check():
+async def health_check() -> JSONResponse:
     """Health check endpoint — always returns HTTP 200 with status fields."""
     result: Dict[str, Any] = {
         "status": "ok",
@@ -962,11 +965,12 @@ async def health_check():
     return JSONResponse(content=result, status_code=200)
 
 
+@agentops.track_tool
 @app.post("/rag/query", tags=["RAG"])
 def rag_query_context(
     request: RAGRequest,
     api_key: str = Depends(verify_api_key)
-):
+) -> dict:
     """Query RAG system for relevant resume context."""
     start_time = time.time()
     
@@ -1028,11 +1032,12 @@ def rag_query_context(
         )
 
     
+@agentops.track_tool
 @app.post("/rag/select", tags=["RAG"])
 def rag_select_resume(
     request: RAGRequest,
     api_key: str = Depends(verify_api_key)
-):
+) -> dict:
     """Select best resume for job description using RAG."""
     try:
         # Validate job_text
@@ -1077,10 +1082,11 @@ def rag_select_resume(
         )
 
 
+@agentops.track_tool
 @app.get("/resumes", tags=["RAG"])
 def list_resumes_endpoint(
     _: str = Depends(verify_api_key)
-):
+) -> dict:
     """List all available resumes"""
     try:
         resumes = list_resumes()
@@ -1093,11 +1099,12 @@ def list_resumes_endpoint(
         raise HTTPException(status_code=500, detail=f"Failed to list resumes: {str(e)}")
 
 
+@agentops.track_tool
 @app.post("/resumes/select", response_model=ResumeSelectionResponse, tags=["RAG"])
 async def select_best_resume(
     request: ResumeSelectionRequest,
     api_key: str = Depends(check_rate_limit)
-):
+) -> ResumeSelectionResponse:
     """
     Select best resume for job description
     
@@ -1156,8 +1163,9 @@ async def select_best_resume(
         )
 
 
+@agentops.track_tool
 @app.get("/resumes/list", tags=["RAG"])
-async def list_all_resumes(api_key: str = Depends(check_rate_limit)):
+async def list_all_resumes(api_key: str = Depends(check_rate_limit)) -> dict:
     """List all available resumes"""
     import traceback
     
@@ -1194,11 +1202,12 @@ async def list_all_resumes(api_key: str = Depends(check_rate_limit)):
         )
 
 
+@agentops.track_tool
 @app.post("/resumes/reindex/{resume_id}", tags=["RAG"])
 def reindex_resume_endpoint(
     resume_id: str,
     api_key: str = Depends(check_rate_limit)
-):
+) -> dict:
     """Reindex specific resume"""
     try:
         result = reindex_resume(resume_id)
@@ -1216,11 +1225,12 @@ def reindex_resume_endpoint(
         )
 
 
+@agentops.track_tool
 @app.get("/sessions/{session_id}", tags=["Sessions"])
 def get_session_info(
     session_id: str,
     api_key: str = Depends(check_rate_limit)
-):
+) -> dict:
     """Get session information"""
     session = session_manager.get(session_id)
     
@@ -1237,11 +1247,12 @@ def get_session_info(
     }
 
 
+@agentops.track_tool
 @app.delete("/sessions/{session_id}", tags=["Sessions"])
 def delete_session(
     session_id: str,
     api_key: str = Depends(check_rate_limit)
-):
+) -> dict:
     """Delete session"""
     deleted = session_manager.delete(session_id)
     
@@ -1258,10 +1269,11 @@ def delete_session(
     }
 
 
+@agentops.track_tool
 @app.post("/cache/invalidate", tags=["Admin"])
 def invalidate_cache(
     api_key: str = Depends(verify_api_key)
-):
+) -> dict:
     """Invalidate response cache (requires master API key)"""
     if api_key != ServerConfig.MASTER_API_KEY:
         raise HTTPException(
@@ -1278,8 +1290,9 @@ def invalidate_cache(
     }
 
 
+@agentops.track_tool
 @app.get("/metrics", tags=["Admin"])
-def get_metrics(api_key: str = Depends(verify_api_key)):
+def get_metrics(api_key: str = Depends(verify_api_key)) -> dict:
     """Get system metrics"""
     metrics = metrics_collector.get_metrics()
     session_stats = session_manager.get_stats()
@@ -1301,11 +1314,12 @@ def get_metrics(api_key: str = Depends(verify_api_key)):
 # ═══════════════════════════════════════════════════════════════════════════
 
 
+@agentops.track_tool
 @app.post("/match", tags=["RAG"])
 async def match_resume(
     request: MatchRequest,
     api_key: str = Depends(verify_x_api_key),
-):
+) -> JSONResponse:
     """Match the best resume against a job description."""
     try:
         job_text = "\n\n".join(
@@ -1328,11 +1342,12 @@ async def match_resume(
         )
 
 
+@agentops.track_tool
 @app.post("/autofill", tags=["RAG"])
 async def autofill_context(
     request: AutofillRequest,
     api_key: str = Depends(verify_x_api_key),
-):
+) -> JSONResponse:
     """Retrieve RAG context chunks for auto-filling application forms."""
     try:
         result = get_rag_context(
@@ -1394,7 +1409,7 @@ async def general_exception_handler(request: Request, exc: Exception):
 # MAIN ENTRY POINT
 # ═══════════════════════════════════════════════════════════════════════════
 
-def main():
+def main() -> None:
     """Start production server"""
     logger.info("=" * 80)
     logger.info("STARTING RAG PRODUCTION SERVER")

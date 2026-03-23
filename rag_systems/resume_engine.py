@@ -37,11 +37,17 @@ from rag_systems.rag_pipeline import (
     chunk_text,
 )
 
+__all__ = [
+    "ResumeEntry",
+    "ResumeEngine",
+    "get_default_engine",
+]
+
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 
-RESUME_DIR = os.getenv("RESUME_DIR", "resumes")
+RESUME_DIR = os.getenv("RESUME_DIR", "/app/resumes")
 
 
 def _resolve_resume_path(filename: str) -> str:
@@ -55,6 +61,7 @@ def _resolve_resume_path(filename: str) -> str:
 
 @dataclass
 class ResumeEntry:
+    """Represents a configured resume and its routing metadata."""
     resume_id: str
     label: str
     role_focus: str
@@ -63,7 +70,12 @@ class ResumeEntry:
     embedding_version: str
     vector_anchor_id: str
 
-    def to_dict(self):
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize entry to dictionary.
+
+        Returns:
+            Dictionary mapped from dataclass properties.
+        """
         return asdict(self)
 
 
@@ -179,6 +191,18 @@ class ResumeEngine:
     # INGEST RESUME
     # ============================================================
     def ingest_resume(self, resume_id: str) -> Dict[str, Any]:
+        """Extracts text, embeds chunks, and upserts to ChromaDB.
+
+        Args:
+            resume_id: Configured ID of the resume to ingest.
+
+        Returns:
+            Dict containing ingestion results (resume_id, num_chunks, anchor_id, timestamp).
+
+        Raises:
+            KeyError: If resume_id is unknown.
+            FileNotFoundError: If PDF file is missing.
+        """
         if resume_id not in self.resumes:
             raise KeyError(f"Unknown resume_id: {resume_id}")
 
@@ -192,7 +216,7 @@ class ResumeEngine:
         raw_text = self._extract_pdf_text(entry.local_path)
 
         # 1. CHUNK (chunk_text returns list[str]; wrap into dicts for ChromaDB)
-        chunk_strings = chunk_text(raw_text, chunk_size=400, chunk_overlap=80)
+        chunk_strings = chunk_text(raw_text, chunk_size=450, chunk_overlap=50)
         chunks = [
             {
                 "chunk_id": str(uuid.uuid4()),
@@ -243,6 +267,14 @@ class ResumeEngine:
     # REINDEX RESUME
     # ============================================================
     def reindex_resume(self, resume_id: str) -> Dict[str, Any]:
+        """Deletes existing resume data in ChromaDB and reingests it.
+
+        Args:
+            resume_id: Target resume ID to reindex.
+
+        Returns:
+            Dict containing the ingestion results.
+        """
         logger.info("Reindex requested for %s", resume_id)
         self.chroma.delete_resume(resume_id)
         return self.ingest_resume(resume_id)
@@ -256,6 +288,20 @@ class ResumeEngine:
         top_k_anchors: int = 7,
         top_k_chunks: int = 3
     ) -> Dict[str, Any]:
+        """Determine top resume fit mathematically based on job description.
+
+        Args:
+            job_payload: Dictionary containing `job_text`.
+            top_k_anchors: Max anchors to fetch from Chroma.
+            top_k_chunks: Max chunks to fetch from Chroma for tie breaking.
+
+        Returns:
+            Dict holding top resume ID, score, full candidates list, and path.
+
+        Raises:
+            ValueError: If job_text is missing.
+            RuntimeError: If no candidates were found in storage.
+        """
 
         job_text = job_payload.get("job_text", "").strip()
         if not job_text:
@@ -321,11 +367,27 @@ class ResumeEngine:
     # UTILITIES
     # ============================================================
     def get_resume_path(self, resume_id: str) -> str:
+        """Returns the absolute file path for a given resume configured ID.
+
+        Args:
+            resume_id: Target resume ID.
+
+        Returns:
+            Absolute string path to PDF file.
+
+        Raises:
+            KeyError: If resume ID is unknown.
+        """
         if resume_id not in self.resumes:
             raise KeyError(f"Unknown resume_id: {resume_id}")
         return self.resumes[resume_id].local_path
 
     def list_resumes(self) -> List[Dict[str, Any]]:
+        """List all loaded resumes from internal config.
+
+        Returns:
+            List of resume entries mapped to dicts.
+        """
         return [r.to_dict() for r in self.resumes.values()]
 
 
@@ -340,6 +402,16 @@ def get_default_engine(
     chroma_config: Optional[ChromaStoreConfig] = None,
     embedder: Optional[Any] = None,
 ) -> ResumeEngine:
+    """Gets or initializes the singleton ResumeEngine instance.
+
+    Args:
+        resume_config_path: Optional override path for config.
+        chroma_config: Optional ChromaStore configuration.
+        embedder: Optional initialized embedding service.
+
+    Returns:
+        Singleton ResumeEngine instance.
+    """
     global _default_engine
     if _default_engine is None:
         _default_engine = ResumeEngine(

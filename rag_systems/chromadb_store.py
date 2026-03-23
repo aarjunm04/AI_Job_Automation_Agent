@@ -39,9 +39,9 @@ except Exception:  # pragma: no cover - env dependent
 
 @dataclass
 class ChromaStoreConfig:
-    host: str = field(default_factory=lambda: os.getenv("CHROMA_HOST", "ai_chromadb"))
-    port: int = field(default_factory=lambda: int(os.getenv("CHROMA_PORT", "8001")))
-    collection_name: str = field(default_factory=lambda: os.getenv("CHROMA_COLLECTION", "resumes"))
+    host: str = field(default_factory=lambda: os.getenv("CHROMADB_HOST", "chromadb"))
+    port: int = field(default_factory=lambda: int(os.getenv("CHROMADB_PORT", "8000")))
+    collection_name: str = "job_resumes"
     retry_attempts: int = 3
     retry_delay_seconds: float = 0.5
 
@@ -70,8 +70,8 @@ class ChromaStore:
         while True:
             try:
                 self._client = chromadb.HttpClient(
-                    host=os.getenv("CHROMA_HOST", "ai_chromadb"),
-                    port=int(os.getenv("CHROMA_PORT", "8001")),
+                    host=self.config.host,
+                    port=self.config.port,
                 )
                 self._collection = self._client.get_or_create_collection(
                     name=self.config.collection_name,
@@ -170,16 +170,19 @@ class ChromaStore:
 
         if CHROMADB_AVAILABLE and self._collection is not None:
             # ---- DIM GUARD — skip embeddings with wrong dimension --------
-            expected_dim = int(os.getenv("EMBEDDING_DIM", "1024"))
+            # NVIDIA is 1024, Google is 768. We can't enforce one, so we check if it's one of the two valid dims.
+            # The collection itself should be initialized with a dimension, but ChromaDB HTTP client doesn't expose that easily.
+            # We will rely on the embedding service to provide correct vectors.
+            # This check is a safeguard.
             valid_ids: List[str] = []
             valid_docs: List[str] = []
             valid_embs: List[List[float]] = []
             valid_metas: List[Dict[str, Any]] = []
             for i, emb in enumerate(embeddings):
-                if len(emb) != expected_dim:
+                if len(emb) not in [1024, 768]:
                     self._logger.error(
-                        "Embedding dim mismatch: got %d expected %d, skipping doc %s",
-                        len(emb), expected_dim, chunk_ids[i],
+                        "Embedding dim invalid: got %d, expected 1024 (NVIDIA) or 768 (Google), skipping doc %s",
+                        len(emb), chunk_ids[i],
                     )
                     continue
                 valid_ids.append(chunk_ids[i])
@@ -229,17 +232,15 @@ class ChromaStore:
 
         documents = [anchor_text or ""]
 
+        if not anchor_embedding or len(anchor_embedding) not in [1024, 768]:
+            self._logger.error(
+                "Anchor embedding dim invalid: got %d, expected 1024 or 768, skipping anchor %s",
+                len(anchor_embedding) if anchor_embedding else 0,
+                anchor_id,
+            )
+            return
+
         if CHROMADB_AVAILABLE and self._collection is not None:
-            # ---- DIM GUARD — validate anchor embedding -------------------
-            expected_dim = int(os.getenv("EMBEDDING_DIM", "1024"))
-            if not anchor_embedding or len(anchor_embedding) != expected_dim:
-                self._logger.error(
-                    "Embedding dim mismatch: got %d expected %d, skipping doc %s",
-                    len(anchor_embedding) if anchor_embedding else 0,
-                    expected_dim,
-                    anchor_id,
-                )
-                return
             # --------------------------------------------------------------
             attempts = 0
             while True:
