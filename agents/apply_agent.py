@@ -57,7 +57,6 @@ from tools.agentops_tools import (
     record_agent_error,
     record_fallback_event,
 )
-from tools.notion_tools import queue_job_to_applications_db
 from utils.db_utils import get_db_conn
 
 # Module-level logger
@@ -256,7 +255,7 @@ class ApplyAgent:
                         (
                             job.get("id", job.get("job_post_id", "")),
                             resume_id,
-                            os.getenv("CANDIDATE_USER_ID", self.user_id),
+                            "default_user",
                             mode,
                             status,
                             self._detect_ats(job.get("url", "")),
@@ -652,26 +651,17 @@ class ApplyAgent:
                     db_exc,
                 )
 
-            # Queue to Notion Applications DB
+            # Fallback Postgres update
             try:
-                queue_job_to_applications_db.func(
+                update_application_status.func(
                     job_post_id=job_post_id,
-                    run_batch_id=self.run_batch_id,
-                    title=job.get("title", ""),
-                    company=job.get("company", ""),
-                    job_url=job.get("url", ""),
-                    platform=job.get("source_platform", "unknown"),
-                    fit_score=float(job.get("fit_score", 0.0)),
-                    resume_suggested=job.get(
-                        "resume_suggested", run_config.default_resume
-                    ),
-                    notes=f"Auto-apply re-routed: {reason}",
-                    location=job.get("location", ""),
+                    status="manual_queued",
+                    error_code=reason,
                 )
-            except Exception as notion_exc:  # noqa: BLE001
+            except Exception as pg_exc:  # noqa: BLE001
                 self.logger.warning(
-                    "_reroute_to_manual: Notion queue failed (non-critical): %s",
-                    notion_exc,
+                    "_reroute_to_manual: Postgres update failed: %s",
+                    pg_exc,
                 )
 
             log_event.func(
@@ -931,7 +921,7 @@ class ApplyAgent:
                 check_xai_run_cap,
                 record_llm_cost,
                 get_cost_summary,
-                queue_job_to_applications_db,
+                update_application_status,
             ],
             verbose=True,
             max_iter=25,
@@ -995,13 +985,13 @@ APPLICATION INSTRUCTIONS
 6. After EVERY 5 applications, call check_xai_run_cap with
    run_batch_id={self.run_batch_id}. If the response contains
    "abort": true — STOP immediately and re-queue ALL remaining jobs
-   to the manual queue via queue_job_to_applications_db.
+   to the manual queue via update_application_status.
 
 7. Enforce per-platform rate limits using the platform config's
    rate_limit_per_request_seconds. Sleep between requests.
 
 8. If a job fails to apply after 2 retries (handled by fill_standard_form) —
-   re-route to manual queue via queue_job_to_applications_db.
+   re-route to manual queue via update_application_status.
 
 9. After processing ALL jobs, call get_apply_summary with
    run_batch_id={self.run_batch_id} for final counts.
@@ -1361,9 +1351,8 @@ ROUTING MANIFEST (JSON)
             # ----------------------------------------------------------
             # Step 8: process jobs with concurrent platform dispatch
             # ----------------------------------------------------------
-            use_concurrent = os.getenv(
-                "APPLY_CONCURRENT_DISPATCH", "true"
-            ).strip().lower() == "true"
+            concurrent_dispatch: bool = False
+            use_concurrent = concurrent_dispatch
 
             if use_concurrent and len(self.routing_manifest) > 1:
                 self.logger.info(
@@ -1371,7 +1360,7 @@ ROUTING MANIFEST (JSON)
                 )
                 per_job_results = self._dispatch_concurrent(
                     max_platform_workers=int(
-                        os.getenv("APPLY_MAX_PLATFORM_WORKERS", "3")
+                        os.getenv("MAX_PLAYWRIGHT_SESSIONS", "3")
                     )
                 )
             else:

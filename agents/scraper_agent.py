@@ -152,12 +152,10 @@ class ScraperAgent:
             Configured CrewAI Task instance.
         """
         # Get search query from environment or use default
-        search_query = os.getenv(
-            "SEARCH_QUERY", "AI ML Data Science Automation Engineer"
-        )
+        search_query = ""
 
         # Get minimum jobs target
-        min_jobs = int(os.getenv("JOBS_PER_RUN_MINIMUM", "100"))
+        min_jobs = int(os.getenv("JOBS_PER_RUN_TARGET", "100"))
 
         description = f"""
 Execute a comprehensive job discovery run across all configured platforms.
@@ -232,12 +230,8 @@ IMPORTANT:
             platforms_scraped, duration_seconds on success; or
             {success, reason, total_jobs, jobs, aborted} on failure.
         """
-        playwright_platforms: List[str] = [
-            "wellfound", "weworkremotely", "ycombinator", "arc", "turing", "crossover"
-        ]
-        search_queries: List[str] = [
-            os.getenv("SEARCH_QUERY", "AI ML Data Science Automation Engineer")
-        ]
+        playwright_platforms: List[str] = ["wellfound", "arcdev"]
+        search_queries: List[str] = []
         max_jobs: int = int(os.getenv("JOBS_PER_RUN_TARGET", "150"))
 
         try:
@@ -246,7 +240,14 @@ IMPORTANT:
             custom_platforms: List[str] = platform_settings.get("playwright_platforms", [])
             if custom_platforms:
                 playwright_platforms = custom_platforms
-            custom_queries: List[str] = platform_settings.get("search_queries", [])
+
+            config_dir = Path(__file__).parent.parent / "config"
+            user_profile_path = config_dir / "user_profile.json"
+            with open(user_profile_path, "r", encoding="utf-8") as f:
+                user_profile = json.load(f)
+            custom_queries: List[str] = (
+                user_profile.get("job_preferences", {}).get("target_titles", [])
+            )
             if custom_queries:
                 search_queries = custom_queries
             target: int = int(
@@ -316,8 +317,8 @@ IMPORTANT:
         """
         self.logger.info("Initiating hardcoded fallback scrape sequence...")
         
-        search_query = os.getenv("SEARCH_QUERY", "AI ML Data Science Automation Engineer")
-        min_jobs = int(os.getenv("JOBS_PER_RUN_MINIMUM", "100"))
+        search_query = ""
+        min_jobs = int(os.getenv("JOBS_PER_RUN_TARGET", "100"))
 
         try:
             self.logger.info("Fallback Step 1: JobSpy Scrape")

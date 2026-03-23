@@ -37,7 +37,6 @@ from tools.agentops_tools import record_agent_error
 from tools.notion_tools import (
     check_notion_connection,
     get_pending_manual_queue,
-    queue_job_to_applications_db,
     sync_application_to_job_tracker,
 )
 from tools.postgres_tools import (
@@ -45,6 +44,7 @@ from tools.postgres_tools import (
     log_event,
     update_run_batch_stats,
 )
+from utils.db_utils import get_db_conn
 
 # ---------------------------------------------------------------------------
 # Module-level logger
@@ -152,12 +152,7 @@ class TrackerAgent:
             List of dicts, each containing all fields available on the joined
             rows.  Returns an empty list on unrecoverable failure.
         """
-        connection_url: str = db_config.connection_url
-        if not connection_url:
-            self.logger.error(
-                "_query_applications: no DB connection_url configured"
-            )
-            return []
+        # connection_url check removed (handled by get_db_conn)
 
         sql = """
             SELECT
@@ -188,7 +183,7 @@ class TrackerAgent:
         for attempt in range(3):
             conn = None
             try:
-                conn = psycopg2.connect(connection_url)
+                conn = get_db_conn()
                 conn.autocommit = False
                 cursor = conn.cursor(
                     cursor_factory=psycopg2.extras.RealDictCursor
@@ -271,7 +266,6 @@ class TrackerAgent:
             llm=self.llm,
             tools=[
                 sync_application_to_job_tracker,
-                queue_job_to_applications_db,
                 check_notion_connection,
                 get_pending_manual_queue,
                 log_event,
@@ -317,7 +311,7 @@ applied_jobs (JSON):
 {applied_json}
 
 STEP 3 — Push queued jobs to Notion Applications DB
-For each job in the queued_jobs list below, call queue_job_to_applications_db
+For each job in the queued_jobs list below, call sync_application_to_job_tracker
 with: job_post_id, run_batch_id="{self.run_batch_id}", title, company, url
 (as job_url), platform, fit_score, and resume_used (as resume_suggested),
 and location.
@@ -620,12 +614,8 @@ If some Notion syncs failed, include them in the "errors" list as strings.
 
     def _get_run_session_stats(self) -> Optional[dict[str, Any]]:
         """Query run_sessions table for this run's stats."""
-        connection_url = db_config.connection_url
-        if not connection_url:
-            return None
-
         try:
-            conn = psycopg2.connect(connection_url)
+            conn = get_db_conn()
             cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
             
             cursor.execute("""
@@ -647,12 +637,8 @@ If some Notion syncs failed, include them in the "errors" list as strings.
 
     def _get_application_stats(self) -> dict[str, int]:
         """Query applications table grouped by status."""
-        connection_url = db_config.connection_url
-        if not connection_url:
-            return {}
-
         try:
-            conn = psycopg2.connect(connection_url)
+            conn = get_db_conn()
             cursor = conn.cursor()
             
             cursor.execute("""
@@ -688,12 +674,8 @@ If some Notion syncs failed, include them in the "errors" list as strings.
 
     def _get_top_applied_jobs(self, limit: int = 10) -> List[dict[str, Any]]:
         """Get top applied jobs ordered by fit_score."""
-        connection_url = db_config.connection_url
-        if not connection_url:
-            return []
-
         try:
-            conn = psycopg2.connect(connection_url)
+            conn = get_db_conn()
             cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
             
             cursor.execute("""
@@ -721,12 +703,8 @@ If some Notion syncs failed, include them in the "errors" list as strings.
 
     def _get_error_summary(self) -> Optional[str]:
         """Get error summary from audit_logs."""
-        connection_url = db_config.connection_url
-        if not connection_url:
-            return None
-
         try:
-            conn = psycopg2.connect(connection_url)
+            conn = get_db_conn()
             cursor = conn.cursor()
             
             cursor.execute("""

@@ -50,6 +50,7 @@ from tools.agentops_tools import (
     record_fallback_event,
 )
 from utils.normalise_dedupe import deduplicate_jobs_fuzzy
+from utils.db_utils import get_db_conn
 
 # Module-level logger
 logger = logging.getLogger(__name__)
@@ -193,7 +194,7 @@ class MasterAgent:
         self.mode: str = mode if mode != "dry_run" else "full"
         self.run_batch_id: str = str(uuid.uuid4())
         self.run_index_in_week: int = self._calculate_run_index()
-        self.user_id: str = os.getenv("USER_ID", str(uuid.uuid4()))
+        self.user_id: str = "default_user"
 
         self.llm_interface: LLMInterface = LLMInterface()
         self.llm = self.llm_interface.get_llm("MASTER_AGENT")
@@ -281,7 +282,7 @@ class MasterAgent:
             )
         else:
             try:
-                conn = psycopg2.connect(db_config.connection_url)
+                conn = get_db_conn()
                 conn.close()
                 self.logger.info("Boot step 2 PASSED — database connection OK")
             except Exception as exc:  # noqa: BLE001
@@ -453,7 +454,7 @@ class MasterAgent:
             # Uses fuzzy dedup (title+company sim ≥ 0.85) on top of URL hash.
             # ----------------------------------------------------------
             try:
-                db_conn = psycopg2.connect(db_config.connection_url)
+                db_conn = get_db_conn()
                 try:
                     with db_conn.cursor() as cur:
                         cur.execute(
@@ -634,7 +635,7 @@ class MasterAgent:
             ``True`` if the run should be vetoed (cost exceeded),
             ``False`` if within budget.
         """
-        veto_threshold: float = float(os.getenv("RUN_COST_VETO", "0.10"))
+        veto_threshold: float = float(os.getenv("XAI_COST_CAP_PER_RUN", "0.10"))
         try:
             cost_raw: str = get_cost_summary.func(run_batch_id=self.run_batch_id)
             cost_data: Dict[str, Any] = json.loads(cost_raw)

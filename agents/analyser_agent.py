@@ -596,9 +596,9 @@ class AnalyserAgent:
         from integrations import llm_interface as _llm_interface
 
         providers = [
-            os.getenv("ANALYSER_LLM_PRIMARY"),
-            os.getenv("ANALYSER_LLM_FALLBACK_1"),
-            os.getenv("ANALYSER_LLM_FALLBACK_2"),
+            os.getenv("XAI_DEFAULT_MODEL", "grok-3-fast"),
+            os.getenv("SAMBANOVA_MODEL", "Llama-3.1-70B-Instruct"),
+            os.getenv("CEREBRAS_MODEL", "llama-3.3-70b"),
         ]
         last_error: Optional[Exception] = None
         valid_providers = [p for p in providers if p]
@@ -609,7 +609,7 @@ class AnalyserAgent:
                     model=model,
                     messages=messages,
                     temperature=temperature,
-                    max_tokens=int(os.getenv("ANALYSER_MAX_TOKENS", "2048")),
+                    max_tokens=int(os.getenv("XAI_MAX_TOKENS", "2048")),
                 )
                 return response
             except Exception as exc:
@@ -694,7 +694,8 @@ class AnalyserAgent:
             List of routing result dicts with job_post_id, fit_score,
             eligibility_pass, route, and reasons_json.
         """
-        batch_size = int(os.getenv("ANALYSER_BATCH_SIZE", "10"))
+        _BATCH_SIZE: int = 15
+        batch_size = _BATCH_SIZE
         all_results: list[dict[str, Any]] = []
 
         for batch in _chunk(jobs, batch_size):
@@ -843,6 +844,49 @@ class AnalyserAgent:
             self._fallback_level,
         )
         return False
+
+    _ANALYSER_FALLBACK_CHAIN: list[tuple[str, str]] = [
+        (os.getenv("XAI_API_KEY", ""),
+         os.getenv("XAI_DEFAULT_MODEL", "grok-3-fast")),
+        (os.getenv("SAMBANOVA_API_KEY", ""),
+         os.getenv("SAMBANOVA_MODEL", "Llama-3.1-70B-Instruct")),
+        (os.getenv("CEREBRAS_API_KEY", ""),
+         os.getenv("CEREBRAS_MODEL", "llama-3.3-70b")),
+    ]
+
+    async def _call_with_fallback(
+        self,
+        prompt: str,
+        run_batch_id: str,
+    ) -> str:
+        """Call LLM with explicit 3-provider fallback chain."""
+        import asyncio
+        last_exc: Exception | None = None
+        for attempt, (api_key, model) in enumerate(self._ANALYSER_FALLBACK_CHAIN):
+            try:
+                result = await self._call_llm(
+                    api_key=api_key,
+                    model=model,
+                    prompt=prompt,
+                )
+                if attempt > 0:
+                    self.logger.warning(
+                        "Analyser fell back to provider %d (%s) successfully",
+                        attempt + 1, model,
+                    )
+                return result
+            except Exception as exc:  # noqa: BLE001
+                last_exc = exc
+                wait = 2.0 ** attempt
+                self.logger.warning(
+                    "Analyser LLM attempt %d (%s) failed: %s — retrying in %.1fs",
+                    attempt + 1, model, exc, wait,
+                )
+                await asyncio.sleep(wait)
+        raise RuntimeError(
+            f"All {len(self._ANALYSER_FALLBACK_CHAIN)} Analyser LLM providers failed. "
+            f"Last error: {last_exc}"
+        )
 
     # ------------------------------------------------------------------
     # Agent / task builders
@@ -1056,67 +1100,28 @@ JOB LIST (JSON)
 
             crew_output: Any = None
 
-            # First attempt
+            import asyncio
+            prompt = task.description
             try:
-                self.logger.info("AnalyserAgent.run: executing crew (primary LLM)…")
-                crew_output = crew.kickoff()
-            except Exception as primary_exc:  # noqa: BLE001
-                failed_model: str = getattr(self._current_llm, "model", "primary")
-                self.logger.error(
-                    "AnalyserAgent.run: primary LLM failed (%s): %s",
-                    failed_model,
-                    primary_exc,
+                crew_output = asyncio.run(
+                    self._call_with_fallback(prompt, self.run_batch_id)
                 )
-                switched: bool = self._switch_to_fallback(failed_model)
-                if not switched:
-                    self.logger.critical(
-                        "AnalyserAgent.run: no fallback available — aborting"
-                    )
-                    record_agent_error.func(
-                        agent_type="AnalyserAgent",
-                        error_message=str(primary_exc),
-                        run_batch_id=self.run_batch_id,
-                        error_code="LLM_ALL_PROVIDERS_FAILED",
-                    )
-                    return {
-                        "success": False,
-                        "error": "all_llm_providers_failed",
-                        "detail": str(primary_exc),
-                    }
-
-                # Rebuild agent with new LLM and retry once
-                agent = self._build_agent()
-                task = self._build_task(agent, jobs)
-                retry_crew = Crew(
-                    agents=[agent],
-                    tasks=[task],
-                    process=Process.sequential,
-                    verbose=True,
+            except Exception as fallback_exc:  # noqa: BLE001
+                self.logger.critical(
+                    "AnalyserAgent.run: fallback LLM also failed: %s", fallback_exc
                 )
-                try:
-                    fallback_model: str = getattr(
-                        self._current_llm, "model", f"fallback_{self._fallback_level}"
-                    )
-                    self.logger.info(
-                        "AnalyserAgent.run: retrying crew with fallback LLM %s",
-                        fallback_model,
-                    )
-                    crew_output = retry_crew.kickoff()
-                except Exception as fallback_exc:  # noqa: BLE001
-                    self.logger.critical(
-                        "AnalyserAgent.run: fallback LLM also failed: %s", fallback_exc
-                    )
-                    record_agent_error.func(
-                        agent_type="AnalyserAgent",
-                        error_message=str(fallback_exc),
-                        run_batch_id=self.run_batch_id,
-                        error_code="LLM_FALLBACK_FAILED",
-                    )
-                    return {
-                        "success": False,
-                        "error": "llm_fallback_failed",
-                        "detail": str(fallback_exc),
-                    }
+                from tools.agentops_tools import record_agent_error
+                record_agent_error.func(
+                    agent_type="AnalyserAgent",
+                    error_message=str(fallback_exc),
+                    run_batch_id=self.run_batch_id,
+                    error_code="LLM_FALLBACK_FAILED",
+                )
+                return {
+                    "success": False,
+                    "error": "llm_fallback_exhausted",
+                    "detail": str(fallback_exc),
+                }
 
             # ----------------------------------------------------------
             # Step 6: parse routing manifest from crew output
@@ -1222,7 +1227,8 @@ JOB LIST (JSON)
             # ----------------------------------------------------------
             # Top-100 filter: cap routing manifest to 100 highest-scoring
             # ----------------------------------------------------------
-            max_manifest = int(os.getenv("MAX_APPLY_MANIFEST", "100"))
+            _MAX_MANIFEST: int = 100
+            max_manifest = _MAX_MANIFEST
             routing_manifest.sort(
                 key=lambda x: float(x.get("fit_score", 0.0)),
                 reverse=True,
