@@ -154,7 +154,7 @@
 
                 // Notify background service worker of field changes
                 chrome.runtime.sendMessage({
-                    type: 'FIELDS_UPDATED',
+                    type: 'JOB_DETECTED',
                     field_count: window.__jobAgentState.detected_fields.length,
                 }).catch(function () {
                     // Background may not be ready — ignore

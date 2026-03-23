@@ -24,6 +24,7 @@ const ATS_URL_PATTERNS = [
   { pattern: /greenhouse\.io/i, hint: 'greenhouse' },
   { pattern: /lever\.co/i, hint: 'lever' },
   { pattern: /myworkdayjobs\.com|wd[0-9]+\.myworkday/i, hint: 'workday' },
+  { pattern: /glassdoor\.com\/job-listing/i, hint: 'glassdoor' },
   { pattern: /linkedin\.com\/jobs/i, hint: 'linkedin' },
   { pattern: /indeed\.com/i, hint: 'indeed' },
   { pattern: /wellfound\.com/i, hint: 'wellfound' },

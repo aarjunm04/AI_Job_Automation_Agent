@@ -237,18 +237,6 @@
     </div>
   </div>
 
-  <script>
-    (function () {
-      /* ── DOM References ── */
-      const hostInput   = document.getElementById('fastapi-host');
-      const keyInput    = document.getElementById('api-key');
-      const saveBtn     = document.getElementById('save-btn');
-      const testBtn     = document.getElementById('test-btn');
-      const toggleBtn   = document.getElementById('toggle-key-btn');
-      const statusMsg   = document.getElementById('status-msg');
-      const queueDiv    = document.getElementById('queue-count-display');
-
-      /* ── Status Message Helper ── */
       let statusTimer = null;
 
       function showStatus(message, type) {

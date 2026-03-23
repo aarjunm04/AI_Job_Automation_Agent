@@ -10,56 +10,108 @@
 
 <body>
 
-  <!-- 1. HEADER BAR -->
-  <header class="sidebar-header">
+  <!-- ── HEADER ───────────────────────────────────────────────── -->
+  <header class="popup-header">
     <span class="header-title">🤖 AI Job Agent</span>
-    <span class="conn-dot" id="conn-dot" title="Checking connection…"></span>
+    <span class="queue-badge">Queue: <span id="queue-count">—</span></span>
   </header>
 
-  <!-- 2. JOB SCORE CARD -->
-  <section class="score-card" id="score-card">
-    <div class="score-badge-wrap">
-      <span class="score-badge" id="score-badge">—</span>
-      <span class="score-badge-label">Fit Score</span>
+  <!-- ──────────────────────────────────────────────────────────── -->
+  <!-- STATE 1: IDLE                                               -->
+  <!-- ──────────────────────────────────────────────────────────── -->
+  <div id="idle-view" class="state-view" hidden>
+    <div class="state-message">
+      <span class="state-icon">🔍</span>
+      <p>Open a job listing to get started</p>
     </div>
-    <div class="score-meta">
-      <div class="score-title" id="score-title">Loading match data…</div>
-      <div class="score-company" id="score-company"></div>
-      <div class="score-reasoning" id="score-reasoning"></div>
+  </div>
+
+  <!-- ──────────────────────────────────────────────────────────── -->
+  <!-- STATE 2: SCANNING                                           -->
+  <!-- ──────────────────────────────────────────────────────────── -->
+  <div id="scanning-view" class="state-view" hidden>
+    <div class="state-message">
+      <span class="spinner" aria-label="Scanning"></span>
+      <p>Scanning page…</p>
     </div>
-  </section>
+  </div>
 
-  <!-- 3. RESUME SUGGESTION -->
-  <section class="resume-section">
-    <div class="resume-label">📄 Suggested Resume</div>
-    <div class="resume-row">
-      <span class="resume-name" id="resume-name">—</span>
-      <span class="similarity-badge" id="similarity-badge"></span>
+  <!-- ──────────────────────────────────────────────────────────── -->
+  <!-- STATE 3: SCORED                                             -->
+  <!-- ──────────────────────────────────────────────────────────── -->
+  <div id="scored-view" class="state-view" hidden>
+
+    <!-- Score card -->
+    <section class="score-card">
+      <div class="score-header">
+        <div class="score-display">
+          <span id="score-value" class="score-value">—</span>
+          <span class="score-label">Fit Score</span>
+        </div>
+        <div class="job-meta">
+          <div id="job-title" class="job-title"></div>
+          <div id="job-company" class="job-company"></div>
+        </div>
+      </div>
+      <div class="score-bar-track">
+        <div id="score-bar" class="bar"></div>
+      </div>
+    </section>
+
+    <!-- Resume used -->
+    <section class="resume-section">
+      <div class="section-label">📄 Resume Used</div>
+      <div id="resume-used" class="resume-name">—</div>
+    </section>
+
+    <!-- Talking points -->
+    <section class="tp-section">
+      <div class="section-label">💡 Talking Points</div>
+      <ul id="talking-points" class="tp-list"></ul>
+    </section>
+
+    <!-- Action buttons -->
+    <section class="actions-row">
+      <button id="btn-autofill" class="btn btn-primary">⚡ Autofill Form</button>
+      <button id="btn-auto-apply" class="btn btn-success" hidden>🚀 Auto Apply</button>
+      <button id="btn-track-job" class="btn btn-secondary">📋 Track Job</button>
+    </section>
+
+    <!-- Track confirmation flash -->
+    <div id="track-confirm" class="track-confirm" hidden>✓ Logged to tracker</div>
+
+  </div>
+
+  <!-- ──────────────────────────────────────────────────────────── -->
+  <!-- STATE 4: AUTOFILLING                                        -->
+  <!-- ──────────────────────────────────────────────────────────── -->
+  <div id="autofilling-view" class="state-view" hidden>
+    <div class="state-message">
+      <span class="spinner" aria-label="Autofilling"></span>
+      <p>Autofilling form…</p>
     </div>
-  </section>
+  </div>
 
-  <!-- 4. TALKING POINTS -->
-  <section class="tp-section">
-    <div class="tp-header">💡 Talking Points</div>
-    <ul class="tp-list" id="tp-list">
-      <li class="tp-item tp-placeholder">Match a job to see talking points.</li>
-    </ul>
-  </section>
-
-  <!-- 5. ACTION BUTTONS ROW -->
-  <section class="actions-row">
-    <button class="btn btn-autofill" id="btn-autofill">⚡ Autofill Form</button>
-    <button class="btn btn-queue" id="btn-queue">📋 Queue to Notion</button>
-    <button class="btn btn-applied" id="btn-applied">✓ Mark Applied</button>
-  </section>
-
-  <!-- 6. STATUS LOG -->
-  <section class="status-log-section">
-    <div class="status-log-label">Event Log</div>
-    <div class="status-log" id="status-log">
-      <div class="log-entry">Extension ready.</div>
+  <!-- ──────────────────────────────────────────────────────────── -->
+  <!-- STATE 5: APPLYING                                           -->
+  <!-- ──────────────────────────────────────────────────────────── -->
+  <div id="applying-view" class="state-view" hidden>
+    <div class="state-message">
+      <span class="spinner" aria-label="Applying"></span>
+      <p>Submitting application…</p>
     </div>
-  </section>
+  </div>
+
+  <!-- ──────────────────────────────────────────────────────────── -->
+  <!-- STATE 6: ERROR                                              -->
+  <!-- ──────────────────────────────────────────────────────────── -->
+  <div id="error-view" class="state-view" hidden>
+    <div class="state-message error-state">
+      <span class="state-icon">⚠️</span>
+      <p id="error-message">An error occurred.</p>
+      <button id="btn-retry" class="btn btn-secondary">↩ Retry</button>
+    </div>
+  </div>
 
   <script src="popup.js"></script>
 </body>

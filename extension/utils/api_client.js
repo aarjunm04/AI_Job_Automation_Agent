@@ -26,7 +26,7 @@
     function _buildHeaders(apiKey) {
         var headers = { 'Content-Type': 'application/json' };
         if (apiKey && apiKey.length > 0) {
-            headers['Authorization'] = 'Bearer ' + apiKey;
+            headers['X-API-Key'] = `${apiKey}`;
         }
         return headers;
     }

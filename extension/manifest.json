@@ -7,17 +7,29 @@
     "activeTab",
     "storage",
     "scripting",
-    "notifications"
+    "scripting"
   ],
   "host_permissions": [
-    "<all_urls>"
+    "https://*.linkedin.com/*",
+    "https://*.greenhouse.io/*",
+    "https://jobs.lever.co/*",
+    "http://localhost/*"
   ],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self';"
+  },
   "background": {
     "service_worker": "background/service_worker.js"
   },
   "content_scripts": [
     {
-      "matches": ["<all_urls>"],
+      "matches": [
+        "https://*.linkedin.com/jobs/*",
+        "https://*.greenhouse.io/*",
+        "https://jobs.lever.co/*",
+        "https://*.workdayjobs.com/*",
+        "https://*.glassdoor.com/job-listing/*"
+      ],
       "js": [
         "utils/dom_detector.js",
         "content_scripts/content.js"
