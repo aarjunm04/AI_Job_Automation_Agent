@@ -359,7 +359,7 @@ class MasterAgent:
             The Postgres-assigned ``run_batch_id`` UUID string.
         """
         # Create run batch in Postgres
-        raw_result: str = create_run_batch.func(
+        raw_result: str = create_run_batch(
             run_index_in_week=self.run_index_in_week
         )
         parsed: Dict[str, Any] = {}
@@ -377,13 +377,13 @@ class MasterAgent:
             self.run_batch_id = parsed["run_batch_id"]
 
         # Reset per-run cost tracker
-        reset_run_cost_tracker.func(self.run_batch_id)
+        reset_run_cost_tracker(self.run_batch_id)
 
         # Start AgentOps session
         _start_agentops_session(self.run_batch_id, self.run_index_in_week)
 
         # Log session creation
-        log_event.func(
+        log_event(
             run_batch_id=self.run_batch_id,
             level="INFO",
             event_type="run_session_created",
@@ -413,7 +413,7 @@ class MasterAgent:
         """
         try:
             # Budget gate — monthly budget check
-            budget_raw: str = check_monthly_budget.func(
+            budget_raw: str = check_monthly_budget(
                 run_batch_id=self.run_batch_id
             )
             budget_result: Dict[str, Any] = {}
@@ -442,7 +442,7 @@ class MasterAgent:
                 self.logger.error(
                     "Scraper phase failed: %s", result.get("error", "unknown")
                 )
-                record_agent_error.func(
+                record_agent_error(
                     agent_type="ScraperAgent",
                     error_message=result.get("error", "scraper_run_failed"),
                     run_batch_id=self.run_batch_id,
@@ -489,7 +489,7 @@ class MasterAgent:
             # Store result in run state
             self._run_state["scraper"] = result
 
-            log_event.func(
+            log_event(
                 run_batch_id=self.run_batch_id,
                 level="INFO",
                 event_type="scraper_phase_complete",
@@ -509,7 +509,7 @@ class MasterAgent:
             self.logger.error(
                 "Scraper phase unhandled exception: %s", exc, exc_info=True
             )
-            record_agent_error.func(
+            record_agent_error(
                 agent_type="ScraperAgent",
                 error_message=str(exc),
                 run_batch_id=self.run_batch_id,
@@ -546,7 +546,7 @@ class MasterAgent:
                 }
 
             # Budget gate — xAI run cap
-            cap_raw: str = check_xai_run_cap.func(
+            cap_raw: str = check_xai_run_cap(
                 run_batch_id=self.run_batch_id
             )
             cap_result: Dict[str, Any] = {}
@@ -577,7 +577,7 @@ class MasterAgent:
                 self.logger.error(
                     "Analyser phase failed: %s", result.get("error", "unknown")
                 )
-                record_agent_error.func(
+                record_agent_error(
                     agent_type="AnalyserAgent",
                     error_message=result.get("error", "analyser_run_failed"),
                     run_batch_id=self.run_batch_id,
@@ -590,7 +590,7 @@ class MasterAgent:
             # Store result in run state
             self._run_state["analyser"] = result
 
-            log_event.func(
+            log_event(
                 run_batch_id=self.run_batch_id,
                 level="INFO",
                 event_type="analyser_phase_complete",
@@ -616,7 +616,7 @@ class MasterAgent:
             self.logger.error(
                 "Analyser phase unhandled exception: %s", exc, exc_info=True
             )
-            record_agent_error.func(
+            record_agent_error(
                 agent_type="AnalyserAgent",
                 error_message=str(exc),
                 run_batch_id=self.run_batch_id,
@@ -644,7 +644,7 @@ class MasterAgent:
             config_loader.get_budget_settings().get("xai_cost_cap_per_run_usd", 0.38)
         )
         try:
-            cost_raw: str = get_cost_summary.func(run_batch_id=self.run_batch_id)
+            cost_raw: str = get_cost_summary(run_batch_id=self.run_batch_id)
             cost_data: Dict[str, Any] = json.loads(cost_raw)
             total_spent: float = float(cost_data.get("run_total_cost", 0.0))
             if total_spent >= veto_threshold:
@@ -684,7 +684,7 @@ class MasterAgent:
                 }
 
             # Budget gate — xAI run cap
-            cap_raw: str = check_xai_run_cap.func(
+            cap_raw: str = check_xai_run_cap(
                 run_batch_id=self.run_batch_id
             )
             cap_result: Dict[str, Any] = {}
@@ -754,7 +754,7 @@ class MasterAgent:
             applied_count: int = result.get("applied", 0)
             failed_count: int = result.get("failed", 0)
 
-            log_event.func(
+            log_event(
                 run_batch_id=self.run_batch_id,
                 level="INFO",
                 event_type="apply_phase_complete",
@@ -785,7 +785,7 @@ class MasterAgent:
             self.logger.error(
                 "Apply phase unhandled exception: %s", exc, exc_info=True
             )
-            record_agent_error.func(
+            record_agent_error(
                 agent_type="ApplyAgent",
                 error_message=str(exc),
                 run_batch_id=self.run_batch_id,
@@ -817,7 +817,7 @@ class MasterAgent:
             # Store result in run state
             self._run_state["tracker"] = result
 
-            log_event.func(
+            log_event(
                 run_batch_id=self.run_batch_id,
                 level="INFO",
                 event_type="tracker_phase_complete",
@@ -882,7 +882,7 @@ class MasterAgent:
         # Get final Postgres stats
         run_stats: Dict[str, Any] = {}
         try:
-            raw_stats: str = get_run_stats.func(run_batch_id=self.run_batch_id)
+            raw_stats: str = get_run_stats(run_batch_id=self.run_batch_id)
             run_stats = json.loads(raw_stats)
         except Exception as exc:  # noqa: BLE001
             self.logger.warning(
@@ -892,7 +892,7 @@ class MasterAgent:
         # Get final cost summary
         cost_data: Dict[str, Any] = {}
         try:
-            raw_cost: str = get_cost_summary.func(run_batch_id=self.run_batch_id)
+            raw_cost: str = get_cost_summary(run_batch_id=self.run_batch_id)
             cost_data = json.loads(raw_cost)
         except Exception as exc:  # noqa: BLE001
             self.logger.warning(
@@ -1011,7 +1011,7 @@ class MasterAgent:
             self._create_run_session()
 
             # Step 3 — Log pipeline start banner
-            log_event.func(
+            log_event(
                 run_batch_id=self.run_batch_id,
                 level="INFO",
                 event_type="pipeline_start",
@@ -1085,7 +1085,7 @@ class MasterAgent:
 
             # Step 6 — Update run batch stats
             try:
-                update_run_batch_stats.func(
+                update_run_batch_stats(
                     run_batch_id=self.run_batch_id,
                     jobs_discovered=report["jobs_discovered"],
                     jobs_auto_applied=report["jobs_auto_applied"],
@@ -1097,7 +1097,7 @@ class MasterAgent:
                 )
 
             # Step 7 — Log pipeline close banner
-            log_event.func(
+            log_event(
                 run_batch_id=self.run_batch_id,
                 level="INFO",
                 event_type="pipeline_complete",
@@ -1133,7 +1133,7 @@ class MasterAgent:
                 "Master Agent unhandled exception: %s", exc, exc_info=True
             )
 
-            record_agent_error.func(
+            record_agent_error(
                 agent_type="MasterAgent",
                 error_message=str(exc),
                 run_batch_id=self.run_batch_id,

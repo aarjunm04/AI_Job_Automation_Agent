@@ -374,7 +374,7 @@ If some Notion syncs failed, include them in the "errors" list as strings.
         """
         # Step 1 — log start
         try:
-            log_event.func(
+            log_event(
                 run_batch_id=self.run_batch_id,
                 level="INFO",
                 event_type="tracker_run_start",
@@ -458,7 +458,7 @@ If some Notion syncs failed, include them in the "errors" list as strings.
 
             # Step 6 — log completion
             try:
-                log_event.func(
+                log_event(
                     run_batch_id=self.run_batch_id,
                     level="INFO",
                     event_type="tracker_run_complete",
@@ -496,7 +496,7 @@ If some Notion syncs failed, include them in the "errors" list as strings.
 
             # Best-effort AgentOps error recording
             try:
-                record_agent_error.func(
+                record_agent_error(
                     agent_type="TrackerAgent",
                     error_message=str(exc),
                     run_batch_id=self.run_batch_id,
@@ -665,7 +665,7 @@ If some Notion syncs failed, include them in the "errors" list as strings.
         try:
             from tools.budget_tools import get_cost_summary
             
-            raw = get_cost_summary.func(self.run_batch_id)
+            raw = get_cost_summary(self.run_batch_id)
             data = json.loads(raw) if isinstance(raw, str) else raw
             return float(data.get("run_total_cost", 0.0))
         except Exception as exc:

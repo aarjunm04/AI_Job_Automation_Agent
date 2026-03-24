@@ -435,8 +435,8 @@ class AnalyserAgent:
         }
 
         try:
-            # Call RAG match tool directly (.func bypasses CrewAI Tool wrapper)
-            raw: str = query_resume_match.func(
+            # Call RAG match tool directly
+            raw: str = query_resume_match(
                 job_description=job.get("description", ""),
                 job_title=job_title,
                 required_skills=job.get("required_skills", ""),
@@ -597,8 +597,8 @@ class AnalyserAgent:
 
         providers = [
             os.getenv("XAI_DEFAULT_MODEL", "grok-3-fast"),
-            os.getenv("SAMBANOVA_MODEL", "Llama-3.1-70B-Instruct"),
-            os.getenv("CEREBRAS_MODEL", "llama-3.3-70b"),
+            os.getenv("SAMBANOVA_API_KEY") and os.getenv("SAMBANOVA_MODEL", "Llama-3.1-70B-Instruct"),
+            os.getenv("CEREBRAS_API_KEY") and os.getenv("CEREBRAS_MODEL", "llama-3.3-70b"),
         ]
         last_error: Optional[Exception] = None
         valid_providers = [p for p in providers if p]
@@ -806,7 +806,7 @@ class AnalyserAgent:
         """
         if self._fallback_level == 0 and self.fallback_llm_1 is not None:
             to_model: str = getattr(self.fallback_llm_1, "model", "fallback_1")
-            record_fallback_event.func(
+            record_fallback_event(
                 agent_type="AnalyserAgent",
                 from_provider=failed_provider,
                 to_provider=str(to_model),
@@ -823,7 +823,7 @@ class AnalyserAgent:
 
         if self._fallback_level == 1 and self.fallback_llm_2 is not None:
             to_model = getattr(self.fallback_llm_2, "model", "fallback_2")
-            record_fallback_event.func(
+            record_fallback_event(
                 agent_type="AnalyserAgent",
                 from_provider=failed_provider,
                 to_provider=str(to_model),
@@ -865,9 +865,7 @@ class AnalyserAgent:
         for attempt, (api_key, model) in enumerate(self._ANALYSER_FALLBACK_CHAIN):
             try:
                 result = await self._call_llm(
-                    api_key=api_key,
-                    model=model,
-                    prompt=prompt,
+                    messages=[{"role": "user", "content": prompt}],
                 )
                 if attempt > 0:
                     self.logger.warning(
@@ -1047,7 +1045,7 @@ JOB LIST (JSON)
             # ----------------------------------------------------------
             # Step 1: log start
             # ----------------------------------------------------------
-            log_event.func(
+            log_event(
                 run_batch_id=self.run_batch_id,
                 level="INFO",
                 event_type="analyser_run_start",
@@ -1070,7 +1068,7 @@ JOB LIST (JSON)
                     "AnalyserAgent.run: no jobs found for batch %s — returning early",
                     self.run_batch_id,
                 )
-                log_event.func(
+                log_event(
                     run_batch_id=self.run_batch_id,
                     level="INFO",
                     event_type="analyser_run_complete",
@@ -1111,7 +1109,7 @@ JOB LIST (JSON)
                     "AnalyserAgent.run: fallback LLM also failed: %s", fallback_exc
                 )
                 from tools.agentops_tools import record_agent_error
-                record_agent_error.func(
+                record_agent_error(
                     agent_type="AnalyserAgent",
                     error_message=str(fallback_exc),
                     run_batch_id=self.run_batch_id,
@@ -1252,7 +1250,7 @@ JOB LIST (JSON)
                 f"budget_aborted={budget_aborted}"
             )
             self.logger.info("AnalyserAgent.run: %s", summary_msg)
-            log_event.func(
+            log_event(
                 run_batch_id=self.run_batch_id,
                 level="INFO",
                 event_type="analyser_run_complete",
@@ -1278,7 +1276,7 @@ JOB LIST (JSON)
                 "AnalyserAgent.run: unhandled exception: %s", exc, exc_info=True
             )
             try:
-                record_agent_error.func(
+                record_agent_error(
                     agent_type="AnalyserAgent",
                     error_message=str(exc),
                     run_batch_id=self.run_batch_id,

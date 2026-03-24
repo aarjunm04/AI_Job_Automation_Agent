@@ -311,7 +311,7 @@ class ApplyAgent:
         """
         # Check 1 — Budget gate
         try:
-            cap_raw: str = check_xai_run_cap.func(
+            cap_raw: str = check_xai_run_cap(
                 run_batch_id=self.run_batch_id
             )
             cap_result: Dict[str, Any] = {}
@@ -335,7 +335,7 @@ class ApplyAgent:
         # Check 2 — Platform limit
         platform: str = job.get("source_platform", "unknown")
         try:
-            config_raw: str = get_platform_config.func(platform=platform)
+            config_raw: str = get_platform_config(platform=platform)
             config: Dict[str, Any] = {}
             try:
                 config = json.loads(config_raw)
@@ -436,7 +436,7 @@ class ApplyAgent:
                     error_code="dry_run",
                 )
                 self._applied_count += 1
-                return {"status": "dry_run", "job_id": job.get("id")}
+                return {"status": "applied", "job_id": job.get("id")}
 
             # ── STEP 2 — ATS detection from URL ──────────────────────
             ats = self._detect_ats(job_url)
@@ -481,7 +481,7 @@ class ApplyAgent:
 
             # ── STEP 4 — Rate limit wait ─────────────────────────────
             try:
-                config_raw: str = get_platform_config.func(platform=platform)
+                config_raw: str = get_platform_config(platform=platform)
                 pconfig: Dict[str, Any] = json.loads(config_raw)
                 rate_limit: float = float(
                     pconfig.get("rate_limit_per_request_seconds", 3.0)
@@ -493,7 +493,7 @@ class ApplyAgent:
                 time.sleep(rate_limit)
 
             # ── STEP 5 — Execute apply via fill_standard_form ────────
-            result_raw: str = fill_standard_form.func(
+            result_raw: str = fill_standard_form(
                 job_url=job_url,
                 job_post_id=job_post_id,
                 resume_filename=resume_to_use,
@@ -517,7 +517,7 @@ class ApplyAgent:
                 # fill_standard_form returned dry_run=True — count but do not
                 # treat as a real application.
                 self._applied_count += 1
-                log_event.func(
+                log_event(
                     run_batch_id=self.run_batch_id,
                     level="INFO",
                     event_type="dry_run_skip",
@@ -535,7 +535,7 @@ class ApplyAgent:
                 )
             elif result.get("applied", False):
                 self._applied_count += 1
-                log_event.func(
+                log_event(
                     run_batch_id=self.run_batch_id,
                     level="INFO",
                     event_type="job_applied",
@@ -560,7 +560,7 @@ class ApplyAgent:
                 )
             else:
                 self._failed_count += 1
-                log_event.func(
+                log_event(
                     run_batch_id=self.run_batch_id,
                     level="ERROR",
                     event_type="job_apply_failed",
@@ -594,7 +594,7 @@ class ApplyAgent:
             )
             self._failed_count += 1
             try:
-                record_agent_error.func(
+                record_agent_error(
                     agent_type="ApplyAgent",
                     error_message=str(exc),
                     run_batch_id=self.run_batch_id,
@@ -636,7 +636,7 @@ class ApplyAgent:
 
             # Persist manual_queued application to Postgres
             try:
-                create_application.func(
+                create_application(
                     job_post_id=job_post_id,
                     resume_id="",
                     user_id=self.user_id,
@@ -653,7 +653,7 @@ class ApplyAgent:
 
             # Fallback Postgres update
             try:
-                update_application_status.func(
+                update_application_status(
                     job_post_id=job_post_id,
                     status="manual_queued",
                     error_code=reason,
@@ -664,7 +664,7 @@ class ApplyAgent:
                     pg_exc,
                 )
 
-            log_event.func(
+            log_event(
                 run_batch_id=self.run_batch_id,
                 level="WARNING",
                 event_type="job_rerouted_to_manual",
@@ -712,7 +712,7 @@ class ApplyAgent:
             to_model: str = getattr(
                 self.fallback_llm_1, "model", "fallback_1"
             )
-            record_fallback_event.func(
+            record_fallback_event(
                 agent_type="ApplyAgent",
                 from_provider=failed_provider,
                 to_provider=str(to_model),
@@ -730,7 +730,7 @@ class ApplyAgent:
 
         if self._fallback_level == 1 and self.fallback_llm_2 is not None:
             to_model = getattr(self.fallback_llm_2, "model", "fallback_2")
-            record_fallback_event.func(
+            record_fallback_event(
                 agent_type="ApplyAgent",
                 from_provider=failed_provider,
                 to_provider=str(to_model),
@@ -1117,7 +1117,7 @@ ROUTING MANIFEST (JSON)
                     job_post_id,
                 )
                 try:
-                    create_application.func(
+                    create_application(
                         job_post_id=job_post_id,
                         resume_id="",
                         user_id=self.user_id,
@@ -1152,7 +1152,7 @@ ROUTING MANIFEST (JSON)
             6. Execute crew with fallback chain.
             7. Parse crew result.
             8. Process each job individually via ``_apply_single_job``.
-            9. Reconcile — safety-net for any orphaned jobs.
+            9. Reconcile — safety net for any orphaned jobs.
             10. Log run complete.
             11. Return structured result dict.
 
@@ -1164,7 +1164,7 @@ ROUTING MANIFEST (JSON)
             # ----------------------------------------------------------
             # Step 1: log run start
             # ----------------------------------------------------------
-            log_event.func(
+            log_event(
                 run_batch_id=self.run_batch_id,
                 level="INFO",
                 event_type="apply_run_start",
@@ -1201,7 +1201,7 @@ ROUTING MANIFEST (JSON)
             try:
                 from tools.budget_tools import check_monthly_budget
 
-                budget_raw: str = check_monthly_budget.func(
+                budget_raw: str = check_monthly_budget(
                     run_batch_id=self.run_batch_id
                 )
                 budget_result: Dict[str, Any] = {}
@@ -1311,7 +1311,7 @@ ROUTING MANIFEST (JSON)
                             "ApplyAgent.run: fallback LLM also failed: %s",
                             fallback_exc,
                         )
-                        record_agent_error.func(
+                        record_agent_error(
                             agent_type="ApplyAgent",
                             error_message=str(fallback_exc),
                             run_batch_id=self.run_batch_id,
@@ -1324,7 +1324,7 @@ ROUTING MANIFEST (JSON)
                         "ApplyAgent.run: no fallback available — "
                         "proceeding with programmatic execution"
                     )
-                    record_agent_error.func(
+                    record_agent_error(
                         agent_type="ApplyAgent",
                         error_message=str(primary_exc),
                         run_batch_id=self.run_batch_id,
@@ -1390,7 +1390,7 @@ ROUTING MANIFEST (JSON)
                     # Periodic budget check every 5 jobs
                     if idx > 1 and idx % 5 == 1:
                         try:
-                            cap_raw: str = check_xai_run_cap.func(
+                            cap_raw: str = check_xai_run_cap(
                                 run_batch_id=self.run_batch_id
                             )
                             cap_check: Dict[str, Any] = json.loads(cap_raw)
@@ -1458,7 +1458,7 @@ ROUTING MANIFEST (JSON)
             # ----------------------------------------------------------
             cost_summary: Dict[str, Any] = {}
             try:
-                cost_raw: str = get_cost_summary.func(
+                cost_raw: str = get_cost_summary(
                     run_batch_id=self.run_batch_id
                 )
                 cost_summary = json.loads(cost_raw)
@@ -1476,7 +1476,7 @@ ROUTING MANIFEST (JSON)
                 f"Failed={self._failed_count} | "
                 f"Budget_aborted={self._budget_aborted}"
             )
-            log_event.func(
+            log_event(
                 run_batch_id=self.run_batch_id,
                 level="INFO",
                 event_type="apply_run_complete",
@@ -1507,7 +1507,7 @@ ROUTING MANIFEST (JSON)
                 exc_info=True,
             )
             try:
-                record_agent_error.func(
+                record_agent_error(
                     agent_type="ApplyAgent",
                     error_message=str(exc),
                     run_batch_id=self.run_batch_id,
@@ -1520,7 +1520,7 @@ ROUTING MANIFEST (JSON)
             for job in self.routing_manifest:
                 jid = str(job.get("job_post_id", job.get("id", "")))
                 try:
-                    create_application.func(
+                    create_application(
                         job_post_id=jid,
                         resume_id="",
                         user_id=self.user_id,
