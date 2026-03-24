@@ -1,0 +1,127 @@
+{
+"metadata": {
+"full_name": "",
+"current_title": "",
+"email": "",
+"phone": "",
+"location_city": "",
+"location_country": "",
+"open_to_relocation": "",
+"github_url": "",
+"linkedin_url": "",
+"portfolio_url": "",
+"years_experience_total": 0,
+"current_status": ""
+},
+
+"professional_summary": "",
+
+"core_value_proposition": [
+""
+],
+
+"skills": {
+"programming_languages": [],
+"ml_dl": [],
+"ai_agents_llm": [],
+"data_engineering": [],
+"backend_infra": [],
+"automation_scraping": [],
+"cloud_devops": [],
+"geospatial_time_series": [],
+"soft_skills": []
+},
+
+"education": [
+{
+"degree": "",
+"institution": "",
+"location": "",
+"start_year": 0,
+"end_year": 0,
+"gpa": "",
+"highlights": []
+}
+],
+
+"experience": [
+{
+"title": "",
+"company": "",
+"location": "",
+"start_date": "",
+"end_date": "",
+"employment_type": "",
+"description_bullets": []
+}
+],
+
+"projects": [
+{
+"name": "",
+"role": "",
+"repo_url": "",
+"summary": "",
+"tech_stack": [],
+"highlights": []
+}
+],
+
+"certifications": [
+{
+"name": "",
+"issuer": "",
+"issue_year": 0,
+"url": ""
+}
+],
+
+"job_preferences": {
+"target_titles": [],
+"preferred_domains": [],
+"company_stage": [],
+"preferred_team_size": [],
+"work_setup": {
+"remote": true,
+"hybrid": "",
+"onsite": ""
+},
+"locations": {
+"must_have": [],
+"nice_to_have": []
+},
+"salary_expectation_note": "",
+"hard_filters": {
+"exclude_seniority_keywords": [],
+"minimum_percentage_ai_ml_in_role": 0.0,
+"exclude_job_types": []
+}
+},
+
+"application_qa": {
+"form_answers": {
+"years_of_experience": "",
+"cover_letter_template": "",
+"why_this_company_template": "",
+"biggest_strength": "",
+"biggest_weakness": "",
+"leadership_example": "",
+"conflict_resolution_example": "",
+"remote_work_experience": "",
+"open_to_relocation": false,
+"require_sponsorship": false,
+"us_authorized_to_work": false,
+"diversity_veteran_status": "",
+"gender": "",
+"ethnicity": "",
+"disability_status": "",
+"linkedin_consent": false,
+"salary_expectation_usd": "",
+"notice_period_weeks": 0,
+"github_contribution_summary": "",
+"willing_to_travel": false,
+"highest_education_level": "",
+"years_in_current_role": ""
+}
+}
+}

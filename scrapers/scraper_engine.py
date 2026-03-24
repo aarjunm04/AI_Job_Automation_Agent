@@ -61,10 +61,11 @@ import pandas as pd
 from dateutil import parser as date_parser
 
 from .jobspy_adapter import JobSpyAdapter
-from tools.serp_api_tool import search_google_jobs
+from tools.serpapi_tool import search_google_jobs
 from tools.postgres_tools import _fetch_user_config
 from utils.db_utils import get_db_conn
-from utils.proxy_rate_limit import get_proxy_dict, get_next_proxy, reset_proxy_cycle
+from utils.proxy_rate_limit import get_proxy_dict, get_next_proxy, reset_cycle
+from config.config_loader import config_loader
 
 logging.basicConfig(
     level=logging.INFO,
@@ -614,10 +615,7 @@ class FilterEngine:
     """
 
     def __init__(self, filters_path: Path = None):
-        config_dir = Path(os.getenv(
-            "CONFIG_DIR",
-            Path(__file__).parent.parent / "config",
-        ))
+        config_dir = Path(__file__).parent.parent / "config"
         platform_config_path = config_dir / "platform_config.json"
         user_profile_path = config_dir / "user_profile.json"
 
@@ -1282,10 +1280,11 @@ class ScraperEngine:
         LOG.info("✓ Himalayas API scraper initialized")
 
         # ---- Phase 2: feature-flagged scrapers --------------------------
-        # Enabled when env ENABLE_PHASE_2_SOURCES=true (or PHASE=2 for legacy support).
-        phase2_enabled = (
-            os.getenv("ENABLE_PHASE_2_SOURCES", "").lower() == "true"
-            or os.getenv("PHASE", "") == "2"
+        # Enabled when platform_settings.json has jooble/remotive in active_platforms.
+        active_platforms: list[str] = config_loader.get_active_platforms()
+        phase2_enabled = any(
+            p in active_platforms
+            for p in ("jooble", "remotive")
         )
         if phase2_enabled:
             if os.getenv("JOOBLE_API_KEY"):
@@ -1377,7 +1376,7 @@ class ScraperEngine:
         # ---- Step 2: SerpAPI safety-net (called ONCE, OUTSIDE loop) -----
         # Safety-net: only trigger SerpAPI if primary scrapers
         # returned fewer than the minimum job threshold
-        SAFETY_NET_THRESHOLD = int(os.getenv("JOBS_PER_RUN_MINIMUM", "100"))
+        SAFETY_NET_THRESHOLD = config_loader.get_run_config().get("jobs_per_run_target", 100)
         if self.enable_safety_net and len(all_raw_jobs) < SAFETY_NET_THRESHOLD:
             LOG.info(
                 "Safety-net triggered: %d jobs from primary scrapers "
