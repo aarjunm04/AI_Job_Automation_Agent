@@ -567,7 +567,7 @@ class LLMInterface:
         analyser_apply_chain: list[tuple[str, str, str, str, bool]] = [
             (
                 "xai",
-                os.getenv("XAI_MODEL", "grok-3-mini"),
+                os.getenv("XAI_DEFAULT_MODEL", "grok-3-mini"),
                 "XAI_API_KEY",
                 os.getenv("XAI_BASE_URL", "https://api.x.ai/v1"),
                 True,
