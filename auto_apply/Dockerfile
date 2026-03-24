@@ -6,6 +6,10 @@ COPY --chown=appuser:appuser auto_apply/ /app/auto_apply/
 COPY --chown=appuser:appuser tools/apply_tools.py /app/tools/apply_tools.py
 COPY --chown=appuser:appuser tools/postgres_tools.py /app/tools/postgres_tools.py
 COPY --chown=appuser:appuser tools/agentops_tools.py /app/tools/agentops_tools.py
+
+COPY --chown=appuser:appuser tools/__init__.py /app/tools/__init__.py
+COPY --chown=appuser:appuser tools/budget_tools.py /app/tools/budget_tools.py
+COPY --chown=appuser:appuser tools/notion_tools.py /app/tools/notion_tools.py
 COPY --chown=appuser:appuser config/ /app/config/
 COPY --chown=appuser:appuser integrations/ /app/integrations/
 COPY --chown=appuser:appuser utils/ /app/utils/

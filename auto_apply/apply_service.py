@@ -34,6 +34,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 import psycopg2
 import psycopg2.extras
+from utils.db_utils import get_db_conn
 from playwright.async_api import async_playwright, Page
 
 from auto_apply.ats_detector import ATSDetector, ATSType, ATSProfile
@@ -144,20 +145,10 @@ app = FastAPI(
 # Database Helpers
 # ---------------------------------------------------------------------------
 def _get_db_conn():
-    """Get database connection with retry logic."""
+    """Get database connection with retry logic via centralised db_utils factory."""
     for attempt in range(3):
         try:
-            if os.getenv("ACTIVE_DB", "local") == "local":
-                conn = psycopg2.connect(
-                    host=os.getenv("LOCAL_POSTGRES_HOST", "ai_postgres"),
-                    port=int(os.getenv("LOCAL_POSTGRES_PORT", "5432")),
-                    user=os.getenv("LOCAL_POSTGRES_USER", "aarjunm04"),
-                    password=os.getenv("LOCAL_POSTGRES_PASSWORD"),
-                    dbname=os.getenv("LOCAL_POSTGRES_DB", "ai_job_db"),
-                    connect_timeout=10,
-                )
-            else:
-                conn = psycopg2.connect(os.getenv("SUPABASE_URL"))
+            conn = get_db_conn()
             conn.autocommit = False
             return conn
         except Exception as e:
