@@ -77,6 +77,8 @@ services:
       timeout: 10s
       retries: 5
       start_period: 30s
+    ports:
+    - "8010:8000"
 
   # ---------------------------------------------------------------------------
   # TIER 1 — Playwright Base
@@ -125,6 +127,9 @@ services:
       timeout: 15s
       retries: 3
       start_period: 60s
+    volumes:
+      - ./app/resumes:/app/resumes:ro
+      - ./config:/app/config:ro
     networks:
       - ai_job_network
     deploy:
@@ -163,6 +168,8 @@ services:
       start_period: 60s
     volumes:
       - ./app/resumes:/app/resumes:ro
+      - ./config:/app/config:ro
+
 
     networks:
       - ai_job_network
@@ -208,6 +215,7 @@ services:
     volumes:
       - ./app/resumes:/app/resumes:ro
       - ./logs:/app/logs
+      - ./config:/app/config:ro
     networks:
       - ai_job_network
     deploy:
@@ -250,6 +258,8 @@ services:
       timeout: 5s
       retries: 5
       start_period: 30s
+    volumes:
+      - ./config:/app/config:ro
     networks:
       - ai_job_network
 
@@ -296,6 +306,7 @@ services:
     volumes:
       - ./app/resumes:/app/resumes:ro
       - ./logs:/app/logs
+      - ./config:/app/config:ro
     networks:
       - ai_job_network
     profiles: [ "batch" ]
@@ -305,26 +316,3 @@ services:
           cpus: "2"
           memory: 4G
 
-  ai_agentrunner:
-    image: ai_agent_runner:latest
-    env_file:
-      - ~/java.env
-    environment:
-      - PYTHONPATH=/app
-    depends_on:
-      ai_postgres:
-        condition: service_healthy
-      ai_redis:
-        condition: service_healthy
-      ai_chromadb:
-        condition: service_healthy
-      ai_rag_server:
-        condition: service_healthy
-    volumes:
-      - ./app/resumes:/app/resumes:ro
-      - ./logs:/app/logs
-    networks:
-      - ai_job_network
-    profiles:
-      - run
-    command: [ "python", "main.py" ]
