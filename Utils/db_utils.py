@@ -29,7 +29,7 @@ def get_db_conn() -> PgConnection:
     """Open and return a psycopg2 connection to the active Postgres instance.
 
     Selects the connection URL based on the ``ACTIVE_DB`` environment variable
-    (``"local"`` → ``LOCAL_POSTGRES_URL``, anything else → ``SUPABASE_URL``).
+    (``"local"`` → ``LOCAL_POSTGRES_URL``, anything else → ``SUPABASE_DB_URL``).
     The returned connection has ``autocommit=False``.
 
     Returns:
@@ -43,13 +43,13 @@ def get_db_conn() -> PgConnection:
     db_url: str | None = (
         os.getenv("LOCAL_POSTGRES_URL")
         if active_db == "local"
-        else os.getenv("SUPABASE_URL")
+        else os.getenv("SUPABASE_DB_URL")
     )
 
     if not db_url:
         raise RuntimeError(
             "Database URL is not configured.  "
-            "Set LOCAL_POSTGRES_URL or SUPABASE_URL in java.env and "
+            "Set LOCAL_POSTGRES_URL or SUPABASE_DB_URL in java.env and "
             "ACTIVE_DB=local|supabase."
         )
     if psycopg2 is None:
