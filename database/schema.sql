@@ -261,3 +261,23 @@ EXECUTE FUNCTION close_run_session();
 -- Record initial schema version
 INSERT INTO schema_versions (version) VALUES ('001')
 ON CONFLICT (version) DO NOTHING;
+
+-- run_batches: tracks each pipeline execution batch
+CREATE TABLE IF NOT EXISTS run_batches (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    run_batch_id    TEXT UNIQUE NOT NULL,
+    mode            TEXT NOT NULL DEFAULT 'full',
+    status          TEXT NOT NULL DEFAULT 'running',
+    dry_run         BOOLEAN NOT NULL DEFAULT FALSE,
+    jobs_found      INTEGER DEFAULT 0,
+    jobs_applied    INTEGER DEFAULT 0,
+    jobs_queued     INTEGER DEFAULT 0,
+    total_cost_usd  NUMERIC(10,6) DEFAULT 0.0,
+    error_message   TEXT,
+    started_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    completed_at    TIMESTAMPTZ,
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_run_batches_run_batch_id ON run_batches(run_batch_id);
+CREATE INDEX IF NOT EXISTS idx_run_batches_status ON run_batches(status);
+CREATE INDEX IF NOT EXISTS idx_run_batches_started_at ON run_batches(started_at DESC);
