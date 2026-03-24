@@ -18,8 +18,8 @@ Inspired by battle-tested patterns from:
 - **EasyApplyJobsBot** — field detection, dropdown selection, checkbox
   handling, time-delay humanisation.
 
-All user profile data is sourced exclusively from environment variables
-loaded via ``~/java.env``.
+All user profile data is sourced exclusively from ``config/user_profile.json``
+via the ``config_loader`` singleton.
 """
 
 from __future__ import annotations
@@ -42,6 +42,7 @@ from litellm import completion
 from playwright.async_api import ElementHandle, Locator, Page
 
 from config.settings import api_config, run_config
+from config.config_loader import config_loader
 from integrations.llm_interface import LLMInterface
 
 # ---------------------------------------------------------------------------
@@ -137,10 +138,11 @@ class FillResult:
 
 @dataclass
 class UserProfile:
-    """Candidate profile sourced exclusively from environment variables.
+    """Candidate profile sourced exclusively from ``config/user_profile.json``.
 
-    All values originate from ``~/java.env``.  No values are ever
-    hard-coded.
+    All values are read once at instantiation via the ``config_loader``
+    singleton.  No values are ever hard-coded or read from environment
+    variables.
     """
 
     first_name: str = ""
@@ -157,26 +159,44 @@ class UserProfile:
 
     @classmethod
     def from_env(cls) -> "UserProfile":
-        """Build a ``UserProfile`` by reading ``os.getenv()`` values.
+        """Build a ``UserProfile`` by reading ``config/user_profile.json``.
+
+        All field values are sourced from the ``config_loader`` singleton
+        which reads the canonical JSON config files.  No ``os.getenv()`` calls
+        are made for user data.
 
         Returns:
             Populated ``UserProfile`` instance.
         """
-        name: str = os.getenv("USERNAME", "")
-        parts: list[str] = name.split()
-        return cls(
-            first_name=parts[0] if parts else "",
-            last_name=parts[-1] if len(parts) > 1 else "",
-            full_name=name,
-            email=os.getenv("USER_EMAIL", ""),
-            phone=os.getenv("USER_PHONE", ""),
-            linkedin_url=os.getenv("USER_LINKEDIN_URL", ""),
-            portfolio_url=os.getenv("USER_PORTFOLIO_URL", ""),
-            location=os.getenv("USER_LOCATION", ""),
-            years_experience=os.getenv("USER_YEARS_EXPERIENCE", "0"),
-            accepted_job_types=os.getenv("USER_ACCEPTED_JOB_TYPES", "full-time"),
-            accepted_locations=os.getenv("USER_ACCEPTED_LOCATIONS", "Remote"),
-        )
+        try:
+            meta: dict = config_loader.get_user_metadata()
+            prefs: dict = config_loader.get_job_preferences()
+            name: str = meta.get("full_name", "")
+            parts: list[str] = name.split()
+            # work_setup may be dict (remote/hybrid/onsite) — stringify if needed
+            work_setup = prefs.get("work_setup", {})
+            if isinstance(work_setup, dict):
+                accepted_job_types = "remote" if work_setup.get("remote") else "full-time"
+            else:
+                accepted_job_types = str(work_setup)
+            must_have: list = prefs.get("locations", {}).get("must_have", ["Remote"])
+            accepted_locations: str = must_have[0] if must_have else "Remote"
+            return cls(
+                first_name=parts[0] if parts else "",
+                last_name=parts[-1] if len(parts) > 1 else "",
+                full_name=name,
+                email=meta.get("email", ""),
+                phone=meta.get("phone", ""),
+                linkedin_url=meta.get("linkedin_url", ""),
+                portfolio_url=meta.get("portfolio_url", ""),
+                location=meta.get("location_city", ""),
+                years_experience=str(meta.get("years_experience_total", "0")),
+                accepted_job_types=accepted_job_types,
+                accepted_locations=accepted_locations,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.error("UserProfile.from_env: failed to load from config_loader: %s", exc)
+            return cls()
 
 
 # ═══════════════════════════════════════════════════════════════════════════

@@ -42,7 +42,9 @@ from auto_apply.platforms.greenhouse import GreenhouseApply
 from auto_apply.platforms.lever import LeverApply
 from auto_apply.platforms.base_platform import ApplyResult
 from config.settings import db_config, run_config, budget_config
+from config.config_loader import config_loader
 from tools.budget_tools import check_xai_run_cap, record_llm_cost
+from utils.proxy_rate_limit import get_playwright_proxy, get_next_proxy, mark_proxy_dead, mark_proxy_success
 
 # ---------------------------------------------------------------------------
 # Module-level logger
@@ -167,20 +169,25 @@ def _get_db_conn():
 
 
 def _get_user_profile() -> Dict[str, Any]:
-    """Load user profile from environment variables."""
-    name = os.getenv("USERNAME", "")
-    parts = name.split()
-    return {
-        "first_name": parts[0] if parts else "",
-        "last_name": parts[-1] if len(parts) > 1 else "",
-        "full_name": name,
-        "email": os.getenv("USER_EMAIL", ""),
-        "phone": os.getenv("USER_PHONE", ""),
-        "linkedin_url": os.getenv("USER_LINKEDIN_URL", ""),
-        "portfolio_url": os.getenv("USER_PORTFOLIO_URL", ""),
-        "location": os.getenv("USER_LOCATION", ""),
-        "years_experience": os.getenv("USER_YEARS_EXPERIENCE", "0"),
-    }
+    """Load user profile from config/user_profile.json via config_loader."""
+    try:
+        meta = config_loader.get_user_metadata()
+        name = meta.get("full_name", "")
+        parts = name.split()
+        return {
+            "first_name": parts[0] if parts else "",
+            "last_name": parts[-1] if len(parts) > 1 else "",
+            "full_name": name,
+            "email": meta.get("email", ""),
+            "phone": meta.get("phone", ""),
+            "linkedin_url": meta.get("linkedin_url", ""),
+            "portfolio_url": meta.get("portfolio_url", ""),
+            "location": meta.get("location_city", ""),
+            "years_experience": str(meta.get("years_experience_total", "0")),
+        }
+    except Exception as exc:  # noqa: BLE001
+        LOG.error("_get_user_profile: failed to load from config_loader: %s", exc)
+        return {}
 
 
 def _insert_application(
@@ -305,7 +312,7 @@ async def _execute_apply(
     # Resolve resume path
     resume_path = RESUME_DIR / request.resume_path
     if not resume_path.exists():
-        default_resume = os.getenv("DEFAULT_RESUME", "AarjunGen.pdf")
+        default_resume = "Aarjun_Gen.pdf"
         resume_path = RESUME_DIR / default_resume
         LOG.warning("Resume %s not found, using default: %s", request.resume_path, default_resume)
     
@@ -350,11 +357,8 @@ async def _execute_apply(
             ],
         )
         
-        # Proxy configuration
-        proxy_list = [
-            px.strip() for px in os.getenv("WEBSHARE_PROXY_LIST", "").split(",") if px.strip()
-        ]
-        proxy = {"server": proxy_list[0]} if proxy_list else None
+        # Proxy configuration — use shared proxy pool via utils.proxy_rate_limit
+        proxy = get_playwright_proxy()
         
         context = await browser.new_context(
             proxy=proxy,
@@ -631,7 +635,7 @@ async def retry_queued_job(job_id: str) -> ApplyResponse:
         
         request = ApplyRequest(
             job_id=job_id,
-            resume_path=row.get("resume_path") or os.getenv("DEFAULT_RESUME", "AarjunGen.pdf"),
+            resume_path=row.get("resume_path") or "Aarjun_Gen.pdf",
             platform=platform,
             job_url=row["url"],
             fit_score=float(row.get("fit_score", 0.0)),
