@@ -212,7 +212,7 @@ class NVIDIANIMEmbedder(EmbeddingProvider):
     """
 
     base_url: str = field(
-        default_factory=lambda: os.getenv("RAG_SERVER_URL", "https://integrate.api.nvidia.com/v1")
+        default_factory=lambda: os.getenv("NVIDIA_NIM_RAG_BASE_URL", "https://integrate.api.nvidia.com/v1")
     )
     api_key: str = field(default_factory=lambda: os.getenv("NVIDIA_NIM_API_KEY", ""))
     model: str = "nvidia/nv-embedqa-e5-v5"

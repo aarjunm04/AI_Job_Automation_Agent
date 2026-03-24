@@ -1024,57 +1024,34 @@ def check_rate_limit(api_key: str = Depends(verify_api_key)):
 # ═══════════════════════════════════════════════════════════════════════════
 
 @app.get("/", response_class=PlainTextResponse)
-@agentops.track_tool
 async def root() -> str:
     """Root endpoint"""
     return "RAG Production Server v1.0.0 - Running ✓"
 
 
 @app.get("/health")
-@agentops.track_tool
 async def health_check() -> JSONResponse:
-    """Health check endpoint — always returns HTTP 200 with status fields."""
+    """Health check — ChromaDB connectivity only. Never calls embedder."""
     result: Dict[str, Any] = {
         "status": "ok",
-        "rag_engine": "ok",
         "chromadb": "ok",
-        "embedder": "ok",
+        "rag_engine": "ok",
         "resume_count": 0,
         "version": "1.0.0",
     }
-
-    # ChromaDB check
     try:
         engine = get_default_engine()
         engine.chroma._client.heartbeat()
+        result["resume_count"] = len(engine.list_resumes())
     except Exception as exc:
         logger.warning("Health: ChromaDB check failed: %s", exc)
         result["chromadb"] = "error"
-        result["status"] = "error"
-
-    # Embedder check
-    try:
-        svc = EmbeddingService()
-        svc.embed_text("health check")
-    except Exception as exc:
-        logger.warning("Health: embedder check failed: %s", exc)
-        result["embedder"] = "error"
-        result["status"] = "error"
-
-    # RAG engine / resume count
-    try:
-        engine = get_default_engine()
-        result["resume_count"] = len(engine.list_resumes())
-    except Exception as exc:
-        logger.warning("Health: RAG engine check failed: %s", exc)
         result["rag_engine"] = "error"
-        result["status"] = "error"
-
+        result["status"] = "degraded"
     return JSONResponse(content=result, status_code=200)
 
 
 @app.post("/rag/query", tags=["RAG"])
-@agentops.track_tool
 def rag_query_context(
     request: RAGRequest,
     api_key: str = Depends(verify_api_key)
@@ -1141,7 +1118,6 @@ def rag_query_context(
 
     
 @app.post("/rag/select", tags=["RAG"])
-@agentops.track_tool
 def rag_select_resume(
     request: RAGRequest,
     api_key: str = Depends(verify_api_key)
@@ -1191,7 +1167,6 @@ def rag_select_resume(
 
 
 @app.get("/resumes", tags=["RAG"])
-@agentops.track_tool
 def list_resumes_endpoint(
     _: str = Depends(verify_api_key)
 ) -> dict:
@@ -1208,7 +1183,6 @@ def list_resumes_endpoint(
 
 
 @app.post("/resumes/select", response_model=ResumeSelectionResponse, tags=["RAG"])
-@agentops.track_tool
 async def select_best_resume(
     request: ResumeSelectionRequest,
     api_key: str = Depends(check_rate_limit)
@@ -1272,7 +1246,6 @@ async def select_best_resume(
 
 
 @app.get("/resumes/list", tags=["RAG"])
-@agentops.track_tool
 async def list_all_resumes(api_key: str = Depends(check_rate_limit)) -> dict:
     """List all available resumes"""
     import traceback
@@ -1311,7 +1284,6 @@ async def list_all_resumes(api_key: str = Depends(check_rate_limit)) -> dict:
 
 
 @app.post("/resumes/reindex/{resume_id}", tags=["RAG"])
-@agentops.track_tool
 def reindex_resume_endpoint(
     resume_id: str,
     api_key: str = Depends(check_rate_limit)
@@ -1334,7 +1306,6 @@ def reindex_resume_endpoint(
 
 
 @app.get("/sessions/{session_id}", tags=["Sessions"])
-@agentops.track_tool
 def get_session_info(
     session_id: str,
     api_key: str = Depends(check_rate_limit)
@@ -1356,7 +1327,6 @@ def get_session_info(
 
 
 @app.delete("/sessions/{session_id}", tags=["Sessions"])
-@agentops.track_tool
 def delete_session(
     session_id: str,
     api_key: str = Depends(check_rate_limit)
@@ -1378,7 +1348,6 @@ def delete_session(
 
 
 @app.post("/cache/invalidate", tags=["Admin"])
-@agentops.track_tool
 def invalidate_cache(
     api_key: str = Depends(verify_api_key)
 ) -> dict:
@@ -1399,7 +1368,6 @@ def invalidate_cache(
 
 
 @app.get("/metrics", tags=["Admin"])
-@agentops.track_tool
 def get_metrics(api_key: str = Depends(verify_api_key)) -> dict:
     """Get system metrics"""
     metrics = metrics_collector.get_metrics()
@@ -1423,7 +1391,6 @@ def get_metrics(api_key: str = Depends(verify_api_key)) -> dict:
 
 
 @app.post("/match", tags=["RAG"])
-@agentops.track_tool
 async def match_resume(
     request: MatchRequest,
     api_key: str = Depends(verify_x_api_key),
@@ -1451,7 +1418,6 @@ async def match_resume(
 
 
 @app.post("/autofill", tags=["RAG"])
-@agentops.track_tool
 async def autofill_context(
     request: AutofillRequest,
     api_key: str = Depends(verify_x_api_key),
