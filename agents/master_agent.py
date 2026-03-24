@@ -26,7 +26,6 @@ from typing import Any, Dict, List, Optional
 from crewai import Agent, Task, Crew, Process
 import agentops
 from agentops.sdk.decorators import operation
-import psycopg2
 
 from config.settings import db_config, run_config, budget_config, api_config
 from integrations.llm_interface import LLMInterface
@@ -194,7 +193,10 @@ class MasterAgent:
         self.mode: str = mode if mode != "dry_run" else "full"
         self.run_batch_id: str = str(uuid.uuid4())
         self.run_index_in_week: int = self._calculate_run_index()
-        self.user_id: str = "default_user"
+        from config.config_loader import config_loader as _cl
+        self.user_id: str = (
+            _cl.get_user_metadata().get("email", "default_user")
+        )
 
         self.llm_interface: LLMInterface = LLMInterface()
         self.llm = self.llm_interface.get_llm("MASTER_AGENT")
@@ -246,6 +248,7 @@ class MasterAgent:
             ``True`` if the database is reachable and critical env vars are
             present; ``False`` otherwise (run must not proceed).
         """
+        from config.config_loader import config_loader
         self.logger.info("=== SYSTEM BOOT CHECK START ===")
 
         # Step 1 — Validate critical environment variables
@@ -316,7 +319,8 @@ class MasterAgent:
 
         # Step 4 — Check resume files exist (non-critical)
         resume_path: Path = (
-            Path(run_config.resume_dir) / run_config.default_resume
+            Path(os.getenv("RESUME_DIR", "app/resumes"))
+            / os.getenv("DEFAULT_RESUME", "Aarjun_Gen.pdf")
         )
         if resume_path.exists():
             self.logger.info(
@@ -335,7 +339,7 @@ class MasterAgent:
             db_config.active_db,
             self.mode,
             self.run_index_in_week,
-            run_config.resume_dir,
+            os.getenv("RESUME_DIR", "app/resumes"),
             os.getenv("DRY_RUN", "false"),
         )
 
@@ -635,7 +639,10 @@ class MasterAgent:
             ``True`` if the run should be vetoed (cost exceeded),
             ``False`` if within budget.
         """
-        veto_threshold: float = float(os.getenv("XAI_COST_CAP_PER_RUN", "0.10"))
+        from config.config_loader import config_loader
+        veto_threshold: float = float(
+            config_loader.get_budget_settings().get("xai_cost_cap_per_run_usd", 0.38)
+        )
         try:
             cost_raw: str = get_cost_summary.func(run_batch_id=self.run_batch_id)
             cost_data: Dict[str, Any] = json.loads(cost_raw)
@@ -875,7 +882,7 @@ class MasterAgent:
         # Get final Postgres stats
         run_stats: Dict[str, Any] = {}
         try:
-            raw_stats: str = get_run_stats.run(run_batch_id=self.run_batch_id)
+            raw_stats: str = get_run_stats.func(run_batch_id=self.run_batch_id)
             run_stats = json.loads(raw_stats)
         except Exception as exc:  # noqa: BLE001
             self.logger.warning(

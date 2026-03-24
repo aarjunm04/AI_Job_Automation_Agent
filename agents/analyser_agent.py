@@ -226,7 +226,7 @@ class AnalyserAgent:
         to ``label`` matching.
 
         Args:
-            resume_filename: Resume filename such as ``"AarjunGen.pdf"``.
+            resume_filename: Resume filename such as ``"Aarjun_Gen.pdf"``.
 
         Returns:
             UUID string if found, ``None`` otherwise.
@@ -423,7 +423,7 @@ class AnalyserAgent:
         """
         job_post_id: str = str(job.get("id", ""))
         job_title: str = job.get("title", "")
-        default_resume = os.getenv("DEFAULT_RESUME", "AarjunGen.pdf")
+        default_resume = os.getenv("DEFAULT_RESUME", "Aarjun_Gen.pdf")
 
         fallback_result: dict[str, Any] = {
             "job_post_id": job_post_id,
@@ -553,7 +553,7 @@ class AnalyserAgent:
                             "job_post_id": str(job.get("id", "")),
                             "fit_score": 0.0,
                             "route": "skip",
-                            "resume_suggested": os.getenv("DEFAULT_RESUME", "AarjunGen.pdf"),
+                            "resume_suggested": os.getenv("DEFAULT_RESUME", "Aarjun_Gen.pdf"),
                             "eligibility_pass": False,
                             "reasons_json": {"error": str(exc)},
                         })
@@ -764,7 +764,7 @@ class AnalyserAgent:
                 }
 
                 resume_id: Optional[str] = self._resolve_resume_id(
-                    os.getenv("DEFAULT_RESUME", "AarjunGen.pdf")
+                    os.getenv("DEFAULT_RESUME", "Aarjun_Gen.pdf")
                 )
 
                 self._save_score_direct(
@@ -1162,7 +1162,7 @@ JOB LIST (JSON)
                     route: str = str(crew_result.get("route", "skip") or "skip").lower()
                     resume_suggested: str = str(
                         crew_result.get("resume_suggested", "")
-                        or os.getenv("DEFAULT_RESUME", "AarjunGen.pdf")
+                        or os.getenv("DEFAULT_RESUME", "Aarjun_Gen.pdf")
                     )
                 else:
                     # Job was not scored by crew (e.g. budget abort mid-batch)
@@ -1178,7 +1178,7 @@ JOB LIST (JSON)
                     resume_suggested = str(
                         fallback_scored.get(
                             "resume_suggested",
-                            os.getenv("DEFAULT_RESUME", "AarjunGen.pdf"),
+                            os.getenv("DEFAULT_RESUME", "Aarjun_Gen.pdf"),
                         )
                     )
 

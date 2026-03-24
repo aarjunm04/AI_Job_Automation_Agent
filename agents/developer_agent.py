@@ -18,7 +18,7 @@ LLM usage (summary generation only):
     Primary: xAI Grok → Fallback 1: Groq Llama → Fallback 2: Cerebras
     → Rule-based text fallback.
     Token budget: ``MAX_TOKENS_PER_RUN = 8000`` per analysis run.
-    Monthly budget cap: ``$5 xAI`` (env ``XAI_MONTHLY_BUDGET_USD``).
+    Monthly budget cap: ``$5 xAI`` (env ``XAI_MONTHLY_BUDGET_DOLLARS``).
 """
 
 from __future__ import annotations
@@ -152,7 +152,7 @@ class DeveloperAgent:
         url: str = (
             os.getenv("LOCAL_POSTGRES_URL", "")
             if active_db == "local"
-            else os.getenv("SUPABASE_URL", "")
+            else os.getenv("SUPABASE_DB_URL", "")
         )
         return psycopg2.connect(
             url, cursor_factory=psycopg2.extras.RealDictCursor
@@ -678,7 +678,7 @@ class DeveloperAgent:
                 rows = cur.fetchall()
 
             xai_budget: float = float(
-                os.getenv("XAI_MONTHLY_BUDGET_USD", "5.0")
+                os.getenv("XAI_MONTHLY_BUDGET_DOLLARS", "5.0")
             )
             cost_per_1k: float = float(
                 os.getenv("XAI_COST_PER_1K_TOKENS", "0.005")
@@ -1207,7 +1207,7 @@ class DeveloperAgent:
         summary: str = await self._call_llm_with_retry(
             provider="xai",
             api_key=os.getenv("XAI_API_KEY", ""),
-            model=os.getenv("XAI_MODEL", "grok-2-latest"),
+            model=os.getenv("XAI_DEFAULT_MODEL", "grok-2-latest"),
             base_url="https://api.x.ai/v1",
             prompt=prompt,
         )
@@ -1390,7 +1390,7 @@ class DeveloperAgent:
             Estimated remaining budget in USD.
         """
         budget: float = float(
-            os.getenv("XAI_MONTHLY_BUDGET_USD", "5.0")
+            os.getenv("XAI_MONTHLY_BUDGET_DOLLARS", "5.0")
         )
         cost_per_1k: float = float(
             os.getenv("XAI_COST_PER_1K_TOKENS", "0.005")
