@@ -408,3 +408,11 @@ IDE_STANDARDS.md
 #mcp session data and mcp json
 .serena
 .playwright-mcp
+
+# User profile json 
+config/user_profile.json
+
+#test scripts local 
+scripts/
+./scripts
+scripts
