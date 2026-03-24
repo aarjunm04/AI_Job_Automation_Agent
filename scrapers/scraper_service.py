@@ -47,6 +47,8 @@ from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field
 from playwright.async_api import async_playwright, Browser, BrowserContext
 
+from config.config_loader import config_loader
+
 # =================================================================================
 # LOGGING
 # =================================================================================
@@ -164,24 +166,6 @@ class ProxyManager:
                 LOG.info("Loaded proxy from %s", key)
             except Exception as e:
                 LOG.warning("Failed to parse proxy %s: %s", key, e)
-
-        # Bulk load from WEBSHARE_PROXY_LIST (comma-separated URLs)
-        bulk_raw = os.getenv("WEBSHARE_PROXY_LIST", "")
-        for url in bulk_raw.split(","):
-            url = url.strip()
-            if not url:
-                continue
-            try:
-                url = url.replace("https://", "http://")
-                no_proto = url.replace("http://", "")
-                auth, srv = no_proto.split("@", 1)
-                uname, pwd = auth.split(":", 1)
-                self.proxies.append(
-                    ProxyNode(server=f"http://{srv}", username=uname, password=pwd)
-                )
-                LOG.info("Loaded proxy from WEBSHARE_PROXY_LIST")
-            except Exception as e:
-                LOG.warning("Failed to parse WEBSHARE_PROXY_LIST entry: %s", e)
 
         if not self.proxies:
             LOG.warning("No valid proxies found. Running without proxies.")
