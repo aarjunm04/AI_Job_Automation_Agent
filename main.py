@@ -253,7 +253,10 @@ class BudgetEnforcer:
     Checks budget_tools.get_monthly_spend() > $9.50 → abort with Notion alert.
     """
     
-    MONTHLY_CAP_USD: float = 9.50
+    from config.config_loader import config_loader
+    MONTHLY_CAP_USD: float = float(
+        config_loader.get_budget_settings().get("total_monthly_budget_usd", 9.50)
+    )
     
     def __init__(self) -> None:
         self.logger = logging.getLogger(self.__class__.__name__)
@@ -656,6 +659,7 @@ async def async_main(args: argparse.Namespace) -> int:
         Exit code (0 success, 1 failure, 130 interrupt).
     """
     global _pipeline_runner
+    from config.config_loader import config_loader
     
     # ------------------------------------------------------------------
     # Startup banner
@@ -669,13 +673,13 @@ async def async_main(args: argparse.Namespace) -> int:
     )
     logger.info(
         "Target: %d jobs | Budget: $%.2f/month",
-        run_config.jobs_per_run_target,
-        budget_config.total_monthly_budget,
+        config_loader.get_run_config().get("jobs_per_run_target", 100),
+        config_loader.get_budget_settings().get("total_monthly_budget_usd", 10.0),
     )
     logger.info(
         "DRY RUN: %s | AUTO APPLY: %s",
-        args.dry_run or run_config.dry_run,
-        run_config.auto_apply_enabled,
+        args.dry_run or config_loader.get_apply_settings().get("dry_run", False),
+        config_loader.get_apply_settings().get("auto_apply_enabled", False),
     )
     logger.info("=" * 70)
 
@@ -689,6 +693,13 @@ async def async_main(args: argparse.Namespace) -> int:
         missing.append("XAI_API_KEY")
     if not db_config.local_postgres_url and not db_config.supabase_url:
         missing.append("LOCAL_POSTGRES_URL or SUPABASE_URL")
+
+    try:
+        from config.config_loader import config_loader as _cl
+        _cl.get_run_config()
+    except Exception as _cfg_exc:
+        logger.critical("Config JSON load failed: %s", _cfg_exc)
+        missing.append("config/platform_settings.json (unreadable)")
 
     if missing:
         logger.critical("Missing required env vars: %s", missing)
