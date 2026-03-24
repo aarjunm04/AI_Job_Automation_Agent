@@ -20,6 +20,9 @@ import psycopg2.extras
 import agentops
 from psycopg2.extensions import connection as PgConnection
 from utils.db_utils import get_db_conn
+from crewai.tools import tool
+from agentops.sdk.decorators import operation
+
  
  
 __all__ = [
@@ -134,9 +137,9 @@ def _fetch_user_config() -> dict[str, Any]:
     return {}
 
 
-@tool
-@operation
 @agentops.track_tool
+@operation
+@tool
 def upsert_job_post(
     run_batch_id: str,
     source_platform: str,
@@ -228,9 +231,9 @@ def upsert_job_post(
         return json.dumps({"error": "upsert_job_post_failed", "detail": str(e)})
 
 
-@tool
-@operation
 @agentops.track_tool
+@operation
+@tool
 def save_job_score(
     job_post_id: str,
     resume_id: str,
@@ -293,9 +296,9 @@ def save_job_score(
         return json.dumps({"error": "save_job_score_failed", "detail": str(e)})
 
 
-@tool
-@operation
 @agentops.track_tool
+@operation
+@tool
 def create_application(
     job_post_id: str,
     resume_id: str,
@@ -407,9 +410,9 @@ def create_application(
         return json.dumps({"error": "create_application_failed", "detail": str(e)})
 
 
-@tool
-@operation
 @agentops.track_tool
+@operation
+@tool
 def update_application_status(
     application_id: str, status: str, error_code: str = ""
 ) -> str:
@@ -473,9 +476,9 @@ def update_application_status(
         )
 
 
-@tool
-@operation
 @agentops.track_tool
+@operation
+@tool
 def create_run_batch(run_index_in_week: int) -> str:
     """
     Create a new run batch for the current date.
@@ -535,9 +538,9 @@ def create_run_batch(run_index_in_week: int) -> str:
         return json.dumps({"error": "create_run_batch_failed", "detail": str(e)})
 
 
-@tool
-@operation
 @agentops.track_tool
+@operation
+@tool
 def update_run_batch_stats(
     run_batch_id: str, jobs_discovered: int, jobs_auto_applied: int, jobs_queued: int
 ) -> str:
@@ -604,9 +607,9 @@ def update_run_batch_stats(
         )
 
 
-@tool
-@operation
 @agentops.track_tool
+@operation
+@tool
 def log_event(
     run_batch_id: str,
     level: str,
@@ -666,9 +669,9 @@ def log_event(
             conn.close()
 
 
-@tool
-@operation
 @agentops.track_tool
+@operation
+@tool
 def get_queued_jobs(limit: int = 50) -> str:
     """
     Retrieve queued jobs ordered by priority and queue time.
@@ -745,9 +748,9 @@ def get_queued_jobs(limit: int = 50) -> str:
         return json.dumps({"error": "get_queued_jobs_failed", "detail": str(e)})
 
 
-@tool
-@operation
 @agentops.track_tool
+@operation
+@tool
 def get_platform_config(platform: str) -> str:
     """Retrieve per-platform rate-limit config from ``users.platform_settings`` JSONB column.
 
@@ -789,9 +792,9 @@ def get_platform_config(platform: str) -> str:
         return json.dumps(_DEFAULT)
 
 
-@tool
-@operation
 @agentops.track_tool
+@operation
+@tool
 def get_run_stats(run_batch_id: str) -> str:
     """
     Retrieve run batch statistics including error count.
@@ -865,9 +868,9 @@ def get_run_stats(run_batch_id: str) -> str:
     except Exception as e:
         return json.dumps({"error": "get_run_stats_failed", "detail": str(e)})
 
-@tool
-@operation
 @agentops.track_tool
+@operation
+@tool
 def get_recent_applications(limit: int = 20) -> str:
     """
     Retrieve most recent application records.
@@ -892,9 +895,9 @@ def get_recent_applications(limit: int = 20) -> str:
         return json.dumps({"error": "get_recent_applications_failed", "detail": str(e)})
 
 
-@tool
-@operation
 @agentops.track_tool
+@operation
+@tool
 def get_pending_manual_queue(limit: int = 50) -> str:
     """
     Retrieve applications marked as manual_queued.

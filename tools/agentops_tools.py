@@ -101,9 +101,9 @@ def _log_to_db(
                 pass
 
 
-@tool
-@operation
 @agentops.track_tool
+@operation
+@tool
 def record_agent_error(
     agent_type: str,
     error_message: str,
@@ -177,9 +177,9 @@ def record_agent_error(
     )
 
 
-@tool
-@operation
 @agentops.track_tool
+@operation
+@tool
 def record_fallback_event(
     agent_type: str,
     from_provider: str,

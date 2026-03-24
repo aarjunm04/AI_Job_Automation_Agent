@@ -65,7 +65,9 @@ from tools.budget_tools import check_xai_run_cap, record_llm_cost
 from tools.agentops_tools import record_agent_error
 from tools.notion_tools import queue_job_to_applications_db
 from config.settings import db_config, run_config, budget_config
+from config.config_loader import config_loader
 from utils.db_utils import get_db_conn
+from utils.proxy_rate_limit import get_playwright_proxy, get_next_proxy, mark_proxy_dead, mark_proxy_success
 
 # ---------------------------------------------------------------------------
 # Module-level logger
@@ -99,42 +101,20 @@ MAX_SESSIONS: int = run_config.max_playwright_sessions
 _DB_URL: Optional[str] = (
     os.getenv("LOCAL_POSTGRES_URL")
     if os.getenv("ACTIVE_DB", "local") == "local"
-    else os.getenv("SUPABASE_URL")
+    else os.getenv("SUPABASE_DB_URL")
 )
 
 # ---------------------------------------------------------------------------
-# Proxy round-robin — explicit os.getenv per spec
+# Proxy — delegate to utils.proxy_rate_limit for thread-safe round-robin
 # ---------------------------------------------------------------------------
-_proxy_list: list[str] = [
-    p.strip() for p in os.getenv("WEBSHARE_PROXY_LIST", "").split(",") if p.strip()
-]
-_proxy_index: int = 0
-
-
-def _get_proxy() -> Optional[dict[str, str]]:
-    """Return the next proxy in round-robin rotation from WEBSHARE_PROXY_LIST.
-
-    Args:
-        None.
-
-    Returns:
-        ``{"server": "<proxy_url>"}`` for Playwright context, or ``None``
-        when ``WEBSHARE_PROXY_LIST`` is empty or unset.
-    """
-    global _proxy_index  # noqa: PLW0603
-    if not _proxy_list:
-        return None
-    proxy_url: str = _proxy_list[_proxy_index % len(_proxy_list)]
-    _proxy_index = (_proxy_index + 1) % len(_proxy_list)
-    return {"server": proxy_url}
 
 
 # ---------------------------------------------------------------------------
 # TOOL 1 — ATS platform detection (Playwright + ATSDetector)
 # ---------------------------------------------------------------------------
-@tool
-@operation
 @agentops.track_tool
+@operation
+@tool
 def detect_ats_platform(job_url: str, run_batch_id: str) -> str:
     """Detect the ATS platform powering a job application page.
 
@@ -245,9 +225,9 @@ def detect_ats_platform(job_url: str, run_batch_id: str) -> str:
 # ---------------------------------------------------------------------------
 # TOOL 2 — Proof of submission capture (UNCHANGED)
 # ---------------------------------------------------------------------------
-@tool
-@operation
 @agentops.track_tool
+@operation
+@tool
 def capture_proof(page_html: str, page_url: str, job_url: str) -> str:
     """Extract proof-of-submission signals from a post-apply page snapshot.
 
@@ -354,9 +334,9 @@ def capture_proof(page_html: str, page_url: str, job_url: str) -> str:
 # ---------------------------------------------------------------------------
 # TOOL 3 — CAPTCHA detection (UNCHANGED)
 # ---------------------------------------------------------------------------
-@tool
-@operation
 @agentops.track_tool
+@operation
+@tool
 def check_captcha_present(page_html: str, job_url: str) -> str:
     """Detect CAPTCHA or bot-challenge presence in page HTML.
 
@@ -560,7 +540,7 @@ async def _run_apply(
                 "--disable-blink-features=AutomationControlled",
             ],
         )
-        proxy: Optional[dict[str, str]] = _get_proxy()
+        proxy: Optional[dict[str, str]] = get_playwright_proxy()
         context = await browser.new_context(
             proxy=proxy,  # type: ignore[arg-type]
             user_agent=(
@@ -830,9 +810,9 @@ async def _run_apply(
 # ---------------------------------------------------------------------------
 # TOOL 4 — Fill standard form (sync wrapper around _run_apply)
 # ---------------------------------------------------------------------------
-@tool
-@operation
 @agentops.track_tool
+@operation
+@tool
 def fill_standard_form(
     job_url: str,
     job_post_id: str,
@@ -962,9 +942,9 @@ def fill_standard_form(
 # ---------------------------------------------------------------------------
 # TOOL 5 — Per-run apply summary (UNCHANGED)
 # ---------------------------------------------------------------------------
-@tool
-@operation
 @agentops.track_tool
+@operation
+@tool
 def get_apply_summary(run_batch_id: str) -> str:
     """Aggregate application counts by status for a given run batch.
 
@@ -1049,9 +1029,9 @@ def get_apply_summary(run_batch_id: str) -> str:
 # ---------------------------------------------------------------------------
 # TOOL 6 — Route and Apply (HTTP call to apply_service)
 # ---------------------------------------------------------------------------
-@tool
-@operation
 @agentops.track_tool
+@operation
+@tool
 def route_and_apply(
     job_id: str,
     job_url: str,
@@ -1177,9 +1157,9 @@ def route_and_apply(
 # ---------------------------------------------------------------------------
 # TOOL 7 — Save Application Result to Postgres
 # ---------------------------------------------------------------------------
-@tool
-@operation
 @agentops.track_tool
+@operation
+@tool
 def save_application_result(
     job_id: str,
     user_id: str,
@@ -1258,9 +1238,9 @@ def save_application_result(
 # ---------------------------------------------------------------------------
 # TOOL 8 — Save to Manual Queue
 # ---------------------------------------------------------------------------
-@tool
-@operation
 @agentops.track_tool
+@operation
+@tool
 def save_to_queue(
     job_id: str,
     user_id: str,
@@ -1343,9 +1323,9 @@ def save_to_queue(
 # ---------------------------------------------------------------------------
 # TOOL 9 — Get Best Resume via RAG
 # ---------------------------------------------------------------------------
-@tool
-@operation
 @agentops.track_tool
+@operation
+@tool
 def get_best_resume(
     job_title: str,
     job_description: str,
@@ -1449,9 +1429,9 @@ def get_best_resume(
 # ---------------------------------------------------------------------------
 # TOOL 10 — Verify Apply Budget
 # ---------------------------------------------------------------------------
-@tool
-@operation
 @agentops.track_tool
+@operation
+@tool
 def verify_apply_budget(
     projected_cost: float,
     run_batch_id: str,

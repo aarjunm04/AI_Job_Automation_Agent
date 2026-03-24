@@ -59,9 +59,9 @@ def _safe_json_dumps(payload: Dict[str, Any]) -> str:
         return json.dumps({"error": "serialization_failed"})
 
 
-@tool
-@operation
 @agentops.track_tool
+@operation
+@tool
 def query_resume_match(job_description: str, job_title: str, required_skills: str) -> str:
     """Suggest the best resume for a given job description.
 
@@ -141,9 +141,9 @@ def query_resume_match(job_description: str, job_title: str, required_skills: st
     })
 
 
-@tool
-@operation
 @agentops.track_tool
+@operation
+@tool
 def get_resume_context(resume_filename: str, job_description: str) -> str:
     """Return formatted resume text chunks relevant to the given job description.
 
@@ -188,9 +188,9 @@ def get_resume_context(resume_filename: str, job_description: str) -> str:
         return ""
 
 
-@tool
-@operation
 @agentops.track_tool
+@operation
+@tool
 def embed_job_description(job_url: str, job_description: str) -> str:
     """Trigger embedding of a job description via the RAG server.
 
@@ -235,9 +235,9 @@ def embed_job_description(job_url: str, job_description: str) -> str:
         )
 
 
-@tool
-@operation
 @agentops.track_tool
+@operation
+@tool
 def get_resume_pdf_path(resume_filename: str) -> str:
     """
     Return the absolute path and existence flag for a given resume PDF.

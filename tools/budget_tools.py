@@ -133,9 +133,9 @@ def _log_to_db(
             conn.close()
 
 
-@tool
-@operation
 @agentops.track_tool
+@operation
+@tool
 def reset_run_cost_tracker(run_batch_id: str) -> str:
     """
     Reset the run cost tracker for a new run.
@@ -159,9 +159,9 @@ def reset_run_cost_tracker(run_batch_id: str) -> str:
     return json.dumps({"reset": True, "run_batch_id": run_batch_id})
 
 
-@tool
-@operation
 @agentops.track_tool
+@operation
+@tool
 def record_llm_cost(
     provider: str, cost_usd: float, agent_type: str, run_batch_id: str
 ) -> str:
@@ -210,9 +210,9 @@ def record_llm_cost(
         return json.dumps({"error": "record_llm_cost_failed", "detail": str(e)})
 
 
-@tool
-@operation
 @agentops.track_tool
+@operation
+@tool
 def check_xai_run_cap(run_batch_id: str) -> str:
     """
     Check if the xAI run cap has been exceeded.
@@ -266,9 +266,9 @@ def check_xai_run_cap(run_batch_id: str) -> str:
         return json.dumps({"error": "check_xai_run_cap_failed", "detail": str(e)})
 
 
-@tool
-@operation
 @agentops.track_tool
+@operation
+@tool
 def check_monthly_budget(run_batch_id: str) -> str:
     """
     Check if the monthly budget has been exceeded.
@@ -354,9 +354,9 @@ def check_monthly_budget(run_batch_id: str) -> str:
             conn.close()
 
 
-@tool
-@operation
 @agentops.track_tool
+@operation
+@tool
 def get_cost_summary(run_batch_id: str) -> str:
     """
     Get current run cost summary.

@@ -36,6 +36,7 @@ from scrapers.scraper_service import (
 )
 from tools.postgres_tools import upsert_job_post, log_event, get_platform_config
 from utils.db_utils import get_db_conn
+from config.config_loader import config_loader
 
 __all__ = [
     "run_jobspy_scrape",
@@ -57,7 +58,7 @@ def _get_engine() -> ScraperEngine:
     """
     global _scraper_engine
     if _scraper_engine is None:
-        min_jobs_target = int(os.getenv("JOBS_PER_RUN_MINIMUM", "100"))
+        min_jobs_target = config_loader.get_run_config().get("jobs_per_run_target", 100)
         _scraper_engine = ScraperEngine(min_jobs_target=min_jobs_target)
         logger.info("ScraperEngine initialized")
     return _scraper_engine
@@ -98,9 +99,9 @@ def _with_retry(func, max_retries: int = 3):
     return wrapper
 
 
-@tool
-@operation
 @agentops.track_tool
+@operation
+@tool
 def run_jobspy_scrape(
     run_batch_id: str,
     search_query: str,
@@ -192,9 +193,9 @@ def run_jobspy_scrape(
         )
 
 
-@tool
-@operation
 @agentops.track_tool
+@operation
+@tool
 def run_rest_api_scrape(
     run_batch_id: str, platforms: str = "remoteok,himalayas"
 ) -> str:
@@ -297,9 +298,9 @@ def run_rest_api_scrape(
     )
 
 
-@tool
-@operation
 @agentops.track_tool
+@operation
+@tool
 def run_playwright_scrape(
     run_batch_id: str, platform: str, max_jobs: int = 30
 ) -> str:
@@ -319,7 +320,6 @@ def run_playwright_scrape(
         playwright_timeout_s = max(1.0, playwright_timeout_ms / 1000.0)
 
         # Get proxy from environment
-        proxy_list_str = os.getenv("WEBSHARE_PROXY_LIST", "")
         proxies = [p.strip() for p in proxy_list_str.split(",") if p.strip()]
         proxy_used = proxies[0] if proxies else "none"
 
@@ -438,9 +438,9 @@ def run_playwright_scrape(
         )
 
 
-@tool
-@operation
 @agentops.track_tool
+@operation
+@tool
 def run_serpapi_scrape(
     run_batch_id: str,
     query: str,
@@ -551,9 +551,9 @@ def run_serpapi_scrape(
         )
 
 
-@tool
-@operation
 @agentops.track_tool
+@operation
+@tool
 def run_safety_net_scrape(run_batch_id: str, current_job_count: int) -> str:
     """
     Run safety-net scrapers (Nodesk) if minimum job count not met.
@@ -566,7 +566,7 @@ def run_safety_net_scrape(run_batch_id: str, current_job_count: int) -> str:
         JSON string with safety net results.
     """
     try:
-        minimum = int(os.getenv("JOBS_PER_RUN_MINIMUM", "100"))
+        minimum = config_loader.get_run_config().get("jobs_per_run_target", 100)
 
         if current_job_count >= minimum:
             return json.dumps(
@@ -638,9 +638,9 @@ def run_safety_net_scrape(run_batch_id: str, current_job_count: int) -> str:
         )
 
 
-@tool
-@operation
 @agentops.track_tool
+@operation
+@tool
 def normalise_and_dedup(run_batch_id: str) -> str:
     """
     Normalize and deduplicate jobs for the current run batch.
@@ -728,9 +728,9 @@ def normalise_and_dedup(run_batch_id: str) -> str:
             conn.close()
 
 
-@tool
-@operation
 @agentops.track_tool
+@operation
+@tool
 def get_scrape_summary(run_batch_id: str) -> str:
     """
     Get summary statistics for the current scrape run.
@@ -772,7 +772,7 @@ def get_scrape_summary(run_batch_id: str) -> str:
             by_platform = {row["source_platform"]: row["count"] for row in platform_results}
 
             total_jobs = sum(by_platform.values())
-            minimum = int(os.getenv("JOBS_PER_RUN_MINIMUM", "100"))
+            minimum = config_loader.get_run_config().get("jobs_per_run_target", 100)
             minimum_met = total_jobs >= minimum
 
             logger.info(

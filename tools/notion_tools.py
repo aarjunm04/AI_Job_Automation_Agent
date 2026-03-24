@@ -67,9 +67,9 @@ def _get_client() -> NotionClient:
     return _notion_client
 
 
-@tool
-@operation
 @agentops.track_tool
+@operation
+@tool
 def sync_application_to_job_tracker(
     application_id: str,
     job_post_id: str,
@@ -185,9 +185,9 @@ def sync_application_to_job_tracker(
         return json.dumps({"synced": False, "error": str(e), "db": "job_tracker"})
 
 
-@tool
-@operation
 @agentops.track_tool
+@operation
+@tool
 def queue_job_to_applications_db(
     job_post_id: str,
     run_batch_id: str,
@@ -310,9 +310,9 @@ def queue_job_to_applications_db(
         return json.dumps({"queued": False, "error": str(e), "db": "applications"})
 
 
-@tool
-@operation
 @agentops.track_tool
+@operation
+@tool
 def update_notion_page_status(
     page_id: str, status: str, run_batch_id: str
 ) -> str:
@@ -377,9 +377,9 @@ def update_notion_page_status(
         )
 
 
-@tool
-@operation
 @agentops.track_tool
+@operation
+@tool
 def get_pending_manual_queue(run_batch_id: str) -> str:
     """
     Get all pending jobs from the Notion Applications database.
@@ -462,9 +462,9 @@ def get_pending_manual_queue(run_batch_id: str) -> str:
         return json.dumps([])
 
 
-@tool
-@operation
 @agentops.track_tool
+@operation
+@tool
 def check_notion_connection(run_batch_id: str) -> str:
     """
     Check Notion API connection health.
