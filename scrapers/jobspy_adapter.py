@@ -34,6 +34,7 @@ import math
 import pandas as pd
 
 from utils.proxy_rate_limit import get_proxy_dict
+from config.config_loader import ConfigLoader
 
 # ================================================================================
 # LOGGING
@@ -240,32 +241,39 @@ class JobSpyAdapter:
 
     def __init__(
         self,
+        cfg: ConfigLoader,
         jobs_per_site: int = 20,
-        concurrency: int = 4,
-        hours_old: int = 10,
-        allowed_countries: List[str] | None = None,
+        hours_old: int = 72,
     ) -> None:
         if not JOBSPY_AVAILABLE:
             raise RuntimeError("JobSpy is not installed or failed to import")
 
+        self.cfg = cfg
         self.jobs_per_site = int(jobs_per_site)
-        self.concurrency = int(concurrency)
         self.hours_old = int(hours_old)
+        
+        # Search terms from user preferences
+        target_titles = cfg.user.get("job_preferences", {}).get("target_titles", [])
+        self.search_term = " ".join(target_titles[:3]) if target_titles else ""
 
-        # Country handling: Glassdoor must always have a real country.
-        # If allowed_countries is provided (from YAML locations.allowed_countries),
-        # choose the first one; otherwise fall back to DEFAULT_COUNTRY.
-        if allowed_countries and isinstance(allowed_countries, list):
-            self.glassdoor_country = str(allowed_countries[0]).lower()
-        else:
-            self.glassdoor_country = DEFAULT_COUNTRY
+        # Filter platforms that have jobspy_enabled=True
+        self.enabled_sites: List[Site] = []
+        for site_enum in ALLOWED_SITES:
+            site_key = site_enum.value.lower()
+            if cfg.platforms.get(site_key, {}).get("jobspy_enabled"):
+                self.enabled_sites.append(site_enum)
+
+        # Glassdoor country from user profile or default
+        allowed_countries = cfg.user.get("job_preferences", {}).get("locations", {}).get("allowed_countries", [])
+        self.glassdoor_country = str(allowed_countries[0]).lower() if allowed_countries else DEFAULT_COUNTRY
 
         LOG.info(
-            "JobSpyAdapter initialized | sites=%s | jobs_per_site=%s | hours_old=%s | glassdoor_country=%s",
-            [s.value for s in ALLOWED_SITES],
+            "JobSpyAdapter initialized | enabled_sites=%s | jobs_per_site=%d | hours_old=%d | glassdoor_country=%s | search_term=%s",
+            [s.value for s in self.enabled_sites],
             self.jobs_per_site,
             self.hours_old,
             self.glassdoor_country,
+            self.search_term,
         )
 
     # ---------------------------------------------------------------------- #
@@ -318,7 +326,7 @@ class JobSpyAdapter:
 
         rows: List[Dict[str, Any]] = []
 
-        for site in ALLOWED_SITES:
+        for site in self.enabled_sites:
             site_name = getattr(site, "value", str(site))
             try:
                 country_arg = self._resolve_country_for_site(site)
@@ -330,16 +338,20 @@ class JobSpyAdapter:
                     country_arg,
                 )
 
+                _pcfg = self.cfg.platforms
+                proxy_required = _pcfg.get(site_name, {}).get("proxy_required", False)
+
                 proxy = None
-                try:
-                    proxy = get_proxy_dict(platform="jobspy")
-                except Exception as e:  # noqa: BLE001
-                    LOG.warning("JobSpy proxy config failed — running without proxy: %s", e)
-                    proxy = None
+                if proxy_required:
+                    try:
+                        proxy = get_proxy_dict()
+                    except Exception as e:  # noqa: BLE001
+                        LOG.warning("JobSpy proxy config failed for %s — running without proxy: %s", site_name, e)
+                        proxy = None
 
                 df: pd.DataFrame = scrape_jobs(
                     site_name=[site],
-                    search_term=None,  # Broad discovery; engine filters later
+                    search_term=self.search_term,
                     is_remote=True,
                     results_wanted=self.jobs_per_site,
                     country_indeed=country_arg,

@@ -657,6 +657,7 @@ class WellfoundScraper(BasePlaywrightScraper):
                 "company": company.strip() if company else "",
                 "location": location.strip() if location else None,
                 "url": link,
+                "source": self.name,
                 "source_platform": "wellfound",
                 "scraped_at": datetime.datetime.utcnow().isoformat() + "Z",
                 "raw_html_snippet": raw_html,
@@ -664,21 +665,6 @@ class WellfoundScraper(BasePlaywrightScraper):
         except Exception as exc:
             LOG.debug("WellfoundScraper._extract_job: exception — %s", exc)
             return None
-
-
-class WeWorkRemotelyScraper(BasePlaywrightScraper):
-    """WeWorkRemotely remote job listings."""
-
-    name = "weworkremotely"
-    start_url = "https://weworkremotely.com/remote-jobs"
-    # TODO: re-verify selectors on DOM changes; WWR uses server-rendered HTML
-    job_card_selector = "section.jobs article li"
-    title_selector = "span.title"
-    company_selector = "span.company"
-    location_selector = None  # Always remote
-    link_selector = "a"
-    scroll_times = 2
-    max_retries = 2
 
 
 class YCStartupScraper(BasePlaywrightScraper):
@@ -859,6 +845,7 @@ class YCStartupScraper(BasePlaywrightScraper):
                 "company": company.strip() if company else "",
                 "location": location.strip() if location else None,
                 "url": link,
+                "source": self.name,
                 "source_platform": "yc",
                 "scraped_at": datetime.datetime.utcnow().isoformat() + "Z",
                 "raw_html_snippet": raw_html,
@@ -1135,6 +1122,7 @@ class ArcDevScraper(BasePlaywrightScraper):
                         "company": company,
                         "location": location if location != "true" else "Remote",
                         "url": url,
+                        "source": self.name,
                         "source_platform": "arcdev",
                         "scraped_at": scraped_at,
                         "raw_html_snippet": None,
@@ -1182,6 +1170,7 @@ class ArcDevScraper(BasePlaywrightScraper):
                 "company": company.strip() if company else "",
                 "location": location.strip() if location else None,
                 "url": link,
+                "source": self.name,
                 "source_platform": "arcdev",
                 "scraped_at": datetime.datetime.utcnow().isoformat() + "Z",
                 "raw_html_snippet": raw_html,
@@ -1293,6 +1282,336 @@ class HiringCafeScraper(BasePlaywrightScraper):
 
 
 # =================================================================================
+# API-BASED SCRAPERS
+# =================================================================================
+
+
+class BaseAPIScraper:
+    """Base class for lightweight REST API scrapers."""
+
+    name: str = "base_api"
+
+    def __init__(self, jobs_limit: int = 50):
+        self.jobs_limit = jobs_limit
+
+    async def run(self, manager: Optional[Any] = None) -> List[Dict[str, Any]]:
+        """Async entry point — runs the synchronous _run_sync in a threadpool."""
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, self._run_sync)
+
+    def _run_sync(self) -> List[Dict[str, Any]]:
+        """Synchronous implementation to be overridden by subclasses."""
+        raise NotImplementedError
+
+
+class WeWorkRemotelyScraper(BaseAPIScraper):
+    """
+    WeWorkRemotely RSS feed scraper.
+    Uses official RSS feeds to fetch latest remote jobs.
+    """
+
+    name = "weworkremotely"
+    rss_feeds = [
+        "https://weworkremotely.com/remote-jobs.rss",
+        "https://weworkremotely.com/categories/remote-programming-jobs.rss",
+        "https://weworkremotely.com/categories/remote-devops-sysadmin-jobs.rss",
+    ]
+
+    def _run_sync(self) -> List[Dict[str, Any]]:
+        import xml.etree.ElementTree as ET
+
+        results: List[Dict[str, Any]] = []
+        for feed_url in self.rss_feeds:
+            try:
+                response = _http_requests.get(feed_url, timeout=20)
+                response.raise_for_status()
+
+                root = ET.fromstring(response.content)
+                items = root.findall(".//item")
+
+                for item in items:
+                    title = item.findtext("title")
+                    link = item.findtext("link")
+                    description = item.findtext("description")
+                    pub_date = item.findtext("pubDate")
+
+                    # WWR RSS often includes company in title "Company: Title"
+                    company = ""
+                    if title and ":" in title:
+                        company_part, title_part = title.split(":", 1)
+                        company = company_part.strip()
+                        title = title_part.strip()
+
+                    if not title or not link:
+                        continue
+
+                    results.append(
+                        {
+                            "title": title,
+                            "company": company,
+                            "location": "Remote",
+                            "job_url": link,
+                            "description": description or "",
+                            "source": "weworkremotely",
+                            "platform": "weworkremotely",
+                            "posted_date": pub_date,
+                            "scraped_at": datetime.datetime.utcnow().isoformat() + "Z",
+                        }
+                    )
+                    if len(results) >= self.jobs_limit:
+                        break
+
+                if len(results) >= self.jobs_limit:
+                    break
+            except Exception as e:
+                LOG.error("WWR RSS feed %s failed: %s", feed_url, e)
+
+        return results
+
+
+class RemoteOKScraper(BaseAPIScraper):
+    """RemoteOK Public API scraper."""
+
+    name = "remoteok"
+    endpoint = "https://remoteok.com/api"
+
+    def _run_sync(self) -> List[Dict[str, Any]]:
+        try:
+            # RemoteOK requires a User-Agent
+            headers = {"User-Agent": "job-automation-agent/1.1 (github.com/aarjunm04)"}
+            response = _http_requests.get(self.endpoint, headers=headers, timeout=20)
+            response.raise_for_status()
+            data = response.json()
+        except Exception as e:
+            LOG.error("RemoteOK API failed: %s", e)
+            return []
+
+        results: List[Dict[str, Any]] = []
+        for item in data:
+            if not isinstance(item, dict) or (not item.get("position") and not item.get("title")):
+                continue
+            
+            title = str(item.get("position") or item.get("title") or "").strip()
+            # Normalize to unified schema
+            results.append({
+                "title": title,
+                "company": str(item.get("company") or "").strip(),
+                "location": str(item.get("location") or "Remote").strip(),
+                "job_url": str(item.get("url") or "").strip(),
+                "description": str(item.get("description") or "").strip(),
+                "source": "remoteok",
+                "platform": "remoteok",
+                "posted_date": item.get("date"),
+                "job_type": item.get("job_type"),
+                "salary": item.get("salary"),
+                "tags": item.get("tags") or [],
+                "scraped_at": datetime.datetime.utcnow().isoformat() + "Z",
+            })
+            if len(results) >= self.jobs_limit:
+                break
+        return results
+
+
+class HimalayasScraper(BaseAPIScraper):
+    """
+    Himalayas.app Remote Jobs API.
+    Uses offset-based pagination and requires no proxy/key.
+    """
+
+    name = "himalayas"
+    endpoint = "https://himalayas.app/jobs/api"
+
+    def _run_sync(self) -> List[Dict[str, Any]]:
+        results: List[Dict[str, Any]] = []
+        limit = 50
+        offset = 0
+        
+        # Paginate to reach jobs_limit
+        page = 1
+        while len(results) < self.jobs_limit:
+            try:
+                params = {"limit": limit, "offset": offset}
+                LOG.info("Himalayas request: %s params=%s", self.endpoint, params)
+                # NO PROXY as per Batch 11 requirements
+                response = _http_requests.get(
+                    self.endpoint, 
+                    params=params, 
+                    headers={"Accept": "application/json"},
+                    timeout=20
+                )
+                response.raise_for_status()
+                data = response.json()
+                
+                jobs = data.get("jobs", [])
+                total = data.get("totalCount", 0)
+                LOG.debug("Himalayas page=%d raw_count=%d total=%d", 
+                         page, len(jobs), total)
+                
+                if not jobs:
+                    break
+                
+                for j in jobs:
+                    title = j.get("title")
+                    # Himalayas uses 'applicationLink'
+                    url = j.get("applicationLink")
+                    if not title or not url:
+                        continue
+                        
+                    results.append({
+                        "title": title,
+                        "company": j.get("company", {}).get("name") if isinstance(j.get("company"), dict) else j.get("company"),
+                        "location": j.get("location") or "Remote",
+                        "job_url": url,
+                        "description": j.get("description") or "",
+                        "source": "himalayas",
+                        "platform": "himalayas",
+                        "posted_date": j.get("createdAt") or j.get("postedAt"),
+                        "job_type": j.get("jobType"),
+                        "salary": j.get("salary"),
+                        "tags": j.get("skills") or [],
+                        "scraped_at": datetime.datetime.utcnow().isoformat() + "Z",
+                    })
+                    if len(results) >= self.jobs_limit:
+                        break
+                
+                offset += limit
+                page += 1
+                if len(jobs) < limit:
+                    break
+            except Exception as e:
+                LOG.error("Himalayas API failed at offset %d: %s", offset, e)
+                break
+        return results
+
+
+class ArbeitnowScraper(BaseAPIScraper):
+    """Arbeitnow.com Remote Jobs API."""
+
+    name = "arbeitnow"
+    endpoint = "https://www.arbeitnow.com/api/job-board-api"
+
+    def _run_sync(self) -> List[Dict[str, Any]]:
+        try:
+            response = _http_requests.get(self.endpoint, timeout=20)
+            response.raise_for_status()
+            data = response.json()
+            jobs = data.get("data", [])
+        except Exception as e:
+            LOG.error("Arbeitnow API failed: %s", e)
+            return []
+
+        results: List[Dict[str, Any]] = []
+        for j in jobs:
+            title = j.get("title")
+            url = j.get("url")
+            if not title or not url:
+                continue
+            
+            results.append({
+                "title": title,
+                "company": j.get("company_name"),
+                "location": j.get("location") or "Remote",
+                "job_url": url,
+                "description": j.get("description") or "",
+                "source": "arbeitnow",
+                "platform": "arbeitnow",
+                "tags": j.get("tags") or [],
+                "scraped_at": datetime.datetime.utcnow().isoformat() + "Z",
+            })
+            if len(results) >= self.jobs_limit:
+                break
+        return results
+
+
+class JobicyScraper(BaseAPIScraper):
+    """Jobicy.com Remote Jobs API."""
+
+    name = "jobicy"
+    endpoint = "https://jobicy.com/api/v2/remote-jobs"
+
+    def _run_sync(self) -> List[Dict[str, Any]]:
+        try:
+            # Jobicy takes 'count' and 'geo' params
+            params = {"count": self.jobs_limit}
+            response = _http_requests.get(self.endpoint, params=params, timeout=20)
+            response.raise_for_status()
+            data = response.json()
+            jobs = data.get("jobs", [])
+        except Exception as e:
+            LOG.error("Jobicy API failed: %s", e)
+            return []
+
+        results: List[Dict[str, Any]] = []
+        for j in jobs:
+            title = j.get("jobTitle")
+            url = j.get("url")
+            if not title or not url:
+                continue
+            
+            results.append({
+                "title": title,
+                "company": j.get("companyName"),
+                "location": j.get("jobGeo") or "Remote",
+                "job_url": url,
+                "description": j.get("jobDescription") or "",
+                "source": "jobicy",
+                "platform": "jobicy",
+                "posted_date": j.get("pubDate"),
+                "job_type": j.get("jobType"),
+                "salary": j.get("annualSalaryMin"), # Jobicy provides salary info
+                "scraped_at": datetime.datetime.utcnow().isoformat() + "Z",
+            })
+            if len(results) >= self.jobs_limit:
+                break
+        return results
+
+
+class RemotiveScraper(BaseAPIScraper):
+    """Remotive.io Remote Jobs API (Public)."""
+
+    name = "remotive"
+    # Fallback to .com domain (was .io which is dead)
+    endpoint = (
+        config_loader.get_platform("remotive").get("jobs_url")
+        if config_loader else "https://remotive.com/api/remote-jobs"
+    )
+
+    def _run_sync(self) -> List[Dict[str, Any]]:
+        try:
+            # NO PROXY as per Batch 11 requirements
+            response = _http_requests.get(self.endpoint, timeout=20)
+            response.raise_for_status()
+            data = response.json()
+            jobs = data.get("jobs", [])
+        except Exception as e:
+            LOG.error("Remotive API failed: %s", e)
+            return []
+
+        results: List[Dict[str, Any]] = []
+        for j in jobs[:self.jobs_limit]:
+            title = j.get("title")
+            url = j.get("url")
+            if not title or not url:
+                continue
+            
+            results.append({
+                "title": title,
+                "company": j.get("company_name"),
+                "location": j.get("candidate_required_location") or "Remote",
+                "job_url": url,
+                "description": j.get("description") or "",
+                "source": "remotive",
+                "platform": "remotive",
+                "posted_date": j.get("publication_date"),
+                "job_type": j.get("job_type"),
+                "salary": j.get("salary"),
+                "tags": j.get("tags") or [],
+                "scraped_at": datetime.datetime.utcnow().isoformat() + "Z",
+            })
+        return results
+
+
+# =================================================================================
 # GLOBAL MANAGER INSTANCE
 # =================================================================================
 
@@ -1343,6 +1662,11 @@ __all__ = [
     "ArcDevScraper",
     "NodeskScraper",
     "ToptalScraper",
+    "RemoteOKScraper",
+    "HimalayasScraper",
+    "ArbeitnowScraper",
+    "JobicyScraper",
+    "RemotiveScraper",
 ]
 
 

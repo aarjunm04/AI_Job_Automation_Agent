@@ -19,18 +19,16 @@ Supported Sources:
   - JobSpy (LinkedIn, Indeed) — via scrapers/jobspy_adapter.py
   - RemoteOK API
   - Himalayas API
+  - Arbeitnow API
+  - Jobicy API
   - Google Jobs via SerpAPI
   - Playwright-based scrapers (managed in scraper_service.py) with optional
     proxy support via WEBSHARE_PROXY_* env vars
 
-  Phase 2 (future / feature-flagged):
-  - Jooble Official API          (class JoobleAPIScraper — not wired by default)
-  - Remotive Official API        (class RemotiveAPIScraper — not wired by default)
-
 Key Features:
 - Comprehensive normalization to unified job schema
-- Deterministic filtering based on job_filters.yaml
-- Rule-based static pre-filter scoring (0.0–1.0) driven entirely from YAML
+- Deterministic filtering based on platform_settings.json and user_profile.json
+- Rule-based static pre-filter scoring (0.0–1.0) driven from JSON config files
 - Deduplication using title|company|url hash
 - Resource-aware scraping (SerpAPI credit tracking)
 - Multiple output formats (DataFrame, JSON, ingestion payload)
@@ -55,17 +53,17 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from dotenv import load_dotenv
-import yaml
 import requests
 import pandas as pd
 from dateutil import parser as date_parser
+from fuzzywuzzy import fuzz
 
 from .jobspy_adapter import JobSpyAdapter
-from tools.serpapi_tool import search_google_jobs
-from tools.postgres_tools import _fetch_user_config
 from utils.db_utils import get_db_conn
 from utils.proxy_rate_limit import get_proxy_dict, get_next_proxy, reset_cycle
-from config.config_loader import config_loader
+from config.config_loader import ConfigLoader, config_loader
+
+__all__ = ["ScraperEngine", "ScoringEngine", "FilterEngine", "Normalizer"]
 
 logging.basicConfig(
     level=logging.INFO,
@@ -74,7 +72,6 @@ logging.basicConfig(
 )
 
 LOG = logging.getLogger("scraper_engine")
-LOG.setLevel(logging.INFO)
 
 
 # ================================================================================
@@ -113,20 +110,20 @@ def _make_proxied_request(
 
     last_exc: Optional[Exception] = None
     for attempt in range(1, 4):  # max 3 attempts
-        try:
-            if method.upper() == "POST":
-                return requests.post(url, **kwargs)
-            return requests.get(url, **kwargs)
-        except (requests.exceptions.ProxyError,
-                requests.exceptions.ConnectionError) as e:
-            last_exc = e
-            LOG.warning(
-                "Proxy request attempt %d/3 failed for %s: %s — rotating proxy",
-                attempt, url, str(e),
-            )
-            new_proxies = get_proxy_dict()
-            if new_proxies:
-                kwargs["proxies"] = new_proxies
+    	try:
+    		if method.upper() == "POST":
+    			return requests.post(url, **kwargs)
+    		return requests.get(url, **kwargs)
+    	except (requests.exceptions.ProxyError,
+    			requests.exceptions.ConnectionError) as e:
+    		last_exc = e
+    		LOG.warning(
+    			"Proxy request attempt %d/3 failed for %s: %s — rotating proxy",
+    			attempt, url, str(e),
+    		)
+    		new_proxies = get_proxy_dict()
+    		if new_proxies:
+    			kwargs["proxies"] = new_proxies
 
     # All proxies failed — try direct as last resort
     LOG.warning(
@@ -143,39 +140,11 @@ def _make_proxied_request(
 # ================================================================================
 
 
-def _load_search_queries_from_db() -> list[str]:
-    """Load `search_queries` from system_config (fail-soft)."""
-    conn = None
-    try:
-        conn = get_db_conn()
-        if not conn:
-            LOG.warning("search_queries load: DB connection unavailable — using []")
-            return []
-        cur = conn.cursor()
-        cur.execute("SELECT value FROM system_config WHERE key = 'search_queries'")
-        row = cur.fetchone()
-        queries = json.loads(row[0]) if row else []
-        if not isinstance(queries, list):
-            return []
-        return [str(q) for q in queries if str(q).strip()]
-    except Exception as e:  # noqa: BLE001
-        LOG.warning("search_queries load failed — using []: %s", e)
-        return []
-    finally:
-        if conn:
-            try:
-                conn.close()
-            except Exception:  # noqa: BLE001
-                pass
-
 # ================================================================================
 # PATHS
 # ================================================================================
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-
-# job_filters.yaml lives alongside the scraper modules in scrapers/
-FILTERS_PATH = BASE_DIR / "scrapers" / "job_filters.yaml"
 
 OUTPUT_DIR = BASE_DIR / "logs"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -342,6 +311,7 @@ class ScrapeMetrics:
 #   required_skills   list[str]
 #   preferred_skills  list[str]
 #   benefits          list[str]
+#   tags              list[str]     — tags/skills from API (e.g. RemoteOK)
 #   visa_sponsorship  bool | None
 #   education_required str | None
 #   application_method str | None
@@ -457,16 +427,16 @@ def _extract_salary(text: str) -> Tuple[Optional[float], Optional[float], Option
         if len(groups) == 2:
             min_sal = float(groups[0].replace(",", ""))
             max_sal = float(groups[1].replace(",", ""))
-            if min_sal < 1000:
+            if min_sal < 1_000:
                 min_sal *= 1000
-            if max_sal < 1000:
+            if max_sal < 1_000:
                 max_sal *= 1000
             return min_sal, max_sal, currency or "USD"
         if "k" in match.group(0):
             sal = float(groups[0].replace(",", "")) * 1000
             return sal, None, currency or "USD"
         sal = float(groups[0].replace(",", ""))
-        if sal < 1000:
+        if sal < 1_000:
             sal *= 1000
         return sal, None, currency or "USD"
 
@@ -492,25 +462,41 @@ class Normalizer:
     def normalize(raw: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Normalize raw job data to unified schema."""
         try:
-            title = str(raw.get("title") or "").strip()
+            title = str(
+                raw.get("title") or
+                raw.get("position") or
+                raw.get("job_title") or
+                ""
+            ).strip()
             company = str(
                 raw.get("company") or raw.get("company_name") or ""
             ).strip()
             url = str(raw.get("job_url") or raw.get("url") or "").strip()
             location = str(raw.get("location") or "Remote").strip()
             description = str(
-                raw.get("description") or raw.get("snippet") or ""
+                raw.get("description") or
+                raw.get("body") or
+                raw.get("snippet") or
+                raw.get("excerpt") or
+                raw.get("text") or
+                ""
             ).strip()
             source = raw.get("source", "unknown")
+
+            raw_tags = raw.get("tags") or raw.get("skills") or raw.get("required_skills") or []
+            tags: list[str] = raw_tags if isinstance(raw_tags, list) else []
 
             # Hard requirement: title and URL must be present
             if not title or not url:
                 return None
 
             # Drop jobs with no meaningful description
-            if len(description) < 100:
+            raw_tags_check = (
+                raw.get("tags") or raw.get("required_skills") or raw.get("skills") or []
+            )
+            if len(description) < 20 and not raw_tags_check:
                 LOG.debug(
-                    "Dropping job '%s' — description too short (%d chars)",
+                    "Dropping job '%s' — description too short (%d chars) and no tags",
                     title,
                     len(description),
                 )
@@ -588,6 +574,7 @@ class Normalizer:
                 "preferred_skills": preferred_skills,
                 # Additional
                 "benefits": benefits,
+                "tags": tags,
                 "visa_sponsorship": raw.get("visa_sponsorship"),
                 "education_required": raw.get("education_required"),
                 "application_method": raw.get("application_method"),
@@ -609,135 +596,76 @@ class Normalizer:
 
 class FilterEngine:
     """
-    Deterministic filtering based on job_filters.yaml.
-
-    All business rules (hard filters, thresholds) are derived from YAML.
+    Deterministic filtering based on platform_settings and user_profile.
     """
 
-    def __init__(self, filters_path: Path = None):
-        config_dir = Path(__file__).parent.parent / "config"
-        platform_config_path = config_dir / "platform_config.json"
-        user_profile_path = config_dir / "user_profile.json"
-
-        platform_config: Dict[str, Any] = {}
-        user_profile: Dict[str, Any] = {}
-
-        try:
-            with open(platform_config_path, "r", encoding="utf-8") as f:
-                platform_config = json.load(f)
-        except (FileNotFoundError, json.JSONDecodeError) as e:
-            LOG.warning(
-                "FilterEngine failed to load platform_config.json: %s — using defaults", e
-            )
-
-        try:
-            with open(user_profile_path, "r", encoding="utf-8") as f:
-                user_profile = json.load(f)
-        except (FileNotFoundError, json.JSONDecodeError) as e:
-            LOG.warning(
-                "FilterEngine failed to load user_profile.json: %s — using defaults", e
-            )
-
-        filter_config = platform_config.get("filters", {})
-        required_keywords = filter_config.get("required_keywords", [])
-        salary_min = filter_config.get("salary_min", None)
-        max_days_old = filter_config.get("max_days_old", 7)
-        exclude_keywords = filter_config.get("exclude_keywords", [])
-
-        self.required_keywords = [k.lower() for k in required_keywords if isinstance(k, str)]
-        self.exclude_if_rules = [str(k).lower() for k in exclude_keywords]
-        self.technical_exclusions = []
-        self.experience_max_years = None
-        self.salary_minimum = salary_min
-        self.remote_only = filter_config.get("remote_only", False)
-        self.hybrid_acceptable = not self.remote_only
-        self.max_days_old = max_days_old
-
-        self.filters_data = platform_config.get("job_filters", {})
-        ai = self.filters_data.setdefault("ai_scoring", {})
-        ai.setdefault("weights", {}).update(platform_config.get("scoring_weights", {}))
-        self.filters_data.setdefault("search_criteria", {})["job_titles"] = (
-            user_profile.get("job_preferences", {}).get("target_titles", [])
-        )
-        self.allowed_countries = self.filters_data.get("locations", {}).get("allowed_countries", [])
-
+    def __init__(
+        self,
+        cfg: ConfigLoader,
+    ) -> None:
+        filters: dict = cfg.settings.get("job_filters", {})
+        self.required_keywords: list[str] = [
+            kw.lower() for kw in filters.get("required_keywords_any", [])
+        ]
+        self.exclude_seniority: list[str] = list(set(
+            [kw.lower() for kw in filters.get("exclude_seniority_keywords", [])] +
+            [kw.lower() for kw in cfg.user.get("job_preferences", {})
+                                           .get("hard_filters", {})
+                                           .get("exclude_seniority_keywords", [])]
+        ))
+        self.exclude_job_types: list[str] = [
+            jt.lower() for jt in filters.get("exclude_job_types", [])
+        ]
+        
         LOG.info(
-            "FilterEngine initialized | required_keywords=%d | salary_min=%s | max_days_old=%s",
+            "FilterEngine initialized | required_keywords=%d | exclude_seniority=%d | exclude_job_types=%d",
             len(self.required_keywords),
-            self.salary_minimum,
-            self.max_days_old,
+            len(self.exclude_seniority),
+            len(self.exclude_job_types),
         )
 
-
-    # ------------------------------------------------------------------ #
-    # HARD FILTERING
-    # ------------------------------------------------------------------ #
-
-    def should_exclude(self, job: Dict[str, Any]) -> bool:
+    def passes(self, job: Dict[str, Any]) -> tuple[bool, str]:
         """
-        Check if job should be excluded by hard filters only.
-
-        Business rules:
-        - Missing title or URL -> exclude.
-        - Age beyond configured days -> exclude.
-        - Violates exclusion rules (e.g., sales/marketing, non-technical).
-        - Lacks required keywords.
-        - Salary below hard floor (INR only, as defined in YAML).
-        - Experience above hard maximum (years > 5).
-        - Remote / location constraints.
+        Check if job should be excluded by hard filters.
         """
-        if not job.get("title") or not job.get("job_url"):
-            return True
+        title = job.get("title", "").lower()
+        description = job.get("description", "").lower()
+        tags = job.get("tags", [])
+        tags_text = " ".join(tags).lower() if isinstance(tags, list) else ""
+        full_text = f"{title} {description} {tags_text}"
 
-        # Date filter
-        if self.max_days_old is not None and job.get("posted_date"):
-            posted_date = _parse_date(job["posted_date"])
-            if posted_date:
-                days_old = (datetime.now(timezone.utc) - posted_date).days
-                if days_old > self.max_days_old:
-                    return True
+        # BUG-1: description length gate
+        desc: str = job.get("description", "")
+        has_tags: bool = bool(job.get("tags") or job.get("required_skills"))
+        title_lower: str = job.get("title", "").lower()
+        title_has_keyword: bool = any(
+            kw.lower() in title_lower for kw in self.required_keywords
+        )
+        if len(desc) < 100 and not has_tags and not title_has_keyword:
+            return False, "description_too_short"
 
-        text = f"{job.get('title', '')} {job.get('description', '')}".lower()
-
-        # Exclusion rules: look for strongly negative signals
-        for rule in self.exclude_if_rules + self.technical_exclusions:
-            # Very lightweight: if a meaningful token is present, exclude.
-            tokens = [tok for tok in re.split(r"\s+", rule) if tok and tok.isalpha()]
-            if not tokens:
-                continue
-            if all(tok in text for tok in tokens[:2]):
-                return True
-
-        # Required keywords
+        # 1. Required keywords check (PASSES if contains ANY)
         if self.required_keywords:
-            if not any(keyword in text for keyword in self.required_keywords):
-                return True
+            desc_lower: str = desc.lower()
+            combined_text: str = f"{title_lower} {desc_lower}"
+            if not any(kw.lower() in combined_text for kw in self.required_keywords):
+                return False, "missing_required_keywords"
 
-        # Salary hard floor (INR only, per exclusions rule in YAML)
-        if self.salary_minimum is not None:
-            salary_min = job.get("salary_min")
-            currency = job.get("salary_currency") or "INR"
-            if (
-                salary_min is not None
-                and currency.upper() == "INR"
-                and salary_min < float(self.salary_minimum)
-            ):
-                return True
+        # 2. Seniority keyword exclusion
+        if any(kw in title for kw in self.exclude_seniority):
+            return False, "seniority_exclusion"
 
-        # Experience hard maximum
-        if self.experience_max_years is not None:
-            exp_max = job.get("experience_max")
-            if exp_max is not None and exp_max > int(self.experience_max_years):
-                return True
+        # 3. Job type exclusion
+        job_type_raw = job.get("job_type") or ""
+        if isinstance(job_type_raw, list):
+            job_type_val = " ".join(str(x) for x in job_type_raw).lower()
+        else:
+            job_type_val = str(job_type_raw).lower()
+        
+        if any(t in job_type_val for t in self.exclude_job_types):
+            return False, "job_type_exclusion"
 
-        # Location / remote constraints
-        remote_type = (job.get("remote_type") or "unknown").lower()
-        if self.remote_only and remote_type == "onsite":
-            return True
-        if not self.hybrid_acceptable and remote_type == "hybrid":
-            return True
-
-        return False
+        return True, "ok"
 
 
 # ================================================================================
@@ -747,168 +675,100 @@ class FilterEngine:
 
 class ScoringEngine:
     """
-    YAML-driven relevance scoring on a 0-100 scale.
-
-    All weights and thresholds are pulled from `ai_scoring` in job_filters.yaml.
+    Scoring engine using JSON thresholds and user profile skills.
     """
 
-    def __init__(self, filters_data: Dict[str, Any]) -> None:
-        ai_scoring = filters_data.get("ai_scoring", {})
-        weights_cfg = ai_scoring.get("weights", {})
-
-        self.job_title_weight: float = float(weights_cfg.get("job_title_match", 0.3))
-        self.skills_weight: float = float(weights_cfg.get("skills_match", 0.25))
-        self.salary_weight: float = float(weights_cfg.get("salary_match", 0.15))
-        self.location_weight: float = float(weights_cfg.get("location_match", 0.10))
-        self.company_weight: float = float(weights_cfg.get("company_match", 0.05))
-        self.experience_weight: float = float(weights_cfg.get("experience_match", 0.10))
-        self.industry_weight: float = float(weights_cfg.get("industry_match", 0.05))
-
-        self.min_application_score: float = float(
-            ai_scoring.get("minimum_application_score", 60)
-        )
-
-        locations_cfg = filters_data.get("locations", {})
-        self.preferred_locations: List[str] = [
-            str(loc).lower()
-            for loc in locations_cfg.get("preferred", [])
-            if isinstance(loc, str)
-        ]
-
-        industries_cfg = filters_data.get("industries", {})
-        self.preferred_industries: List[str] = [
-            str(ind).lower()
-            for ind in industries_cfg.get("preferred", [])
-            if isinstance(ind, str)
-        ]
-
-        companies_cfg = filters_data.get("companies", {})
-        self.priority_companies: List[str] = [
-            str(c).lower() for c in companies_cfg.get("priority_companies", [])
-        ]
-
-        search_criteria = filters_data.get("search_criteria", {})
-        self.job_titles: List[str] = [
-            str(t).lower() for t in search_criteria.get("job_titles", [])
-        ]
-        self.preferred_keywords: List[str] = [
-            str(k).lower() for k in search_criteria.get("preferred_keywords", [])
-        ]
+    def __init__(
+        self,
+        cfg: ConfigLoader,
+    ) -> None:
+        prefs: dict = cfg.user.get("job_preferences", {})
+        # Fallback to search_queries if target_titles is missing
+        self.target_titles: list[str] = prefs.get("target_titles", prefs.get("search_queries", []))
+        self.seniority_keywords: list[str] = [kw.lower() for kw in prefs.get("hard_filters", {}).get("exclude_seniority_keywords", ["senior", "lead", "staff", "principal"])]
+        
+        # Abbreviation Expansion (F2a)
+        _abbrev_map = {"ML": "Machine Learning", "AI": "Artificial Intelligence",
+                       "NLP": "Natural Language Processing", "LLM": "Large Language Model"}
+        _expanded: list[str] = list(self.target_titles)
+        for title in self.target_titles:
+            for abbr, full in _abbrev_map.items():
+                if abbr in title:
+                    _expanded.append(title.replace(abbr, full))
+                if full in title:
+                    _expanded.append(title.replace(full, abbr))
+        self.target_titles = list(set(_expanded))
+        
+        raw_skills: dict = cfg.user.get("skills", {})
+        self.all_skills: set[str] = {
+            s.lower()
+            for category_skills in raw_skills.values()
+            if isinstance(category_skills, list)
+            for s in category_skills
+            if isinstance(s, str)
+        }
+        # user_profile.json skill values can be descriptive phrases (not atomic
+        # keywords). Tokenise them so tags like "pytorch" / "llm" can match.
+        _tokenised: set[str] = set()
+        for phrase in self.all_skills:
+            tokens = re.split(r"[\s,/()&+]+", phrase.lower())
+            _tokenised.update(t.strip() for t in tokens if len(t.strip()) > 2)
+        self.all_skills = _tokenised
+        score_cfg: dict = cfg.settings.get("scoring_thresholds", {})
+        self.min_score: float = score_cfg.get("auto_eligible", 0.65) * 100
+        self.title_weight: int = int(score_cfg.get("title_weight", 40))
+        self.skills_weight: int = int(score_cfg.get("skills_weight", 30))
+        self.remote_bonus: int = int(score_cfg.get("remote_bonus", 10))
+        self.seniority_penalty: int = int(score_cfg.get("seniority_penalty", 20))
+        self.fuzzy_threshold: int = int(score_cfg.get("fuzzy_title_threshold", 80))
+        self.skills_min_count: int = int(score_cfg.get("skills_min_count", 3))
 
         LOG.info(
-            "ScoringEngine initialized | min_score=%s",
-            self.min_application_score,
+            "ScoringEngine initialized | target_titles=%d | skills=%d | min_score=%.1f",
+            len(self.target_titles),
+            len(self.all_skills),
+            self.min_score,
         )
-
-    # ------------------------------------------------------------------ #
-    # SCORING
-    # ------------------------------------------------------------------ #
 
     def calculate_score(self, job: Dict[str, Any]) -> float:
         """
-        Calculate relevance score (0-100) using YAML-driven weights.
-
-        Criteria:
-        - Title match against configured job_titles.
-        - Skills match from preferred_keywords.
-        - Salary proximity to preferred minimum / target.
-        - Location alignment against preferred locations and remote type.
-        - Company match (priority companies / tech-y names).
-        - Experience alignment with 0-5 year band and soft 4-5 year extension.
-        - Industry match with preferred industries.
+        Calculate relevance score (0-100).
         """
         score = 0.0
 
-        title = (job.get("title") or "").lower()
-        description = (job.get("description") or "").lower()
-        location = (job.get("location") or "").lower()
-        company = (job.get("company") or "").lower()
-        industry = (job.get("industry") or "").lower()
-        remote_type = (job.get("remote_type") or "").lower()
+        # BUG-2 (variable shadow in fuzzy match):
+        title_lower: str = job.get("title", "").lower()
+        title_matched: bool = any(
+            fuzz.partial_ratio(t.lower(), title_lower) >= self.fuzzy_threshold
+            for t in self.target_titles
+        )
+        score += self.title_weight if title_matched else 0
 
-        # Title match
-        title_match = 0.0
-        if self.job_titles:
-            if any(t in title for t in self.job_titles):
-                title_match = 1.0
-        score += title_match * self.job_title_weight * 100.0
+        # BUG-3 (skills must check tags + required_skills + preferred_skills):
+        job_skill_pool: set[str] = {
+            s.lower() for s in (
+                job.get("required_skills", []) +
+                job.get("tags", []) +
+                job.get("preferred_skills", [])
+            ) if isinstance(s, str)
+        }
+        matched: set[str] = self.all_skills & job_skill_pool
+        ratio: float = min(len(matched) / max(self.skills_min_count, 1), 1.0)
+        score += int(self.skills_weight * ratio)
 
-        # Skills match (preferred keywords within description)
-        skills_match_ratio = 0.0
-        if self.preferred_keywords:
-            hits = sum(1 for kw in self.preferred_keywords if kw in description)
-            skills_match_ratio = min(1.0, hits / max(5, len(self.preferred_keywords)))
-        score += skills_match_ratio * self.skills_weight * 100.0
+        # BUG-5 (remote check must cover remote_type field):
+        is_remote: bool = (
+            job.get("remote_type", "").lower() == "remote" or
+            any(kw in job.get("location", "").lower()
+                for kw in ("remote", "worldwide", "anywhere"))
+        )
+        score += self.remote_bonus if is_remote else 0
 
-        # Salary match (soft preference)
-        salary_min = job.get("salary_min")
-        salary_currency = (job.get("salary_currency") or "INR").upper()
-        salary_match_ratio = 0.0
-        # Use same thresholds as FilterEngine for consistency
-        # Hard minimum is enforced earlier; here we only award proximity.
-        if salary_min and isinstance(salary_min, (int, float)):
-            if salary_currency == "INR":
-                # Assume 800000 is "good", 1500000 is "target" from YAML.
-                if salary_min >= 1500000:
-                    salary_match_ratio = 1.0
-                elif salary_min >= 800000:
-                    salary_match_ratio = 0.7
-                else:
-                    salary_match_ratio = 0.3
-            else:
-                salary_match_ratio = 0.5
-        score += salary_match_ratio * self.salary_weight * 100.0
+        # Seniority penalty
+        title = job.get("title", "").lower()
+        if any(kw in title for kw in self.seniority_keywords):
+            score -= self.seniority_penalty
 
-        # Location & remote match
-        location_ratio = 0.0
-        if remote_type == "remote":
-            location_ratio = 1.0
-        elif remote_type == "hybrid":
-            location_ratio = 0.7
-        else:
-            location_ratio = 0.3
-
-        # Boost if location string contains any preferred location
-        if self.preferred_locations and any(
-            pref.lower() in location for pref in self.preferred_locations
-        ):
-            location_ratio = min(1.0, location_ratio + 0.2)
-
-        score += location_ratio * self.location_weight * 100.0
-
-        # Company match
-        company_ratio = 0.0
-        if self.priority_companies and any(
-            priority in company for priority in self.priority_companies
-        ):
-            company_ratio = 1.0
-        elif any(term in company for term in ["labs", "ai", "ml", "data", "tech"]):
-            company_ratio = 0.7
-        score += company_ratio * self.company_weight * 100.0
-
-        # Experience alignment
-        exp_max = job.get("experience_max")
-        experience_ratio = 0.0
-        if exp_max is not None:
-            if exp_max <= 1:
-                experience_ratio = 1.0
-            elif exp_max <= 3:
-                experience_ratio = 0.8
-            elif exp_max <= 5:
-                experience_ratio = 0.6
-            else:
-                experience_ratio = 0.2
-        score += experience_ratio * self.experience_weight * 100.0
-
-        # Industry match
-        industry_ratio = 0.0
-        if self.preferred_industries and any(
-            ind in industry for ind in self.preferred_industries
-        ):
-            industry_ratio = 1.0
-        score += industry_ratio * self.industry_weight * 100.0
-
-        # Clamp
         return max(0.0, min(100.0, score))
 
     # ------------------------------------------------------------------ #
@@ -918,288 +778,10 @@ class ScoringEngine:
     def classify_decision(self, score: float) -> str:
         """
         Classify score into a tier string.
-
-        NOTE: This method is retained for external callers but is NOT used
-        by ScraperEngine.run(). Routing decisions are made downstream.
-
-        Returns: "above_threshold" if score >= min_application_score, else "below_threshold".
         """
-        if score >= self.min_application_score:
+        if score >= self.min_score:
             return "above_threshold"
         return "below_threshold"
-
-
-# ================================================================================
-# API SCRAPERS
-# ================================================================================
-
-
-class BaseAPIScraper:
-    """Base class for API scrapers."""
-
-    name: str = "base_api"
-
-    def __init__(self, jobs_per_site: int):
-        self.jobs_per_site = jobs_per_site
-
-    async def run(self) -> List[Dict[str, Any]]:
-        """Async entry point."""
-        loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(None, self._run_sync)
-
-    def _run_sync(self) -> List[Dict[str, Any]]:
-        """Synchronous implementation."""
-        raise NotImplementedError
-
-
-class JoobleAPIScraper(BaseAPIScraper):
-    """Jooble Official API scraper."""
-
-    name = "jooble"
-
-    def __init__(
-        self,
-        jobs_per_site: int,
-        keywords: str = "",
-    ):
-        super().__init__(jobs_per_site)
-        self.api_key = os.getenv("JOOBLE_API_KEY")
-        if keywords:
-            self.keywords = keywords
-        else:
-            queries = _load_search_queries_from_db()
-            keywords_list = queries[:5] if queries else ["AI engineer remote"]
-            self.keywords = " ".join(keywords_list)
-
-    def _run_sync(self) -> List[Dict[str, Any]]:
-        """Scrape jobs from Jooble API."""
-        if not self.api_key:
-            LOG.warning("Jooble API key missing (env JOOBLE_API_KEY). Skipping.")
-            return []
-
-        host = "jooble.org"
-        conn = None
-        try:
-            conn = http.client.HTTPConnection(host, timeout=20)
-            headers = {"Content-type": "application/json"}
-            body_dict = {"keywords": self.keywords, "location": ""}
-            body = json.dumps(body_dict)
-            conn.request("POST", f"/api/{self.api_key}", body, headers)
-            response = conn.getresponse()
-            if response.status != 200:
-                LOG.error("Jooble HTTP %s %s", response.status, response.reason)
-                return []
-            data_bytes = response.read()
-            data = json.loads(data_bytes.decode("utf-8"))
-            jobs = data.get("jobs", [])[: self.jobs_per_site]
-            results: List[Dict[str, Any]] = []
-            for j in jobs:
-                title = j.get("title", "")
-                company = j.get("company", "")
-                location = j.get("location") or j.get("location_str", "Remote")
-                job_url = j.get("link") or j.get("url") or ""
-                description = j.get("snippet") or j.get("description") or ""
-                if not title or not job_url:
-                    continue
-                results.append(
-                    {
-                        "title": title,
-                        "company": company,
-                        "location": location,
-                        "job_url": job_url,
-                        "description": description,
-                        "source": self.name,
-                        "posted_date": j.get("updated"),
-                    }
-                )
-            LOG.info("Jaoble returned %d jobs", len(results))
-            return results
-        except Exception as e:  # pragma: no cover
-            LOG.error("Jooble API failed: %s", e, exc_info=True)
-            return []
-        finally:
-            if conn:
-                conn.close()
-
-
-class RemotiveAPIScraper(BaseAPIScraper):
-    """Remotive Public API scraper."""
-
-    name = "remotive"
-    endpoint = "https://remotive.io/api/remote-jobs"
-
-    def _run_sync(self) -> List[Dict[str, Any]]:
-        """Scrape jobs from Remotive API."""
-        try:
-            response = _make_proxied_request(self.endpoint, method="GET", timeout=20)
-            response.raise_for_status()
-            data = response.json()
-        except requests.RequestException as e:
-            LOG.error("Remotive API failed: %s", e)
-            return []
-        except Exception as e:  # pragma: no cover
-            LOG.error("Remotive API parse failed: %s", e)
-            return []
-
-        jobs = data.get("jobs", [])[: self.jobs_per_site]
-        results: List[Dict[str, Any]] = []
-        for j in jobs:
-            title = j.get("title", "")
-            company = j.get("company_name", "")
-            location = j.get("candidate_required_location") or "Remote"
-            job_url = j.get("url") or ""
-            description = j.get("description") or ""
-            if not title or not job_url:
-                continue
-            results.append(
-                {
-                    "title": title,
-                    "company": company,
-                    "location": location,
-                    "job_url": job_url,
-                    "description": description,
-                    "source": self.name,
-                    "posted_date": j.get("publication_date"),
-                    "job_type": j.get("job_type"),
-                    "salary": j.get("salary"),
-                }
-            )
-        LOG.info("Remotive returned %d jobs", len(results))
-        return results
-
-
-class RemoteOKAPIScraper(BaseAPIScraper):
-    """
-    RemoteOK public API scraper.
-
-    Endpoint: https://remoteok.com/api
-    Returns a JSON list where element 0 is a metadata object (no 'position'
-    or 'title' field) that must be skipped.
-    """
-
-    name = "remoteok"
-    endpoint = "https://remoteok.com/api"
-
-    def _run_sync(self) -> List[Dict[str, Any]]:
-        """Fetch jobs from the RemoteOK public API."""
-        try:
-            response = _make_proxied_request(
-                self.endpoint,
-                method="GET",
-                timeout=20,
-                headers={"User-Agent": "job-automation-agent/1.0"},
-            )
-            response.raise_for_status()
-            raw_list = response.json()
-        except requests.RequestException as e:
-            LOG.error("RemoteOK API request failed: %s", e)
-            return []
-        except Exception as e:  # pragma: no cover
-            LOG.error("RemoteOK API parse failed: %s", e)
-            return []
-
-        results: List[Dict[str, Any]] = []
-        for item in raw_list:
-            # Skip metadata entry (first element has no 'position' / 'title')
-            if not item.get("position") and not item.get("title"):
-                continue
-            title = str(item.get("position") or item.get("title") or "").strip()
-            company = str(item.get("company") or "").strip()
-            location = str(item.get("location") or "Remote").strip()
-            job_url = str(item.get("url") or "").strip()
-            description = str(item.get("description") or "").strip()
-            if not title or not job_url:
-                continue
-            results.append(
-                {
-                    "title": title,
-                    "company": company,
-                    "location": location,
-                    "job_url": job_url,
-                    "description": description,
-                    "source": self.name,
-                    "posted_date": item.get("date"),
-                    "job_type": item.get("job_type"),
-                    "salary": item.get("salary"),
-                    "required_skills": item.get("tags") or [],
-                }
-            )
-            if len(results) >= self.jobs_per_site:
-                break
-
-        LOG.info("RemoteOK returned %d jobs", len(results))
-        return results
-
-
-class HimalayasAPIScraper(BaseAPIScraper):
-    """
-    Himalayas remote jobs API scraper.
-
-    TODO: Verify the exact Himalayas API endpoint and any required query
-    parameters (auth token, category filters, etc.) before deploying.
-    The endpoint below is a best-effort placeholder based on the public
-    Himalayas developer docs — update it once confirmed.
-
-    Endpoint (placeholder): https://himalayas.app/jobs/api
-    """
-
-    name = "himalayas"
-    # TODO: Confirm exact endpoint from https://himalayas.app/developers
-    endpoint = "https://himalayas.app/jobs/api"
-
-    def _run_sync(self) -> List[Dict[str, Any]]:
-        """Fetch jobs from the Himalayas API."""
-        try:
-            params: Dict[str, Any] = {"limit": self.jobs_per_site}
-            response = _make_proxied_request(
-                self.endpoint,
-                method="GET",
-                params=params,
-                timeout=20,
-                headers={"User-Agent": "job-automation-agent/1.0"},
-            )
-            response.raise_for_status()
-            data = response.json()
-        except requests.RequestException as e:
-            LOG.error("Himalayas API request failed: %s", e)
-            return []
-        except Exception as e:  # pragma: no cover
-            LOG.error("Himalayas API parse failed: %s", e)
-            return []
-
-        # TODO: Adjust field names below after inspecting actual API response shape.
-        raw_jobs = data.get("jobs", []) if isinstance(data, dict) else []
-        results: List[Dict[str, Any]] = []
-        for j in raw_jobs[: self.jobs_per_site]:
-            title = str(j.get("title") or "").strip()
-            company = str(
-                j.get("company", {}).get("name") if isinstance(j.get("company"), dict)
-                else j.get("company") or ""
-            ).strip()
-            location = str(j.get("location") or "Remote").strip()
-            job_url = str(j.get("url") or j.get("applicationUrl") or "").strip()
-            description = str(j.get("description") or "").strip()
-            if not title or not job_url:
-                continue
-            results.append(
-                {
-                    "title": title,
-                    "company": company,
-                    "location": location,
-                    "job_url": job_url,
-                    "description": description,
-                    "source": self.name,
-                    "posted_date": j.get("createdAt") or j.get("postedAt"),
-                    "job_type": j.get("jobType"),
-                    "salary": j.get("salary"),
-                    "required_skills": j.get("skills") or [],
-                }
-            )
-
-        LOG.info("Himalayas returned %d jobs", len(results))
-        return results
-
-
 
 
 # ================================================================================
@@ -1212,14 +794,25 @@ class ScraperEngine:
 
     def __init__(
         self,
-        filters_path: Path = FILTERS_PATH,
-        min_jobs_target: int = 100,
-        enable_safety_net: bool = True,
-    ):
-        load_dotenv(Path.home() / "java.env")
+        cfg: Optional[ConfigLoader] = None,
+        min_jobs_target: int = 5,
+        safety_net: bool = False,
+        config_path: Optional[str] = None,
+    ) -> None:
+        # Back-compat: older call sites may have passed a config_path positionally.
+        if cfg is not None and not isinstance(cfg, ConfigLoader):
+            config_path = str(cfg)
+            cfg = None
 
-        self.min_jobs_target = min_jobs_target
-        self.enable_safety_net = enable_safety_net
+        # NOTE: `min_jobs_target` and `safety_net` are accepted for compatibility
+        # but intentionally do not override config-driven behavior yet.
+        self._init_min_jobs_target = int(min_jobs_target)
+        self._init_safety_net = bool(safety_net)
+        self._init_config_path = config_path
+
+        self.cfg = cfg or config_loader
+        self.min_jobs_target = self.cfg.settings.get("run_config", {}).get("jobs_per_run_target", 100)
+        self.enable_safety_net = self.cfg.settings.get("run_config", {}).get("enable_serpapi_safety_net", True)
 
         self.results: List[Dict[str, Any]] = []
         self.seen_job_ids: Set[str] = set()
@@ -1229,10 +822,9 @@ class ScraperEngine:
         # Initialize components
         self.proxy_pool = ProxyPool()
 
-        # Load filters once; pass data to FilterEngine + ScoringEngine
-        self.filter_engine = FilterEngine(filters_path)
+        self.filter_engine = FilterEngine(self.cfg)
         self.normalizer = Normalizer()
-        self.scoring_engine = ScoringEngine(self.filter_engine.filters_data)
+        self.scoring_engine = ScoringEngine(self.cfg)
 
         # Initialize scrapers
         self._init_scrapers()
@@ -1249,52 +841,40 @@ class ScraperEngine:
     # ------------------------------------------------------------------ #
 
     def _init_scrapers(self) -> None:
-        """Initialize all enabled scrapers."""
+        """Initialize all enabled scrapers from ConfigLoader."""
         scrapers: List[Any] = []
 
-        # Extract allowed countries from YAML to feed JobSpy.
-        allowed_countries = self.filter_engine.allowed_countries
-
-        # ---- Phase 1: always-on scrapers --------------------------------
-
-        # JobSpy adapter (LinkedIn, Indeed)
+        # 1. JobSpy adapter (LinkedIn, Indeed, etc.)
         try:
-            scrapers.append(
-                JobSpyAdapter(
-                    jobs_per_site=20,
-                    concurrency=4,
-                    hours_old=168,  # 7 days
-                    allowed_countries=allowed_countries,
-                )
-            )
-            LOG.info("✓ JobSpy adapter initialized")
-        except Exception as e:  # pragma: no cover
-            LOG.warning("JobSpyAdapter not available: %s", e)
+            adapter = JobSpyAdapter(self.cfg)
+            if adapter.enabled_sites:
+                scrapers.append(adapter)
+                LOG.info("✓ JobSpy adapter initialized with %d sites", len(adapter.enabled_sites))
+        except Exception as e:
+            LOG.warning("JobSpyAdapter initialization failed: %s", e)
 
-        # RemoteOK public API (no key required)
-        scrapers.append(RemoteOKAPIScraper(jobs_per_site=50))
-        LOG.info("✓ RemoteOK API scraper initialized")
-
-        # Himalayas remote jobs API (no key required; endpoint is a placeholder)
-        scrapers.append(HimalayasAPIScraper(jobs_per_site=50))
-        LOG.info("✓ Himalayas API scraper initialized")
-
-        # ---- Phase 2: feature-flagged scrapers --------------------------
-        # Enabled when platform_settings.json has jooble/remotive in active_platforms.
-        active_platforms: list[str] = config_loader.get_active_platforms()
-        phase2_enabled = any(
-            p in active_platforms
-            for p in ("jooble", "remotive")
+        # 2. Site-specific scrapers
+        from scrapers.scraper_service import (
+            RemoteOKScraper, HimalayasScraper, RemotiveScraper,
+            WeWorkRemotelyScraper, ArbeitnowScraper, JobicyScraper,
         )
-        if phase2_enabled:
-            if os.getenv("JOOBLE_API_KEY"):
-                scrapers.append(JoobleAPIScraper(jobs_per_site=20))
-                LOG.info("✓ [Phase 2] Jooble API scraper initialized")
-            else:
-                LOG.info("[Phase 2] Jooble skipped — JOOBLE_API_KEY not set")
 
-            scrapers.append(RemotiveAPIScraper(jobs_per_site=50))
-            LOG.info("✓ [Phase 2] Remotive API scraper initialized")
+        _rest_scrapers = [
+            ("remoteok",       RemoteOKScraper),
+            ("himalayas",      HimalayasScraper),
+            ("remotive",       RemotiveScraper),
+            ("weworkremotely", WeWorkRemotelyScraper),
+            ("arbeitnow",      ArbeitnowScraper),
+            ("jobicy",         JobicyScraper),
+        ]
+        _platform_cfg = self.cfg.settings.get("platform_settings", {}).get("platforms", {})
+        for _name, _cls in _rest_scrapers:
+            if _platform_cfg.get(_name, {}).get("active", False):
+                try:
+                    scrapers.append(_cls())
+                    LOG.info("✓ %s scraper registered", _name)
+                except Exception as exc:
+                    LOG.error("✗ %s scraper failed to register: %s", _name, exc)
 
         self.scrapers = scrapers
         LOG.info("Scraper registration complete | total=%d", len(self.scrapers))
@@ -1335,8 +915,8 @@ class ScraperEngine:
 
         Flow:
           1. Run all primary scrapers concurrently -> collect all_raw_jobs.
-          2. Safety-net: if len(all_raw_jobs) < 100, call search_google_jobs
-             exactly once to supplement results.
+          2. Safety-net: if primary scrapers return fewer than the target,
+             call search_google_jobs exactly once to supplement results.
           3. Normalisation loop: deduplicate, hard-filter, score every job.
           4. Persist results + metrics.
         """
@@ -1383,18 +963,51 @@ class ScraperEngine:
                 "(threshold: %d) — activating SerpAPI",
                 len(all_raw_jobs), SAFETY_NET_THRESHOLD,
             )
-            queries = _load_search_queries_from_db()
-            serp_query = (queries[0] if queries else "").strip()
+            search_queries: list[str] = (
+                self.cfg.user
+                .get("job_preferences", {})
+                .get("search_queries", [])
+                self.search_term: str = " ".join(search_queries[:3])
+            )
+            self.search_term: str = " ".join(search_queries[:3])
+            if not search_queries:
+                # Fallback to target_titles from user_profile
+                search_queries = (
+                    self.cfg.user
+                    .get("job_preferences", {})
+                    .get("target_titles", [])
+                )[:5]
+            
+            serp_query = (search_queries[0] if search_queries else "").strip()
             if not serp_query:
                 LOG.warning(
-                    "SerpAPI safety-net: no search_queries configured in system_config — using empty query"
+                    "SerpAPI safety-net: no search_queries configured in user_profile — using empty query"
                 )
             try:
-                serp_json_str = search_google_jobs(
-                    query=serp_query,
-                    location="Remote",
-                    num_results=20,
-                )
+                try:
+                    from tools.serpapi_tool import search_google_jobs  # local import (optional dep)
+                except Exception as import_exc:  # noqa: BLE001
+                    LOG.warning(
+                        "SerpAPI safety-net: could not import search_google_jobs — skipping: %s",
+                        import_exc,
+                    )
+                    search_google_jobs = None  # type: ignore[assignment]
+
+                if not search_google_jobs:
+                    raise RuntimeError("serpapi_tool_unavailable")
+
+                try:
+                    serp_json_str = search_google_jobs(
+                        query=serp_query,
+                        location="Remote",
+                        num_results=20,
+                    )
+                except TypeError:
+                    serp_json_str = search_google_jobs(
+                        serp_query,
+                        "Remote",
+                        20,
+                    )
                 serp_jobs = json.loads(serp_json_str)
                 if isinstance(serp_jobs, list):
                     LOG.info(
@@ -1434,12 +1047,16 @@ class ScraperEngine:
             self.seen_job_ids.add(job_id)
 
             # Hard filters
-            if self.filter_engine.should_exclude(normalized):
+            passed, reason = self.filter_engine.passes(normalized)
+            if not passed:
+                LOG.debug("Job excluded by FilterEngine: %s | reason=%s", normalized.get('title'), reason)
                 continue
 
             # YAML-driven static pre-filter scoring (0-100 internal, 0.0-1.0 output)
             score = self.scoring_engine.calculate_score(normalized)
-            if score < self.scoring_engine.min_application_score:
+            if score < self.scoring_engine.min_score:
+                LOG.debug("Job excluded by scoring (score=%.1f < %.1f): %s", 
+                          score, self.scoring_engine.min_score, normalized.get('title'))
                 continue
 
             static_score = max(0.0, min(1.0, score / 100.0))
@@ -1452,7 +1069,7 @@ class ScraperEngine:
         # schema so downstream agents never encounter a KeyError.
         # List-type fields default to [] ; scalar fields default to None.
         # No routing or DB-related keys are added here.
-        _LIST_KEYS = {"required_skills", "preferred_skills", "benefits"}
+        _LIST_KEYS = {"required_skills", "preferred_skills", "benefits", "tags"}
         _SCALAR_KEYS = {
             "job_id", "title", "company", "location", "remote_type",
             "job_url", "application_url", "source", "platform", "description",
