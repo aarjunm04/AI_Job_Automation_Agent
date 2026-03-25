@@ -16,7 +16,8 @@
     "apply_url_pattern": "https://www.linkedin.com/jobs/view/.*",
     "proxy_required": false,
     "tier": 1,
-    "country_code": "worldwide"
+    "country_code": "worldwide",
+    "jobspy_enabled": true
   },
   "indeed": {
     "display_name": "Indeed",
@@ -35,7 +36,8 @@
     "apply_url_pattern": "https://www.indeed.com/viewjob.*",
     "proxy_required": false,
     "tier": 1,
-    "country_code": "worldwide"
+    "country_code": "worldwide",
+    "jobspy_enabled": false
   },
   "glassdoor": {
     "display_name": "Glassdoor",
@@ -54,7 +56,8 @@
     "apply_url_pattern": "https://www.glassdoor.com/job-listing.*",
     "proxy_required": false,
     "tier": 1,
-    "country_code": "worldwide"
+    "country_code": "worldwide",
+    "jobspy_enabled": false
   },
   "ziprecruiter": {
     "display_name": "ZipRecruiter",
@@ -70,7 +73,8 @@
     "apply_url_pattern": "https://www.ziprecruiter.com/jobs/.*",
     "proxy_required": false,
     "tier": 1,
-    "country_code": "worldwide"
+    "country_code": "worldwide",
+    "jobspy_enabled": false
   },
   "google_jobs": {
     "display_name": "Google Jobs",
@@ -140,7 +144,49 @@
       "companyName",
       "employmentType",
       "applicationLink"
-    ]
+    ],
+    "pagination_limit": 20,
+    "pagination_max_pages": 5,
+    "pagination_param": "offset",
+    "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+  },
+  "arbeitnow": {
+    "display_name": "Arbeitnow",
+    "base_url": "https://www.arbeitnow.com",
+    "jobs_url": "https://www.arbeitnow.com/api/job-board-api",
+    "scraper_type": "rest_api",
+    "auth_method": "none",
+    "env_auth_keys": [],
+    "rate_limit_rpm": 30,
+    "backoff_seconds": 2,
+    "max_retries": 3,
+    "ats_type": "external",
+    "apply_url_pattern": null,
+    "proxy_required": false,
+    "tier": 2,
+    "country_code": "worldwide",
+    "api_response_fields": ["slug","title","company_name","url",
+                             "remote","tags","description","date"]
+  },
+  "jobicy": {
+    "display_name": "Jobicy",
+    "base_url": "https://jobicy.com",
+    "jobs_url": "https://jobicy.com/api/v0/remote-jobs",
+    "scraper_type": "rest_api",
+    "auth_method": "none",
+    "env_auth_keys": [],
+    "rate_limit_rpm": 20,
+    "backoff_seconds": 3,
+    "max_retries": 3,
+    "ats_type": "external",
+    "apply_url_pattern": null,
+    "proxy_required": false,
+    "tier": 2,
+    "country_code": "worldwide",
+    "search_tags": ["engineering", "data"],
+    "api_response_fields": ["id","url","jobTitle","companyName","jobGeo",
+                            "jobType","jobDescription","pubDate",
+                            "annualSalaryMin","annualSalaryMax","jobIndustry"]
   },
   "remotive": {
     "display_name": "Remotive",
@@ -166,7 +212,8 @@
       "job_type",
       "description",
       "candidate_required_location"
-    ]
+    ],
+    "search_categories": ["software-dev", "data"]
   },
   "jooble": {
     "display_name": "Jooble",
@@ -196,7 +243,10 @@
   "weworkremotely": {
     "display_name": "We Work Remotely",
     "base_url": "https://weworkremotely.com",
-    "jobs_url": "https://weworkremotely.com/categories/remote-programming-jobs.rss",
+    "jobs_url": [
+      "https://weworkremotely.com/categories/remote-programming-jobs.rss",
+      "https://weworkremotely.com/categories/remote-data-science-jobs.rss"
+    ],
     "scraper_type": "rss",
     "auth_method": "none",
     "env_auth_keys": [],

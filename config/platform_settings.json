@@ -26,7 +26,7 @@
         }
       },
       "indeed": {
-        "active": true,
+        "active": false,
         "max_jobs_per_scrape": 100,
         "scoring_threshold": 70,
         "budget_cap_usd": 1.5,
@@ -36,7 +36,7 @@
         }
       },
       "glassdoor": {
-        "active": true,
+        "active": false,
         "max_jobs_per_scrape": 50,
         "scoring_threshold": 75,
         "budget_cap_usd": 1.0,
@@ -144,6 +144,20 @@
           "use_company_context": true,
           "max_context_tokens": 1000
         }
+      },
+      "arbeitnow": {
+        "active": true,
+        "max_jobs_per_scrape": 100,
+        "scoring_threshold": 65,
+        "budget_cap_usd": 0.0,
+        "rag_settings": { "use_company_context": false, "max_context_tokens": 1000 }
+      },
+      "jobicy": {
+        "active": true,
+        "max_jobs_per_scrape": 100,
+        "scoring_threshold": 65,
+        "budget_cap_usd": 0.0,
+        "rag_settings": { "use_company_context": false, "max_context_tokens": 1000 }
       }
     }
   },
@@ -153,7 +167,13 @@
     "mid_conf": 0.6,
     "auto_eligible": 0.65,
     "high_conf": 0.75,
-    "force_manual": 0.9
+    "force_manual": 0.9,
+    "title_weight": 40,
+    "skills_weight": 30,
+    "remote_bonus": 10,
+    "seniority_penalty": 20,
+    "fuzzy_title_threshold": 80,
+    "skills_min_count": 3
   },
   "apply_settings": {
     "auto_apply_enabled": true,
