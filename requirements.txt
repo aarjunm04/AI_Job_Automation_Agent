@@ -81,4 +81,6 @@ chromadb==0.6.3
 google-search-results==2.4.2
 litellm>=1.60.0
 python-dotenv==1.2.1
+feedparser>=6.0.11
+rapidfuzz>=3.9.0
 

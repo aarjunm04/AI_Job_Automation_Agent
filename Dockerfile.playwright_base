@@ -1,36 +1,79 @@
-FROM mcr.microsoft.com/playwright/python:v1.50.0-jammy
+# ── Dockerfile.playwright_base ─────────────────────────────────────────────
+# Base: Official Python 3.11 slim (Debian bookworm) — no PPA, no hacks
+# Playwright + Chromium installed on top via playwright install --with-deps
+# Child images: Dockerfile.scraper, Dockerfile.apply
+# ──────────────────────────────────────────────────────────────────────────
 
-# System deps — libpq5 for postgres, curl for healthchecks
-# python3-pip ensures pip is available on the system Python (3.10)
+FROM python:3.11-slim-bookworm
+
+LABEL maintainer="AI Job Automation Agent"
+LABEL description="Base: Python 3.11 slim-bookworm + Playwright Chromium + all deps"
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONPATH=/app
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+ENV PIP_NO_CACHE_DIR=1
+
+# ── System deps ────────────────────────────────────────────────────────────
+# curl: healthchecks + get-pip bootstrap
+# libpq-dev: psycopg2 compilation (needs full dev headers, NOT just libpq5)
+# gcc/build-essential: C-extension packages (psycopg2, lxml, rapidfuzz)
+# libxml2-dev/libxslt1-dev: lxml, feedparser
+# fonts: Chromium rendering — prevents blank pages and layout failures
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-        libpq5 \
         curl \
-        python3-pip && \
+        libpq-dev \
+        gcc \
+        g++ \
+        build-essential \
+        libffi-dev \
+        libssl-dev \
+        libxml2-dev \
+        libxslt1-dev \
+        fonts-liberation \
+        fonts-noto-color-emoji && \
     rm -rf /var/lib/apt/lists/*
 
-# Upgrade pip to latest
-RUN python3 -m pip install --upgrade pip --no-cache-dir
+# ── Upgrade pip ────────────────────────────────────────────────────────────
+RUN pip install --upgrade pip
 
 WORKDIR /app
 
-ENV PYTHONPATH=/app \
-    PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
-
-# Copy requirements FIRST for layer cache
+# ── Install ALL Python deps first (pins playwright to exact version) ───────
 COPY requirements.txt /app/requirements.txt
+RUN pip install -r /app/requirements.txt --prefer-binary
 
-# Install all Python deps into system Python
-RUN pip install --no-cache-dir -r /app/requirements.txt
+# ── Install Chromium AFTER pip so versions always match ────────────────────
+# Playwright version from requirements.txt controls which Chromium is fetched
+RUN playwright install chromium --with-deps
 
-# Non-root user — created AFTER pip install to avoid permission issues
-RUN useradd --create-home --shell /bin/bash appuser && \
-    chown -R appuser:appuser /app
+# ── Verify Python version ──────────────────────────────────────────────────
+RUN python --version | grep "3.11" || (echo "FATAL: Python 3.11 required" && exit 1)
+
+# ── Verify critical imports ────────────────────────────────────────────────
+RUN python -c "import playwright; print('playwright     OK')"
+RUN python -c "import psycopg2;   print('psycopg2       OK')"
+RUN python -c "import redis;      print('redis          OK')"
+RUN python -c "import chromadb;   print('chromadb       OK')"
+RUN python -c "import fastapi;    print('fastapi        OK')"
+RUN python -c "import jobspy;     print('jobspy         OK')"
+RUN python -c "import agentops;   print('agentops       OK')"
+RUN python -c "import feedparser; print('feedparser     OK')"
+RUN python -c "import rapidfuzz;  print('rapidfuzz      OK')"
+RUN python -c "import requests;   print('requests       OK')"
+RUN python -c "import crewai;     print('crewai         OK')"
+
+# ── Verify Chromium launches ───────────────────────────────────────────────
+RUN python -c "from playwright.sync_api import sync_playwright; p=sync_playwright().start(); b=p.chromium.launch(headless=True); b.close(); p.stop(); print('chromium launch OK')"
+
+# ── Non-root user ──────────────────────────────────────────────────────────
+RUN useradd --uid 1001 --create-home --shell /bin/bash appuser && \
+    chown -R appuser:appuser /app && \
+    chmod -R 755 /ms-playwright
 
 USER appuser
 
-# No CMD — child images define their own entrypoint
-# No HEALTHCHECK — base image only
-# No source code copied — source goes in child images only
+# No CMD, no HEALTHCHECK, no source code — child images only
