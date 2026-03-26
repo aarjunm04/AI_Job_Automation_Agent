@@ -1,60 +1,43 @@
-# ============================================================
-# Stage 1: builder
-# ============================================================
-FROM python:3.11-slim-bookworm AS builder
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc \
-    libpq-dev \
-    && rm -rf /var/lib/apt/lists/*
-
-RUN python -m venv /opt/venv
-ENV PATH="/opt/venv/bin:$PATH"
-
-COPY requirements.txt /app/requirements.txt
-SHELL ["/bin/bash", "-o", "pipefail", "-c"]
-RUN pip install --no-cache-dir -r /app/requirements.txt
-
-# ============================================================
-# Stage 2: runtime
-# ============================================================
-FROM python:3.11-slim-bookworm AS runtime
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    libpq5 \
-    curl \
-    ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
-
-COPY --from=builder /opt/venv /opt/venv
-
-RUN useradd --create-home --shell /bin/bash appuser
+# ── agent_runner/Dockerfile ────────────────────────────────────────────────
+FROM ai_playwright_base:latest
 
 WORKDIR /app
-RUN chown appuser:appuser /app
 
-ENV PATH="/opt/venv/bin:$PATH"
-ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
-RUN pip install playwright && \
-    PLAYWRIGHT_BROWSERS_PATH=/ms-playwright playwright install chromium && \
-    PLAYWRIGHT_BROWSERS_PATH=/ms-playwright playwright install-deps chromium
+# ── Install any requirements not in base image ────────────────────────────
+COPY requirements.txt /app/requirements.txt
+RUN pip install --no-cache-dir -r /app/requirements.txt
 
-ENV PYTHONPATH=/app PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+# ── Source packages ────────────────────────────────────────────────────────
+COPY --chown=appuser:appuser agents/              /app/agents/
+COPY --chown=appuser:appuser tools/               /app/tools/
+COPY --chown=appuser:appuser integrations/        /app/integrations/
+COPY --chown=appuser:appuser config/              /app/config/
+COPY --chown=appuser:appuser utils/               /app/utils/
+COPY --chown=appuser:appuser database/            /app/database/
+COPY --chown=appuser:appuser scrapers/            /app/scrapers/
+COPY --chown=appuser:appuser auto_apply/          /app/auto_apply/
+COPY --chown=appuser:appuser rag_systems/         /app/rag_systems/
+COPY --chown=appuser:appuser scripts/             /app/scripts/
+COPY --chown=appuser:appuser main.py              /app/main.py
 
-COPY --chown=appuser:appuser requirements.txt /app/requirements.txt
-COPY --chown=appuser:appuser agents/ /app/agents/
-COPY --chown=appuser:appuser tools/ /app/tools/
-COPY --chown=appuser:appuser integrations/ /app/integrations/
-COPY --chown=appuser:appuser config/ /app/config/
-COPY --chown=appuser:appuser database/ /app/database/
-COPY --chown=appuser:appuser utils/ /app/utils/
-COPY --chown=appuser:appuser main.py /app/main.py
-COPY --chown=appuser:appuser rag_systems/ /app/rag_systems/
-COPY --chown=appuser:appuser app/resumes/ /app/resumes/
-COPY --chown=appuser:appuser api/ /app/api/
-COPY --chown=appuser:appuser auto_apply/ /app/auto_apply/
-COPY --chown=appuser:appuser scrapers/ /app/scrapers/
+# ── Runtime dirs ──────────────────────────────────────────────────────────
+RUN mkdir -p /app/logs /app/app/resumes \
+    && chown -R appuser:appuser /app/logs /app/app
+
+# ── Runtime env ───────────────────────────────────────────────────────────
+ENV PYTHONPATH=/app \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
+    LOG_LEVEL=INFO \
+    ACTIVE_DB=local \
+    DRY_RUN=false
 
 USER appuser
 
+HEALTHCHECK --interval=60s --timeout=10s --start-period=30s --retries=3 \
+    CMD test -f /app/logs/latest_run.json || exit 1
+
 CMD ["python", "main.py", "--mode", "full"]
+ENV LOCAL_POSTGRES_URL="postgresql://aarjunm04:ajdev123@ai_postgres:5432/ai_job_db"
+ENV ACTIVE_DB="local"

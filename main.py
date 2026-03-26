@@ -33,9 +33,12 @@ from dotenv import load_dotenv
 # MODULE-LEVEL SETUP  (runs at import time)
 # ---------------------------------------------------------------------------
 
-# ~/java.env is the single source of truth for all secrets/config.
-# override=False so values already in the process environment win.
-load_dotenv(dotenv_path=os.path.expanduser("~/java.env"), override=False)
+# ---------------------------------------------------------------------------
+# ENVIRONMENT LOADING
+# ---------------------------------------------------------------------------
+_env_path = os.getenv("DOTENV_PATH", os.path.expanduser("~/java.env"))
+if os.path.exists(_env_path):
+    load_dotenv(dotenv_path=_env_path, override=False)
 
 # Ensure logs/ directory exists before any FileHandler is created.
 os.makedirs("logs", exist_ok=True)
@@ -102,8 +105,8 @@ PLAYWRIGHT_APPLY_PORT = int(os.getenv("PLAYWRIGHT_APPLY_PORT", "8003"))
 
 # All 7 services that must be healthy before pipeline starts
 REQUIRED_SERVICES: list[ServiceHealth] = [
-    ServiceHealth("database", f"http://{POSTGRES_HOST}:{POSTGRES_PORT}", POSTGRES_PORT, timeout=3.0),
-    ServiceHealth("cache", f"http://{REDIS_HOST}:{REDIS_PORT}", REDIS_PORT, timeout=3.0),
+    ServiceHealth("database", f"{POSTGRES_HOST}:{POSTGRES_PORT}", POSTGRES_PORT, timeout=3.0),
+    ServiceHealth("cache", f"{REDIS_HOST}:{REDIS_PORT}", REDIS_PORT, timeout=3.0),
     ServiceHealth("chromadb", f"http://{CHROMA_HOST}:{CHROMA_PORT}/api/v2/heartbeat", CHROMA_PORT),
     ServiceHealth("rag_server", f"http://{RAG_HOST}:{RAG_PORT}/health", RAG_PORT),
     ServiceHealth("api_server", f"http://{FASTAPI_HOST}:{FASTAPI_PORT}/health", FASTAPI_PORT),
@@ -270,7 +273,7 @@ class BudgetEnforcer:
         try:
             from tools.budget_tools import get_cost_summary
             
-            raw = get_cost_summary.func("budget_check")
+            raw = get_cost_summary(run_batch_id="budget_check")
             summary = json.loads(raw) if isinstance(raw, str) else raw
             
             # Calculate monthly spend from the summary
@@ -385,10 +388,9 @@ class PipelineRunner:
     
     def _create_run_session(self) -> str:
         """Create a run_sessions record in Postgres."""
-        from tools.postgres_tools import create_run_batch
+        from tools.postgres_tools import _create_run_batch
         
-        result = create_run_batch.func(
-            user_id=os.getenv("DEFAULT_USER_ID", "system"),
+        result = _create_run_batch(
             run_index_in_week=self._get_run_index(),
         )
         data = json.loads(result) if isinstance(result, str) else result
@@ -403,9 +405,9 @@ class PipelineRunner:
             return
         
         try:
-            from tools.postgres_tools import update_run_batch_stats
+            from tools.postgres_tools import _update_run_batch_stats
             
-            update_run_batch_stats.func(
+            _update_run_batch_stats(
                 run_batch_id=self._current_run_batch_id,
                 jobs_discovered=result.jobs_discovered,
                 jobs_auto_applied=result.jobs_auto_applied,
@@ -605,7 +607,7 @@ def print_budget_status() -> None:
     """
     from tools.budget_tools import get_cost_summary  # inline — thin entry point
 
-    raw: str = get_cost_summary("budget_check")
+    raw: str = get_cost_summary(run_batch_id="budget_check")
     try:
         summary: dict = json.loads(raw)
         print("\n=== BUDGET STATUS ===")
@@ -774,14 +776,15 @@ async def async_main(args: argparse.Namespace) -> int:
     
     result_dict = {
         "success": result.success,
-        "run_batch_id": result.run_batch_id,
-        "jobs_discovered": result.jobs_discovered,
-        "jobs_scored": result.jobs_scored,
-        "jobs_auto_applied": result.jobs_auto_applied,
-        "jobs_manual_queued": result.jobs_manual_queued,
-        "jobs_failed": result.jobs_failed,
-        "total_cost_usd": result.total_cost_usd,
-        "duration_minutes": result.duration_minutes,
+        "runbatchid": result.run_batch_id,
+        "mode": args.mode,
+        "jobsdiscovered": result.jobs_discovered,
+        "jobsscored": result.jobs_scored,
+        "jobsautoapplied": result.jobs_auto_applied,
+        "jobsmanualqueued": result.jobs_manual_queued,
+        "jobsfailed": result.jobs_failed,
+        "totalcostusd": result.total_cost_usd,
+        "durationminutes": result.duration_minutes,
         "interrupted": result.interrupted,
         "error": result.error,
     }

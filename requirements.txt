@@ -84,3 +84,5 @@ python-dotenv==1.2.1
 feedparser>=6.0.11
 rapidfuzz>=3.9.0
 
+fuzzywuzzy==0.18.0
+python-Levenshtein==0.25.1
