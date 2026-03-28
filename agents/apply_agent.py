@@ -70,7 +70,9 @@ __all__ = ["ApplyAgent"]
 # ---------------------------------------------------------------------------
 
 
+@agentops.track_agent(name="ApplyAgent")
 @agent
+@agentops.track_agent(name="ApplyAgent")
 class ApplyAgent:
     """CrewAI Apply Agent — autonomous job application executor.
 
@@ -892,7 +894,7 @@ class ApplyAgent:
         """Build the CrewAI Agent instance for the apply pass.
 
         Returns:
-            Configured ``crewai.Agent`` using the currently active LLM
+            Configured ``Agent`` using the currently active LLM
             (may be primary or a fallback after ``_switch_to_fallback``).
         """
         return Agent(
@@ -939,7 +941,7 @@ class ApplyAgent:
             agent: The ``ApplyAgent`` CrewAI agent that will execute the task.
 
         Returns:
-            Configured ``crewai.Task`` ready for crew execution.
+            Configured ``Task`` ready for crew execution.
         """
         manifest_json: str
         try:

@@ -37,6 +37,9 @@ from tools.postgres_tools import (
     update_run_batch_stats,
     log_event,
     get_run_stats,
+    _create_run_batch,
+    _update_run_batch_stats,
+    _log_event,
 )
 from tools.budget_tools import (
     reset_run_cost_tracker,
@@ -47,6 +50,8 @@ from tools.budget_tools import (
 from tools.agentops_tools import (
     record_agent_error,
     record_fallback_event,
+    _record_agent_error,
+    _record_fallback_event,
 )
 from utils.normalise_dedupe import deduplicate_jobs_fuzzy
 from utils.db_utils import get_db_conn
@@ -359,9 +364,7 @@ class MasterAgent:
             The Postgres-assigned ``run_batch_id`` UUID string.
         """
         # Create run batch in Postgres
-        raw_result: str = create_run_batch(
-            run_index_in_week=self.run_index_in_week
-        )
+        raw_result: str = _create_run_batch(run_index_in_week=self.run_index_in_week)
         parsed: Dict[str, Any] = {}
         try:
             parsed = json.loads(raw_result)
@@ -377,13 +380,13 @@ class MasterAgent:
             self.run_batch_id = parsed["run_batch_id"]
 
         # Reset per-run cost tracker
-        reset_run_cost_tracker(self.run_batch_id)
+        reset_run_cost_tracker(run_batch_id=self.run_batch_id)
 
         # Start AgentOps session
         _start_agentops_session(self.run_batch_id, self.run_index_in_week)
 
         # Log session creation
-        log_event(
+        _log_event(
             run_batch_id=self.run_batch_id,
             level="INFO",
             event_type="run_session_created",
@@ -413,9 +416,7 @@ class MasterAgent:
         """
         try:
             # Budget gate — monthly budget check
-            budget_raw: str = check_monthly_budget(
-                run_batch_id=self.run_batch_id
-            )
+            budget_raw: str = check_monthly_budget(run_batch_id=self.run_batch_id)
             budget_result: Dict[str, Any] = {}
             try:
                 budget_result = json.loads(budget_raw)
@@ -442,7 +443,7 @@ class MasterAgent:
                 self.logger.error(
                     "Scraper phase failed: %s", result.get("error", "unknown")
                 )
-                record_agent_error(
+                _record_agent_error(
                     agent_type="ScraperAgent",
                     error_message=result.get("error", "scraper_run_failed"),
                     run_batch_id=self.run_batch_id,
@@ -489,7 +490,7 @@ class MasterAgent:
             # Store result in run state
             self._run_state["scraper"] = result
 
-            log_event(
+            _log_event(
                 run_batch_id=self.run_batch_id,
                 level="INFO",
                 event_type="scraper_phase_complete",
@@ -509,7 +510,7 @@ class MasterAgent:
             self.logger.error(
                 "Scraper phase unhandled exception: %s", exc, exc_info=True
             )
-            record_agent_error(
+            _record_agent_error(
                 agent_type="ScraperAgent",
                 error_message=str(exc),
                 run_batch_id=self.run_batch_id,
@@ -546,9 +547,7 @@ class MasterAgent:
                 }
 
             # Budget gate — xAI run cap
-            cap_raw: str = check_xai_run_cap(
-                run_batch_id=self.run_batch_id
-            )
+            cap_raw: str = check_xai_run_cap(run_batch_id=self.run_batch_id)
             cap_result: Dict[str, Any] = {}
             try:
                 cap_result = json.loads(cap_raw)
@@ -577,7 +576,7 @@ class MasterAgent:
                 self.logger.error(
                     "Analyser phase failed: %s", result.get("error", "unknown")
                 )
-                record_agent_error(
+                _record_agent_error(
                     agent_type="AnalyserAgent",
                     error_message=result.get("error", "analyser_run_failed"),
                     run_batch_id=self.run_batch_id,
@@ -590,7 +589,7 @@ class MasterAgent:
             # Store result in run state
             self._run_state["analyser"] = result
 
-            log_event(
+            _log_event(
                 run_batch_id=self.run_batch_id,
                 level="INFO",
                 event_type="analyser_phase_complete",
@@ -616,7 +615,7 @@ class MasterAgent:
             self.logger.error(
                 "Analyser phase unhandled exception: %s", exc, exc_info=True
             )
-            record_agent_error(
+            _record_agent_error(
                 agent_type="AnalyserAgent",
                 error_message=str(exc),
                 run_batch_id=self.run_batch_id,
@@ -684,9 +683,7 @@ class MasterAgent:
                 }
 
             # Budget gate — xAI run cap
-            cap_raw: str = check_xai_run_cap(
-                run_batch_id=self.run_batch_id
-            )
+            cap_raw: str = check_xai_run_cap(run_batch_id=self.run_batch_id)
             cap_result: Dict[str, Any] = {}
             try:
                 cap_result = json.loads(cap_raw)
@@ -754,7 +751,7 @@ class MasterAgent:
             applied_count: int = result.get("applied", 0)
             failed_count: int = result.get("failed", 0)
 
-            log_event(
+            _log_event(
                 run_batch_id=self.run_batch_id,
                 level="INFO",
                 event_type="apply_phase_complete",
@@ -785,7 +782,7 @@ class MasterAgent:
             self.logger.error(
                 "Apply phase unhandled exception: %s", exc, exc_info=True
             )
-            record_agent_error(
+            _record_agent_error(
                 agent_type="ApplyAgent",
                 error_message=str(exc),
                 run_batch_id=self.run_batch_id,
@@ -817,7 +814,7 @@ class MasterAgent:
             # Store result in run state
             self._run_state["tracker"] = result
 
-            log_event(
+            _log_event(
                 run_batch_id=self.run_batch_id,
                 level="INFO",
                 event_type="tracker_phase_complete",
@@ -882,7 +879,9 @@ class MasterAgent:
         # Get final Postgres stats
         run_stats: Dict[str, Any] = {}
         try:
-            raw_stats: str = get_run_stats(run_batch_id=self.run_batch_id)
+            raw_stats: str = get_run_stats.run(
+                json.dumps({"run_batch_id": self.run_batch_id})
+            )
             run_stats = json.loads(raw_stats)
         except Exception as exc:  # noqa: BLE001
             self.logger.warning(
@@ -997,21 +996,22 @@ class MasterAgent:
             returns a minimal dict with ``success=False`` and the error.
         """
         started_at: datetime = datetime.utcnow()
+        pipeline_aborted: bool = False
+        unhandled_exception: Optional[Exception] = None
+        report: Dict[str, Any] = {}
 
         try:
             # Step 1 — Boot system
             if not self._boot_system():
-                return {
-                    "success": False,
-                    "reason": "boot_failed",
-                    "run_batch_id": self.run_batch_id,
-                }
+                self._run_state["boot_failed"] = True
+                pipeline_aborted = True
+                raise RuntimeError("Boot failed — services unhealthy")
 
             # Step 2 — Create run session
             self._create_run_session()
 
             # Step 3 — Log pipeline start banner
-            log_event(
+            _log_event(
                 run_batch_id=self.run_batch_id,
                 level="INFO",
                 event_type="pipeline_start",
@@ -1030,8 +1030,6 @@ class MasterAgent:
             )
 
             # Step 4 — Execute phases based on mode
-            pipeline_aborted: bool = False
-
             if self.mode in ("full",):
                 # Full pipeline: scraper → analyser → apply → tracker
 
@@ -1067,25 +1065,74 @@ class MasterAgent:
                     self._run_apply_phase()
 
             elif self.mode == "scrape_only":
-                self._run_scraper_phase()
+                scraper_result = self._run_scraper_phase()
+                if scraper_result.get("aborted", False):
+                    pipeline_aborted = True
 
             elif self.mode == "analyse_only":
                 # Score jobs from previous run batch stored in DB
-                self._run_analyser_phase()
+                analyser_result = self._run_analyser_phase()
+                if analyser_result.get("aborted", False):
+                    pipeline_aborted = True
 
             elif self.mode == "apply_only":
                 # Apply phase loads routing manifest from DB
-                self._run_apply_phase()
+                apply_result = self._run_apply_phase()
+                if apply_result.get("aborted", False):
+                    pipeline_aborted = True
 
-            # Tracker phase — ALWAYS runs, never skipped
-            self._run_tracker_phase()
+        except Exception as exc:
+            unhandled_exception = exc
+            pipeline_aborted = True
+            self.logger.critical(
+                "Master Agent unhandled exception: %s", exc, exc_info=True
+            )
 
-            # Step 5 — Build final report
-            report: Dict[str, Any] = self._build_final_report(started_at)
-
-            # Step 6 — Update run batch stats
             try:
-                update_run_batch_stats(
+                _record_agent_error(
+                    agent_type="MasterAgent",
+                    error_message=str(exc),
+                    run_batch_id=self.run_batch_id,
+                    error_code="CRITICAL",
+                )
+            except Exception as record_exc:  # noqa: BLE001
+                self.logger.warning(
+                    "Failed to record agent error (non-critical): %s", record_exc
+                )
+
+        finally:
+            # Tracker phase — ALWAYS runs, never skipped
+            try:
+                self._run_tracker_phase()
+            except Exception as tracker_exc:  # noqa: BLE001
+                self.logger.error(
+                    "TrackerAgent failed in finally block: %s",
+                    tracker_exc,
+                    exc_info=True,
+                )
+
+            # Build final report after tracker (so tracker state is included)
+            try:
+                report = self._build_final_report(started_at)
+            except Exception as report_exc:  # noqa: BLE001
+                self.logger.error(
+                    "Failed to build final report: %s", report_exc, exc_info=True
+                )
+                report = {
+                    "success": False,
+                    "error": str(report_exc),
+                    "run_batch_id": self.run_batch_id,
+                }
+
+            if unhandled_exception is not None:
+                report["success"] = False
+                report["error"] = str(unhandled_exception)
+            elif pipeline_aborted and report.get("success", True):
+                report["success"] = False
+
+            # Update run batch stats
+            try:
+                _update_run_batch_stats(
                     run_batch_id=self.run_batch_id,
                     jobs_discovered=report["jobs_discovered"],
                     jobs_auto_applied=report["jobs_auto_applied"],
@@ -1096,62 +1143,43 @@ class MasterAgent:
                     "Failed to update run_batch_stats: %s", exc
                 )
 
-            # Step 7 — Log pipeline close banner
-            log_event(
-                run_batch_id=self.run_batch_id,
-                level="INFO",
-                event_type="pipeline_complete",
-                message=(
-                    f"=== PIPELINE COMPLETE "
-                    f"| applied={report['jobs_auto_applied']} "
-                    f"| queued={report['jobs_manual_queued']} "
-                    f"| cost=${report['total_cost_usd']:.4f} ==="
-                ),
-            )
+            # Log pipeline close banner
+            try:
+                _log_event(
+                    run_batch_id=self.run_batch_id,
+                    level="INFO",
+                    event_type="pipeline_complete",
+                    message=(
+                        f"=== PIPELINE COMPLETE "
+                        f"| applied={report.get('jobs_auto_applied', 0)} "
+                        f"| queued={report.get('jobs_manual_queued', 0)} "
+                        f"| cost=${float(report.get('total_cost_usd', 0.0)):.4f} ==="
+                    ),
+                )
+            except Exception as exc:  # noqa: BLE001
+                self.logger.warning(
+                    "Failed to log pipeline_complete event: %s", exc
+                )
 
             self.logger.info(
-                "=== PIPELINE COMPLETE | applied=%d | queued=%d "
-                "| cost=$%.4f ===",
-                report["jobs_auto_applied"],
-                report["jobs_manual_queued"],
-                report["total_cost_usd"],
+                "=== PIPELINE COMPLETE | applied=%d | queued=%d | cost=$%.4f ===",
+                int(report.get("jobs_auto_applied", 0)),
+                int(report.get("jobs_manual_queued", 0)),
+                float(report.get("total_cost_usd", 0.0)),
             )
 
             # Record run summary and end AgentOps session
             _record_run_summary(self.run_batch_id)
-            end_state: str = "Success" if report["success"] else "Fail"
+            end_state = "Success" if report.get("success") else "Fail"
             _end_agentops_session(self.run_batch_id, end_state)
 
-            # Step 8 — Write JSON report to logs/
-            self._write_run_report(report)
-
-            # Step 9 — Return report
-            return report
-
-        except Exception as exc:
-            self.logger.critical(
-                "Master Agent unhandled exception: %s", exc, exc_info=True
-            )
-
-            record_agent_error(
-                agent_type="MasterAgent",
-                error_message=str(exc),
-                run_batch_id=self.run_batch_id,
-                error_code="CRITICAL",
-            )
-
-            # Always attempt tracker even on crash
+            # Write JSON report to logs/
             try:
-                self._run_tracker_phase()
-                _end_agentops_session(self.run_batch_id, "Fail")
-            except Exception:  # noqa: BLE001
-                pass
+                self._write_run_report(report)
+            except Exception as exc:  # noqa: BLE001
+                self.logger.warning("Failed to write run report: %s", exc)
 
-            return {
-                "success": False,
-                "error": str(exc),
-                "run_batch_id": self.run_batch_id,
-            }
+        return report
 
     # ------------------------------------------------------------------
     # Class method: CLI convenience constructor

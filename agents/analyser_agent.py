@@ -99,7 +99,9 @@ def _provider_from_model(model: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+@agentops.track_agent(name="AnalyserAgent")
 @agent
+@agentops.track_agent(name="AnalyserAgent")
 class AnalyserAgent:
     """
     CrewAI Analyser Agent — eligibility filter, RAG resume matching, routing.
@@ -895,7 +897,7 @@ class AnalyserAgent:
         Build the CrewAI Agent instance for the analyser pass.
 
         Returns:
-            Configured ``crewai.Agent`` using the currently active LLM
+            Configured ``Agent`` using the currently active LLM
             (may be primary or a fallback after ``_switch_to_fallback``).
         """
         return Agent(
@@ -943,7 +945,7 @@ class AnalyserAgent:
             jobs: List of job post dicts fetched from ``_get_jobs_for_run``.
 
         Returns:
-            Configured ``crewai.Task`` ready for crew execution.
+            Configured ``Task`` ready for crew execution.
         """
         jobs_json_str: str
         try:

@@ -80,7 +80,9 @@ def _load_platform_config() -> Dict[str, Any]:
     return _platform_config
 
 
+@agentops.track_agent(name="ScraperAgent")
 @agent
+@agentops.track_agent(name="ScraperAgent")
 class ScraperAgent:
     """
     CrewAI Scraper Agent for job discovery.
@@ -246,7 +248,7 @@ IMPORTANT:
             with open(user_profile_path, "r", encoding="utf-8") as f:
                 user_profile = json.load(f)
             custom_queries: List[str] = (
-                user_profile.get("job_preferences", {}).get("target_titles", [])
+                user_profile.get("job_preferences", {}).get("search_queries", [])
             )
             if custom_queries:
                 search_queries = custom_queries

@@ -28,7 +28,7 @@ import agentops
 from agentops.sdk.decorators import agent, operation
 import psycopg2
 import psycopg2.extras
-from crewai import Agent, Crew, Process, Task
+from crewai import Agent, Task, Crew, Process
 
 from config.settings import db_config
 from integrations.llm_interface import LLMInterface
@@ -42,6 +42,7 @@ from tools.notion_tools import (
 from tools.postgres_tools import (
     get_run_stats,
     log_event,
+    _log_event,
     update_run_batch_stats,
 )
 from utils.db_utils import get_db_conn
@@ -106,7 +107,9 @@ def _end_agentops_session(end_state: str = "Success") -> bool:
 # TrackerAgent
 # ---------------------------------------------------------------------------
 
+@agentops.track_agent(name="TrackerAgent")
 @agent
+@agentops.track_agent(name="TrackerAgent")
 class TrackerAgent:
     """Final pipeline agent: Notion sync, AgentOps summary, run-session close.
 
@@ -374,7 +377,7 @@ If some Notion syncs failed, include them in the "errors" list as strings.
         """
         # Step 1 — log start
         try:
-            log_event(
+            _log_event(
                 run_batch_id=self.run_batch_id,
                 level="INFO",
                 event_type="tracker_run_start",
@@ -458,7 +461,7 @@ If some Notion syncs failed, include them in the "errors" list as strings.
 
             # Step 6 — log completion
             try:
-                log_event(
+                _log_event(
                     run_batch_id=self.run_batch_id,
                     level="INFO",
                     event_type="tracker_run_complete",
