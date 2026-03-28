@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Dict, Any
+from typing import Dict, Any, Union, Optional
 
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
@@ -31,6 +31,7 @@ from auto_apply.platforms.base_platform import (
 logger = logging.getLogger(__name__)
 
 __all__ = ["GreenhouseApply"]
+
 
 
 # ---------------------------------------------------------------------------
@@ -103,12 +104,18 @@ class GreenhouseApply(BasePlatformApply):
     PLATFORM_NAME: str = "greenhouse"
     STEPS_TOTAL: int = 3
 
-    async def apply(self) -> ApplyResult:
+    async def apply(
+        self,
+        job_url: Optional[str] = None,
+        profile: Optional[Dict[str, Any]] = None,
+    ) -> Union[ApplyResult, Dict[str, Any]]:
         """Execute the full Greenhouse application flow.
 
         Returns:
             ApplyResult with outcome, proof, and routing decision.
         """
+        job_url = job_url or self.job_meta.get("url", self.job_meta.get("job_url", ""))
+        profile = profile or self.user_profile
         # ── Step 1: Navigate + Verify ATS ──
         result = await self._step_navigate_and_verify()
         if result is not None:
@@ -330,15 +337,22 @@ class GreenhouseApply(BasePlatformApply):
             # Dry-run: skip submit
             if self.dry_run:
                 self.logger.info(
-                    "[DRY_RUN] Would submit Greenhouse form for %s",
-                    self.job_meta.get("job_url", ""),
+                    "[%s] DRY_RUN=True — submit BLOCKED",
+                    self.__class__.__name__,
                 )
-                self.steps_completed = 3
-                return self._build_result(
-                    success=True,
+                return ApplyResult(
+                    success=False,
                     proof_type="none",
-                    proof_value="DRY_RUN",
-                    proof_confidence=1.0,
+                    proof_value=None,
+                    proof_confidence=0.0,
+                    error_code="DRY_RUN",
+                    reroute_to_manual=False,
+                    reroute_reason="",
+                    steps_completed=self.steps_completed,
+                    steps_total=3,
+                    platform="greenhouse",
+                    job_url=self.job_meta.get("url", ""),
+                    dry_run_stopped=True,
                 )
 
             # CAPTCHA check before submit
@@ -443,3 +457,5 @@ class GreenhouseApply(BasePlatformApply):
                 reroute_to_manual=True,
                 reroute_reason=f"Submit error: {str(e)}",
             )
+
+GreenhousePlatform = GreenhouseApply

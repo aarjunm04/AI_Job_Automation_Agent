@@ -83,7 +83,6 @@ class ApplyError:
 # ---------------------------------------------------------------------------
 
 
-@agentops.track_agent(name="BasePlatformApply")
 class BasePlatformApply(ABC):
     """Abstract base for all ATS-specific Playwright apply modules.
 
@@ -106,20 +105,19 @@ class BasePlatformApply(ABC):
 
     def __init__(
         self,
-        page: Page,
-        job_meta: Dict[str, Any],
-        user_profile: Dict[str, Any],
+        page: Optional["Page"] = None,
+        job_meta: Optional[Dict[str, Any]] = None,
+        user_profile: Optional[Dict[str, Any]] = None,
         dry_run: bool = False,
     ) -> None:
+        # logger MUST be first — everything else may raise
+        self.logger = logging.getLogger(f"{__name__}.{self.__class__.__name__}")
         self.page = page
-        self.job_meta = job_meta
-        self.user_profile = user_profile
-        self.dry_run = dry_run
+        self.job_meta = job_meta or {}
+        self.user_profile = user_profile or {}
+        self.dry_run = dry_run or os.getenv("DRY_RUN", "false").lower() == "true"
         self.steps_completed: int = 0
-        self.resume_path: str = self._resolve_resume_path()
-        self.logger = logging.getLogger(
-            f"{__name__}.{self.__class__.__name__}"
-        )
+        self.resume_path: str = self._resolve_resume_path() if page else ""
 
     # ------------------------------------------------------------------
     # Resume Resolution
@@ -137,7 +135,7 @@ class BasePlatformApply(ABC):
             Absolute path string. Empty string if DEFAULT_RESUME is unset
             and no PDF can be found — the upload step will handle the error.
         """
-        resume_dir: str = os.getenv("RESUME_DIR", "app/resumes")
+        resume_dir: str = os.getenv("RESUME_DIR", "/app/resumes")
         default_resume: str = os.getenv("DEFAULT_RESUME", "")
 
         # Priority 1: job_meta suggested resume, resolved inside RESUME_DIR
@@ -540,3 +538,5 @@ class BasePlatformApply(ABC):
             ApplyResult with outcome, proof, and routing decision.
         """
         ...
+
+BasePlatform = BasePlatformApply

@@ -114,7 +114,11 @@ class NativeFormApply(BasePlatformApply):
 
     CONFIDENCE_THRESHOLD: float = 0.60
 
-    async def apply(self) -> ApplyResult:
+    async def apply(
+        self,
+        job_url: Optional[str] = None,
+        profile: Optional[Dict[str, Any]] = None,
+    ) -> Union[ApplyResult, Dict[str, Any]]:
         """Best-effort native HTML form fill and submit.
 
         Detects form fields, maps to user profile via keyword matching,
@@ -127,6 +131,8 @@ class NativeFormApply(BasePlatformApply):
             ``CONFIDENCE_THRESHOLD`` or if submit confirmation cannot
             be captured.
         """
+        job_url = job_url or self.job_meta.get("url", self.job_meta.get("job_url", ""))
+        profile = profile or self.user_profile
         self.steps_completed = 0
 
         # ── Step 1: Navigate + Detect form ──
@@ -803,3 +809,5 @@ class NativeFormApply(BasePlatformApply):
                 f"proof found. Final URL: {current_url}"
             ),
         )
+
+NativeFormPlatform = NativeFormApply

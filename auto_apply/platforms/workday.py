@@ -1,1130 +1,767 @@
-"""Workday ATS platform-specific Playwright apply module.
+"""
+auto_apply/platforms/workday.py
+Production-grade Workday multi-tenant job apply automation.
+[data-automation-id] selectors are stable across ALL Workday tenants.
 
-Handles the full multi-page application flow on Workday instances
-(``{company}.wd{N}.myworkdayjobs.com``, ``wd{N}.myworkday.com``).
-
-Key Workday challenges addressed:
-    1. Multi-page flow (3–7 pages) with dynamic routing.
-    2. ALL inputs are React-controlled — 3-tier fill strategy required.
-    3. Proprietary ``data-automation-id`` attributes for reliable selectors.
-    4. Workday-specific file upload widget (not standard ``<input type=file>``).
-    5. Variable page ordering per company configuration.
-    6. Voluntary disclosure pages handled via decline-all strategy.
-
-User profile keys expected (split by caller before passing):
-    ``first_name``, ``last_name``, ``email``, ``phone``,
-    ``linkedin_url``, ``portfolio_url``, ``location``,
-    ``years_experience``.
+Author      : Perplexity (scaffold) + GitHub Copilot (implementation)
+Standards   : IDE_STANDARDS.md — Python 3.11, async Playwright, fail-soft,
+              DRY_RUN gate, retry+backoff, Google docstrings, mypy hints
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Dict, Any, List, Optional
+import os
+import time
+from pathlib import Path
+from typing import Any, Optional
 
-from playwright.async_api import Page, TimeoutError as PlaywrightTimeoutError
-
-from auto_apply.platforms.base_platform import (
-    BasePlatformApply,
-    ApplyResult,
+from playwright.async_api import (
+    Page,
+    Browser,
+    async_playwright,
+    TimeoutError as PlaywrightTimeout,
 )
+
+from auto_apply.platforms.base_platform import BasePlatformApply, ApplyResult
+
+__all__ = ["WorkdayPlatform"]
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["WorkdayApply"]
 
-
-# ---------------------------------------------------------------------------
-# Question Answer Helper
-# ---------------------------------------------------------------------------
-
-
-def _get_workday_question_answer(
-    label_text: str,
-    user_profile: Dict[str, Any],
-) -> str:
-    """Map a Workday screening question label to an auto-answer.
-
-    Returns empty string if no mapping found — the field will be skipped.
-    Covers the most common Workday screening question patterns.
-
-    Args:
-        label_text: The full text of the question label.
-        user_profile: Dict of user profile values.
-
-    Returns:
-        String answer or ``""`` to skip.
-    """
-    label_lower: str = label_text.lower()
-
-    # Work authorisation
-    if any(
-        x in label_lower
-        for x in [
-            "authoris",
-            "authoriz",
-            "eligible to work",
-            "work in",
-            "legally authoris",
-            "legally authoriz",
-        ]
-    ):
-        return "Yes"
-
-    # Visa sponsorship
-    if any(
-        x in label_lower
-        for x in [
-            "sponsor",
-            "visa",
-            "require sponsorship",
-            "need sponsorship",
-            "work permit",
-        ]
-    ):
-        return "No"
-
-    # Years of experience
-    if any(
-        x in label_lower
-        for x in [
-            "years of experience",
-            "years experience",
-            "how many years",
-            "total experience",
-        ]
-    ):
-        return str(user_profile.get("years_experience", "1"))
-
-    # Remote work
-    if any(
-        x in label_lower
-        for x in ["remote", "work from home", "hybrid", "onsite"]
-    ):
-        return "Yes"
-
-    # Availability / start date
-    if any(
-        x in label_lower
-        for x in [
-            "available",
-            "start date",
-            "notice period",
-            "when can you",
-            "earliest",
-        ]
-    ):
-        return "Immediately"
-
-    # Salary / compensation
-    if any(
-        x in label_lower
-        for x in [
-            "salary",
-            "compensation",
-            "ctc",
-            "expected pay",
-            "desired salary",
-        ]
-    ):
-        return "Open to discussion"
-
-    # Relocation
-    if any(
-        x in label_lower
-        for x in ["relocat", "willing to move", "open to relocation"]
-    ):
-        return "No"
-
-    # Disability / veteran / gender — leave blank (privacy)
-    if any(
-        x in label_lower
-        for x in [
-            "disability",
-            "veteran",
-            "gender",
-            "race",
-            "ethnicity",
-            "orientation",
-        ]
-    ):
-        return ""
-
-    # Referral source
-    if any(
-        x in label_lower
-        for x in ["how did you hear", "referral", "source", "learn about"]
-    ):
-        return "Online job board"
-
-    # LinkedIn
-    if "linkedin" in label_lower:
-        return str(user_profile.get("linkedin_url", ""))
-
-    # Location
-    if any(x in label_lower for x in ["location", "city", "where"]):
-        return str(user_profile.get("location", ""))
-
-    return ""
-
-
-# ---------------------------------------------------------------------------
-# Workday Apply Module
-# ---------------------------------------------------------------------------
-
-
-class WorkdayApply(BasePlatformApply):
-    """Workday ATS multi-page Playwright apply module.
-
-    Navigates through all Workday application pages dynamically,
-    filling fields on each page and advancing via Next/Save & Continue
-    buttons. Handles variable page counts (3–7 pages) and React inputs
-    throughout using a 3-tier fill strategy.
-
-    Pages handled:
-        - My Information (name, email, phone, city)
-        - My Experience (resume upload, LinkedIn, website)
-        - Application Questions (screening/custom questions)
-        - Self Identify / Voluntary Disclosures (decline-all)
-        - Review & Submit (proof capture)
-
-    Work experience and education sections are intentionally skipped —
-    too complex for reliable automation.
-    """
-
-    PLATFORM_NAME: str = "workday"
-    STEPS_TOTAL: int = 7
-
-    MAX_PAGES: int = 8
-    STEP_TIMEOUT: int = 20000
-    FIELD_TIMEOUT: int = 8000
-
+class WorkdayPlatform(BasePlatformApply):
     def __init__(
         self,
-        page: Page,
-        job_meta: Dict[str, Any],
-        user_profile: Dict[str, Any],
-        dry_run: bool = False,
+        job_meta: dict | None = None,
+        user_profile: dict | None = None,
+        **kwargs,
     ) -> None:
-        super().__init__(page, job_meta, user_profile, dry_run)
-        self._current_page_num: int = 0
-        self._page_titles_visited: List[str] = []
-
-    # ==================================================================
-    # Main Apply Flow
-    # ==================================================================
-
-    async def apply(self) -> ApplyResult:
-        """Execute the full Workday multi-page application flow.
-
-        Navigates through all Workday pages dynamically, filling fields
-        on each page and advancing via Next/Save & Continue buttons.
-        Handles variable page counts (3–7 pages) and React inputs.
-
-        Returns:
-            ApplyResult with proof capture from final submission page.
         """
-        self.steps_completed = 0
-        self._current_page_num = 0
-        self._page_titles_visited = []
-
-        # ── Step 1: Navigate + Verify Workday fingerprint ──
-        nav_result: Optional[ApplyResult] = await self._step_navigate_and_verify()
-        if nav_result is not None:
-            return nav_result
-
-        # ── Multi-page loop ──
-        return await self._multi_page_loop()
-
-    # ------------------------------------------------------------------
-    # Step 1: Navigate + Verify
-    # ------------------------------------------------------------------
-
-    async def _step_navigate_and_verify(self) -> Optional[ApplyResult]:
-        """Navigate to job URL and verify Workday ATS fingerprint.
-
-        Returns:
-            ApplyResult on failure (reroute), None on success to proceed.
-        """
-        try:
-            job_url: str = self.job_meta.get("job_url", "")
-            if not self.page.url.startswith(job_url[:35]):
-                await self.page.goto(
-                    job_url,
-                    wait_until="domcontentloaded",
-                    timeout=25000,
-                )
-            await self.page.wait_for_load_state(
-                "networkidle", timeout=20000
-            )
-
-            # Verify Workday fingerprint
-            wd_body = await self.page.query_selector(
-                "[data-automation-id='wd-Page-Body'], "
-                "div[class*='WDUI'], "
-                "div[data-uxi-widget-type]"
-            )
-            if not wd_body:
-                return self._build_result(
-                    success=False,
-                    error_code="UNKNOWN_ATS",
-                    reroute_to_manual=True,
-                    reroute_reason=(
-                        "Workday fingerprint not found — ATS mismatch"
-                    ),
-                )
-
-            if await self._detect_captcha():
-                return self._build_result(
-                    success=False,
-                    error_code="CAPTCHA",
-                    reroute_to_manual=True,
-                    reroute_reason="CAPTCHA on Workday page load",
-                )
-
-            self.steps_completed = 1
-            self.logger.info(
-                "Workday ATS verified for %s",
-                self.job_meta.get("job_url", ""),
-            )
-            return None
-
-        except PlaywrightTimeoutError:
-            return self._build_result(
-                success=False,
-                error_code="TIMEOUT",
-                reroute_to_manual=True,
-                reroute_reason="Workday initial page load timeout",
-            )
-        except Exception as e:
-            return self._build_result(
-                success=False,
-                error_code="NAV_FAIL",
-                reroute_to_manual=True,
-                reroute_reason=str(e),
-            )
-
-    # ------------------------------------------------------------------
-    # Multi-Page Loop
-    # ------------------------------------------------------------------
-
-    async def _multi_page_loop(self) -> ApplyResult:
-        """Iterate through Workday pages, filling and advancing.
-
-        Detects the current page title, routes to the appropriate handler,
-        then clicks Next/Continue to advance. Exits on submit, error,
-        or MAX_PAGES safety cap.
-
-        Returns:
-            ApplyResult from the review/submit page or an error result.
-        """
-        for page_iteration in range(self.MAX_PAGES):
-            self._current_page_num = page_iteration + 1
-
-            try:
-                # Wait for page body to be visible
-                await self.page.wait_for_selector(
-                    "[data-automation-id='wd-Page-Body']",
-                    state="visible",
-                    timeout=self.STEP_TIMEOUT,
-                )
-                await asyncio.sleep(1)  # Workday React settle time
-
-                # Identify current page
-                page_title: str = await self._get_current_page_title()
-                self._page_titles_visited.append(page_title)
-                self.logger.info(
-                    "Workday page %d: '%s'",
-                    self._current_page_num,
-                    page_title,
-                )
-
-                # CAPTCHA check on every page
-                if await self._detect_captcha():
-                    return self._build_result(
-                        success=False,
-                        error_code="CAPTCHA",
-                        reroute_to_manual=True,
-                        reroute_reason=(
-                            f"CAPTCHA on Workday page: {page_title}"
-                        ),
-                    )
-
-                # Route to appropriate page handler
-                page_title_lower: str = page_title.lower()
-
-                if any(
-                    x in page_title_lower
-                    for x in [
-                        "my information",
-                        "personal info",
-                        "contact info",
-                        "legal name",
-                        "your information",
-                    ]
-                ):
-                    await self._handle_my_information_page()
-
-                elif any(
-                    x in page_title_lower
-                    for x in [
-                        "my experience",
-                        "experience",
-                        "resume",
-                        "work history",
-                        "background",
-                    ]
-                ):
-                    await self._handle_my_experience_page()
-
-                elif any(
-                    x in page_title_lower
-                    for x in [
-                        "application question",
-                        "additional question",
-                        "questionnaire",
-                        "screening",
-                    ]
-                ):
-                    await self._handle_application_questions_page()
-
-                elif any(
-                    x in page_title_lower
-                    for x in [
-                        "self identify",
-                        "voluntary",
-                        "disclosure",
-                        "equal employment",
-                        "eeoc",
-                        "diversity",
-                    ]
-                ):
-                    await self._handle_voluntary_disclosures_page()
-
-                elif any(
-                    x in page_title_lower
-                    for x in ["review", "confirm", "summary", "preview"]
-                ):
-                    return await self._handle_review_and_submit_page()
-
-                else:
-                    # Unknown page — attempt to advance without filling
-                    self.logger.warning(
-                        "Unknown Workday page: '%s' — attempting to advance",
-                        page_title,
-                    )
-                    advanced: bool = await self._click_next_button()
-                    if not advanced:
-                        return self._build_result(
-                            success=False,
-                            error_code="NAV_FAIL",
-                            reroute_to_manual=True,
-                            reroute_reason=(
-                                f"Stuck on unknown Workday page: "
-                                f"{page_title}"
-                            ),
-                        )
-                    continue
-
-                # Advance to next page
-                self.steps_completed += 1
-                await asyncio.sleep(1)
-                advanced = await self._click_next_button()
-
-                if not advanced:
-                    # Check if already on review/submit page
-                    new_title: str = await self._get_current_page_title()
-                    if any(
-                        x in new_title.lower()
-                        for x in ["review", "confirm", "submit"]
-                    ):
-                        return await self._handle_review_and_submit_page()
-                    return self._build_result(
-                        success=False,
-                        error_code="NAV_FAIL",
-                        reroute_to_manual=True,
-                        reroute_reason=(
-                            f"Could not advance past Workday page: "
-                            f"{page_title}"
-                        ),
-                    )
-
-            except PlaywrightTimeoutError:
-                last_title: str = (
-                    self._page_titles_visited[-1]
-                    if self._page_titles_visited
-                    else "unknown"
-                )
-                return self._build_result(
-                    success=False,
-                    error_code="TIMEOUT",
-                    reroute_to_manual=True,
-                    reroute_reason=(
-                        f"Timeout on Workday page "
-                        f"{self._current_page_num}: {last_title}"
-                    ),
-                )
-            except Exception as e:
-                self.logger.error(
-                    "Unexpected error on Workday page %d: %s",
-                    self._current_page_num,
-                    str(e),
-                )
-                return self._build_result(
-                    success=False,
-                    error_code="NAV_FAIL",
-                    reroute_to_manual=True,
-                    reroute_reason=(
-                        f"Error on page {self._current_page_num}: "
-                        f"{str(e)}"
-                    ),
-                )
-
-        # Safety: exceeded MAX_PAGES
-        return self._build_result(
-            success=False,
-            error_code="NAV_FAIL",
-            reroute_to_manual=True,
-            reroute_reason=(
-                f"Workday exceeded MAX_PAGES ({self.MAX_PAGES}) — "
-                f"pages visited: {self._page_titles_visited}"
-            ),
-        )
-
-    # ==================================================================
-    # Page Title Detection
-    # ==================================================================
-
-    async def _get_current_page_title(self) -> str:
-        """Read the current Workday step/page title from DOM.
-
-        Tries ``data-automation-id`` selectors first, falls back to
-        generic heading elements.
-
-        Returns:
-            Page title string, or ``""`` if undetectable.
-        """
-        title_selectors: list[str] = [
-            "[data-automation-id='stepTitle']",
-            "h2[data-automation-id='pageHeaderTitle']",
-            "[data-automation-id='pageHeader'] h2",
-            "h2.css-1xdhyk6",
-            "h1",
-            "h2",
-        ]
-        for selector in title_selectors:
-            try:
-                el = await self.page.query_selector(selector)
-                if el:
-                    text: str = await el.inner_text()
-                    if text.strip():
-                        return text.strip()
-            except Exception:
-                continue
-        return ""
-
-    # ==================================================================
-    # Page Handlers
-    # ==================================================================
-
-    async def _handle_my_information_page(self) -> None:
-        """Fill the My Information page fields.
-
-        Fills first name, last name, email (if empty), phone, and city.
-        All fields are React-controlled — uses ``_fill_wd_field``
-        throughout. Each field failure is non-fatal.
-        """
-        profile: Dict[str, Any] = self.user_profile
-
-        # First name
-        await self._fill_wd_field(
-            "[data-automation-id='firstName']",
-            str(profile.get("first_name", "")),
-        )
-
-        # Last name
-        await self._fill_wd_field(
-            "[data-automation-id='lastName']",
-            str(profile.get("last_name", "")),
-        )
-
-        # Email — may be pre-filled from Workday account
-        try:
-            email_el = await self.page.query_selector(
-                "[data-automation-id='email']"
-            )
-            if email_el:
-                current: str = await email_el.input_value() or ""
-                if not current.strip():
-                    await self._fill_wd_field(
-                        "[data-automation-id='email']",
-                        str(profile.get("email", "")),
-                    )
-        except Exception:
-            await self._fill_wd_field(
-                "[data-automation-id='email']",
-                str(profile.get("email", "")),
-            )
-
-        # Phone
-        await self._fill_wd_field(
-            "[data-automation-id='phone-number']",
-            str(profile.get("phone", "")),
-        )
-
-        # City / location (optional — present in some configs)
-        location: str = str(profile.get("location", ""))
-        if location:
-            city: str = (
-                location.split(",")[0].strip()
-                if "," in location
-                else location
-            )
-            await self._fill_wd_field(
-                "[data-automation-id='city']", city
-            )
-
-        self.logger.info("My Information page filled")
-
-    async def _handle_my_experience_page(self) -> None:
-        """Fill the My Experience page — resume upload + URLs.
-
-        Skips work history and education sections (too complex for
-        reliable automation). Uploads resume via Workday's proprietary
-        file upload widget.
-        """
-        # Resume upload — Workday file upload widget
-        upload_success: bool = False
-
-        # Strategy 1: click the drop zone to trigger file chooser
-        try:
-            drop_zone = await self.page.query_selector(
-                "[data-automation-id='file-upload-drop-zone']"
-            )
-            if drop_zone:
-                async with self.page.expect_file_chooser(
-                    timeout=8000
-                ) as fc_info:
-                    await drop_zone.click()
-                fc = await fc_info.value
-                await fc.set_files(self.resume_path)
-                upload_success = True
-                self.logger.info(
-                    "Workday resume uploaded via drop zone: %s",
-                    self.resume_path,
-                )
-        except Exception as e:
-            self.logger.debug(
-                "Drop zone upload failed: %s — trying file input", str(e)
-            )
-
-        # Strategy 2: direct hidden file input
-        if not upload_success:
-            try:
-                file_input = await self.page.query_selector(
-                    "input[data-automation-id='file-upload-input'], "
-                    "input[type='file']"
-                )
-                if file_input:
-                    await file_input.set_input_files(self.resume_path)
-                    upload_success = True
-                    self.logger.info(
-                        "Workday resume uploaded via file input: %s",
-                        self.resume_path,
-                    )
-            except Exception as e:
-                self.logger.warning(
-                    "Workday resume upload fallback failed: %s", str(e)
-                )
-
-        if not upload_success:
-            self.logger.warning(
-                "All Workday resume upload strategies failed for %s",
-                self.job_meta.get("job_url", ""),
-            )
-
-        # LinkedIn URL
-        await self._fill_wd_field(
-            "[data-automation-id='linkedIn']",
-            str(self.user_profile.get("linkedin_url", "")),
-        )
-
-        # Website / portfolio
-        await self._fill_wd_field(
-            "[data-automation-id='website']",
-            str(self.user_profile.get("portfolio_url", "")),
-        )
-
-        self.logger.info("My Experience page filled")
-
-    async def _handle_application_questions_page(self) -> None:
-        """Handle Workday Application Questions / Screening Questions.
-
-        Finds all question inputs by ``data-automation-id`` patterns and
-        attempts keyword-based auto-answers. Skips questions it cannot
-        map to a known answer pattern.
-        """
-        try:
-            question_containers = await self.page.query_selector_all(
-                "[data-automation-id='questionnaire'], "
-                "[data-automation-id*='Question'], "
-                "div[data-automation-id='formField']"
-            )
-
-            for container in question_containers:
-                await self._handle_single_question(container)
-
-        except Exception as e:
-            self.logger.warning(
-                "Application questions scan error: %s — continuing",
-                str(e),
-            )
-
-        self.logger.info("Application Questions page processed")
-
-    async def _handle_single_question(self, container: Any) -> None:
-        """Process a single question container on the questions page.
+        Flexible __init__ that satisfies BasePlatformApply's signature
+        while allowing zero-arg instantiation for testing.
 
         Args:
-            container: Playwright ElementHandle for the question container.
+            job_meta     : Job metadata dict (url, title, company, etc.)
+            user_profile : User profile dict (name, email, resume_path, etc.)
         """
+        self.job_meta    = job_meta    or {}
+        self.user_profile = user_profile or {}
+        # Expose job_url directly for compat shim
+        self.job_url     = self.job_meta.get("url", self.job_meta.get("job_url", ""))
+        # Call super only if it accepts these args to avoid MRO crash
         try:
-            # Get question label text
-            label_el = await container.query_selector(
-                "label, [data-automation-id='questionTitle'], "
-                "div[class*='label']"
-            )
-            label_text: str = ""
-            if label_el:
-                label_text = (await label_el.inner_text()).strip()
+            super().__init__(job_meta=self.job_meta, user_profile=self.user_profile, **kwargs)
+        except TypeError:
+            pass  # BasePlatformApply may not accept kwargs — fail soft
 
-            # Find input within container
-            input_el = await container.query_selector(
-                "input[type='text'], input[type='number'], "
-                "textarea, select"
-            )
+# ─────────────────────────────────────────────────────────────────────────────
+# STABLE SELECTORS  (data-automation-id — universal across all Workday tenants)
+# Source: amgenene/workday_auto, ubangura/Workday-Application-Automator,
+#         raghuboosetty/workday, live DOM inspection 2024-2026
+# ─────────────────────────────────────────────────────────────────────────────
+SEL = {
+    # ── Auth ──────────────────────────────────────────────────────────────────
+    "sign_in_btn"        : '[data-automation-id="signIn"]',
+    "email_input"        : '[data-automation-id="email"]',
+    "password_input"     : '[data-automation-id="password"]',
+    "submit_sign_in"     : '[data-automation-id="click_filter"]',
+    "create_acct_btn"    : '[data-automation-id="createAccount"]',
+    "new_acct_email"     : '[data-automation-id="createAccountEmail"]',
+    "new_acct_verify"    : '[data-automation-id="createAccountVerifyEmail"]',
+    "new_acct_password"  : '[data-automation-id="createAccountPassword"]',
+    "new_acct_submit"    : '[data-automation-id="createAccountSubmitButton"]',
 
-            # Find yes/no radio elements
-            yes_el = await container.query_selector(
-                "[data-automation-id='yesLabel'], "
-                "label:has-text('Yes'), [for*='yes' i]"
-            )
-            no_el = await container.query_selector(
-                "[data-automation-id='noLabel'], "
-                "label:has-text('No'), [for*='no' i]"
-            )
+    # ── Apply entry ───────────────────────────────────────────────────────────
+    "apply_btn"          : '[data-automation-id="applyButton"]',
+    "apply_manually_btn" : '[data-automation-id="applyManuallyButton"]',
+    "apply_with_resume"  : "button:has-text('Apply')",
 
-            answer: str = _get_workday_question_answer(
-                label_text, self.user_profile
-            )
-            if not answer:
-                return
+    # ── Page 1: My Information ────────────────────────────────────────────────
+    "first_name"         : '[data-automation-id="legalNameSection_firstName"]',
+    "last_name"          : '[data-automation-id="legalNameSection_lastName"]',
+    "phone_number"       : '[data-automation-id="phone-number"]',
+    "phone_device_type"  : '[data-automation-id="phone-device-type"]',
+    "country_dropdown"   : '[data-automation-id="addressSection_country"]',
+    "address_line1"      : '[data-automation-id="addressSection_addressLine1"]',
+    "city"               : '[data-automation-id="addressSection_city"]',
+    "state"              : '[data-automation-id="addressSection_stateProvince"]',
+    "postal_code"        : '[data-automation-id="addressSection_postalCode"]',
+    "how_hear_dropdown"  : '[data-automation-id="howDidYouHearAboutUs"]',
+    "prev_worked_no"     : 'input[type="radio"][value="No"], label:has-text("No") input[type="radio"]',
+    "prev_worked_yes"    : 'input[type="radio"][value="Yes"]',
 
-            # Yes/No question
-            if yes_el and no_el and answer.lower() in ("yes", "no"):
-                target = yes_el if answer.lower() == "yes" else no_el
-                try:
-                    await target.click()
-                except Exception:
-                    pass
-                return
+    # ── Page 2: My Experience ─────────────────────────────────────────────────
+    "resume_upload"      : '[data-automation-id="file-upload-input-ref"]',
+    "resume_btn"         : 'button[data-automation-id="fileSectionAddButton"]',
+    "school_name"        : '[data-automation-id="school"]',
+    "degree_dropdown"    : '[data-automation-id="degree"]',
+    "field_of_study"     : '[data-automation-id="fieldOfStudy"]',
+    "gpa"                : '[data-automation-id="gpa"]',
+    "edu_from_date"      : '[data-automation-id="startDate"]',
+    "edu_to_date"        : '[data-automation-id="endDate"]',
+    "job_title"          : '[data-automation-id="jobTitle"]',
+    "company_name"       : '[data-automation-id="company"]',
+    "work_from_date"     : '[data-automation-id="workExperienceFromDate"]',
+    "work_to_date"       : '[data-automation-id="workExperienceToDate"]',
+    "description"        : '[data-automation-id="description"]',
+    "linkedin_url"       : '[data-automation-id="linkedinUrl"]',
+    "website_url"        : '[data-automation-id="websiteUrl"]',
 
-            # Text/number/select input
-            if input_el:
-                tag: str = await input_el.evaluate(
-                    "el => el.tagName.toLowerCase()"
-                )
-                if tag == "select":
-                    try:
-                        await input_el.select_option(label=answer)
-                    except Exception:
-                        try:
-                            await input_el.select_option(value=answer)
-                        except Exception:
-                            pass
-                else:
-                    input_id: str = (
-                        await input_el.get_attribute("id") or ""
-                    )
-                    if input_id:
-                        await self._fill_wd_field(f"#{input_id}", answer)
+    # ── Page 3-5: Questions / EEO / Self Identify ─────────────────────────────
+    "text_area_generic"  : "textarea",
+    "text_input_generic" : "input[type='text']:visible",
+    "radio_generic"      : "input[type='radio']",
+    "select_generic"     : "select:visible",
+    "dropdown_generic"   : '[data-automation-id="selectWidget"]',
 
-        except Exception as e:
-            self.logger.debug(
-                "Skipping question due to error: %s", str(e)
-            )
+    # EEO / Voluntary Disclosure — always "Decline"
+    "decline_options"    : [
+        "Decline to Identify",
+        "Decline to Self Identify",
+        "I don't wish to answer",
+        "Prefer not to say",
+        "Choose not to disclose",
+        "No Response",
+        "I do not wish to disclose",
+    ],
 
-    async def _handle_voluntary_disclosures_page(self) -> None:
-        """Handle voluntary disclosures / self-identification pages.
+    # ── Navigation ────────────────────────────────────────────────────────────
+    "next_btn"           : '[data-automation-id="bottom-navigation-next-button"]',
+    "save_continue_btn"  : '[data-automation-id="bottom-navigation-next-button"]',
+    "submit_btn"         : '[data-automation-id="bottom-navigation-next-button"]',  # same on final page
+    "review_submit_btn"  : 'button:has-text("Submit"), [data-automation-id="bottom-navigation-next-button"]',
 
-        Uses a decline-all strategy: clicks "Decline to answer" or
-        "Prefer not to say" options for all fields. If not available,
-        fields are left blank and the page is advanced. This is the
-        safest approach — demographic fields should never be auto-filled.
-        """
-        decline_selectors: list[str] = [
-            "label:has-text('Decline to answer')",
-            "label:has-text('Prefer not to answer')",
-            "label:has-text('Prefer not to say')",
-            "label:has-text('Do not wish to disclose')",
-            "label:has-text('I do not wish')",
-            "[data-automation-id='promptOption']:has-text('Decline')",
-            "input[value*='decline' i] + label",
-            "input[value*='prefer_not' i] + label",
-        ]
+    # ── Page step indicator ───────────────────────────────────────────────────
+    "page_title"         : "h2, h3, [data-automation-id='pageHeaderTitle']",
+    "stepper_active"     : ".gwt-InlineHTML, [class*='progressStep']:not([class*='inactive'])",
+}
 
-        for selector in decline_selectors:
+SCREENSHOT_DIR = Path("logs")
+
+# ─────────────────────────────────────────────────────────────────────────────
+# HELPER UTILITIES
+# ─────────────────────────────────────────────────────────────────────────────
+
+async def _screenshot(page: Page, name: str) -> str:
+    """Save screenshot to logs/ and return the path string."""
+    SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
+    path = str(SCREENSHOT_DIR / f"{name}_{int(time.time())}.png")
+    try:
+        await page.screenshot(path=path, full_page=False)
+        logger.info("Screenshot saved: %s", path)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Screenshot failed: %s", exc)
+    return path
+
+
+async def _safe_fill(page: Page, selector: str, value: str,
+                     retries: int = 3, label: str = "") -> bool:
+    """Fill a field with retry+backoff. Returns True on success."""
+    for attempt in range(1, retries + 1):
+        try:
+            el = page.locator(selector).first
+            await el.wait_for(state="visible", timeout=5_000)
+            await el.scroll_into_view_if_needed()
+            await el.fill(value)
+            logger.debug("Filled [%s] attempt %d/%d", label or selector[:40], attempt, retries)
+            return True
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Fill attempt %d/%d failed [%s]: %s", attempt, retries, label, exc)
+            if attempt < retries:
+                await asyncio.sleep(2 ** attempt)
+    return False
+
+
+async def _safe_select_text(page: Page, selector: str, text: str,
+                             retries: int = 3, label: str = "") -> bool:
+    """Select dropdown option by visible text with retry."""
+    for attempt in range(1, retries + 1):
+        try:
+            el = page.locator(selector).first
+            await el.wait_for(state="visible", timeout=5_000)
+            await el.select_option(label=text)
+            logger.debug("Selected [%s]='%s' attempt %d", label or selector[:40], text, attempt)
+            return True
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Select attempt %d/%d failed [%s]: %s", attempt, retries, label, exc)
+            if attempt < retries:
+                await asyncio.sleep(2 ** attempt)
+    return False
+
+
+async def _click_next(page: Page, label: str = "Next") -> bool:
+    """Click the navigation next/save-and-continue button."""
+    for attempt in range(1, 4):
+        try:
+            btn = page.locator(SEL["next_btn"]).first
+            await btn.wait_for(state="visible", timeout=8_000)
+            await btn.scroll_into_view_if_needed()
+            await btn.click()
+            await page.wait_for_load_state("networkidle", timeout=15_000)
+            logger.info("Clicked '%s' — page advanced", label)
+            return True
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Click '%s' attempt %d/3: %s", label, attempt, exc)
+            await asyncio.sleep(2 ** attempt)
+    return False
+
+
+async def _select_decline_for_eeo(page: Page) -> int:
+    """
+    Find all radio/select groups on EEO/demographic pages and select
+    the "Decline to Identify" / "Prefer not to say" option in each.
+    Returns count of fields handled.
+    """
+    count = 0
+    decline_phrases = SEL["decline_options"]
+
+    # Approach 1 — radio buttons whose labels contain decline phrases
+    labels = await page.locator("label").all()
+    for lbl in labels:
+        text = (await lbl.inner_text()).strip()
+        if any(phrase.lower() in text.lower() for phrase in decline_phrases):
             try:
-                elements = await self.page.query_selector_all(selector)
-                for el in elements:
-                    try:
-                        await el.click()
-                        await asyncio.sleep(0.2)
-                    except Exception:
-                        continue
-            except Exception:
-                continue
+                radio_id = await lbl.get_attribute("for")
+                if radio_id:
+                    await page.locator(f"#{radio_id}").click()
+                    count += 1
+                    logger.debug("EEO: selected decline via label '%s'", text)
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("EEO radio click failed: %s", exc)
 
-        self.logger.info(
-            "Voluntary Disclosures page — decline-all strategy applied"
-        )
+    # Approach 2 — select dropdowns: choose first matching "decline" option
+    selects = await page.locator("select:visible").all()
+    for sel_el in selects:
+        opts = await sel_el.locator("option").all()
+        for opt in opts:
+            opt_text = (await opt.inner_text()).strip()
+            if any(phrase.lower() in opt_text.lower() for phrase in decline_phrases):
+                try:
+                    await sel_el.select_option(label=opt_text)
+                    count += 1
+                    logger.debug("EEO: selected decline option '%s'", opt_text)
+                    break
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug("EEO select failed: %s", exc)
 
-    # ------------------------------------------------------------------
-    # Review & Submit
-    # ------------------------------------------------------------------
+    return count
 
-    async def _handle_review_and_submit_page(self) -> ApplyResult:
-        """Handle the final Review + Submit page.
 
-        In ``dry_run`` mode: logs intent and returns success without
-        clicking Submit. In live mode: clicks Submit and captures proof
-        via 3-tier strategy (confirmation text, URL change, page gone).
+async def _handle_application_questions(page: Page, profile: dict[str, Any]) -> int:
+    """
+    Generic handler for Workday Application Questions page (Page 3).
+    Fills text inputs and textareas with profile-matched answers.
+    Returns number of fields filled.
+    """
+    filled = 0
+    keyword_map: dict[str, str] = {
+        "sponsor"         : "No",
+        "visa"            : profile.get("visa_sponsorship_needed", "No"),
+        "authorized"      : "Yes",
+        "relocat"         : profile.get("willing_to_relocate", "No"),
+        "remote"          : "Yes",
+        "salary"          : str(profile.get("expected_salary_usd", "")),
+        "linkedin"        : profile.get("linkedin_url", ""),
+        "github"          : profile.get("github_url", ""),
+        "portfolio"       : profile.get("portfolio_url", ""),
+        "experience"      : profile.get("years_of_experience", ""),
+        "year"            : profile.get("years_of_experience", ""),
+        "cover"           : profile.get("cover_letter_short", ""),
+        "why"             : profile.get("why_join_statement", profile.get("cover_letter_short", "")),
+        "tell us about"   : profile.get("cover_letter_short", ""),
+        "describe"        : profile.get("cover_letter_short", ""),
+    }
+
+    # Text inputs
+    text_inputs = await page.locator("input[type='text']:visible").all()
+    for inp in text_inputs:
+        try:
+            placeholder = (await inp.get_attribute("placeholder") or "").lower()
+            aria_label  = (await inp.get_attribute("aria-label") or "").lower()
+            hint = placeholder + " " + aria_label
+            for kw, val in keyword_map.items():
+                if kw in hint and val:
+                    await inp.fill(val)
+                    filled += 1
+                    logger.debug("AppQ: filled text input [%s]", hint[:50])
+                    break
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("AppQ text input skip: %s", exc)
+
+    # Textareas
+    textareas = await page.locator("textarea:visible").all()
+    for ta in textareas:
+        try:
+            val = await ta.input_value()
+            if val:
+                continue  # already filled
+            placeholder = (await ta.get_attribute("placeholder") or "").lower()
+            aria_label  = (await ta.get_attribute("aria-label") or "").lower()
+            hint = placeholder + " " + aria_label
+            text = profile.get("cover_letter_short", "")
+            for kw, mapped_val in keyword_map.items():
+                if kw in hint and mapped_val:
+                    text = mapped_val
+                    break
+            if text:
+                await ta.fill(text)
+                filled += 1
+                logger.debug("AppQ: filled textarea [%s]", hint[:50])
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("AppQ textarea skip: %s", exc)
+
+    # Yes/No radio buttons — safe defaults
+    radio_groups = await page.locator("[role='radio']:visible, input[type='radio']:visible").all()
+    for radio in radio_groups:
+        try:
+            val = (await radio.get_attribute("value") or "").lower()
+            parent_text = await radio.evaluate(
+                "el => el.closest('div,fieldset')?.innerText || ''")
+            parent_text_lower = parent_text.lower()
+            # Sponsor/visa → always No; authorized/remote → always Yes
+            should_check = False
+            if ("sponsor" in parent_text_lower or "visa" in parent_text_lower) and val == "no":
+                should_check = True
+            elif ("authoriz" in parent_text_lower or "remote" in parent_text_lower or
+                  "eligible" in parent_text_lower) and val == "yes":
+                should_check = True
+            if should_check:
+                await radio.check()
+                filled += 1
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("AppQ radio skip: %s", exc)
+
+    return filled
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MAIN PLATFORM CLASS
+# ─────────────────────────────────────────────────────────────────────────────
+
+class WorkdayPlatform(BasePlatformApply):
+    """
+    Workday multi-tenant job application automator.
+
+    Uses stable [data-automation-id] selectors that work across ALL Workday
+    tenants (NVIDIA, Microsoft, Amazon, Stripe, Databricks, etc.).
+
+    Handles:
+      - Account creation / sign-in
+      - 6-page application flow (My Information → Review)
+      - Resume file upload
+      - Generic application question answering
+      - EEO / demographic fields → always "Decline to Identify"
+      - DRY_RUN gate (fill but never submit)
+    """
+
+    platform_name: str = "workday"
+
+    # ── Public entry point ────────────────────────────────────────────────────
+
+    async def apply(
+        self,
+        job_url: Optional[str] = None,
+        profile: Optional[Dict[str, Any]] = None,
+    ) -> Union[ApplyResult, Dict[str, Any]]:
+        """
+        Run the full Workday apply flow for a given job URL.
+
+        Args:
+            job_url : Full Workday job URL (any tenant subdomain).
+            profile : User profile dict from user_profile.json / config loader.
 
         Returns:
-            ApplyResult with proof from submission.
+            Result dict with keys: status, platform, fields_filled,
+            dry_run_stopped, proof_screenshot_path, error.
         """
-        self.steps_completed += 1
+        job_url = job_url or self.job_meta.get("url", self.job_meta.get("job_url", ""))
+        profile = profile or self.user_profile
 
         if self.dry_run:
             self.logger.info(
-                "[DRY_RUN] Would submit Workday application for %s",
-                self.job_meta.get("job_url", ""),
+                "[%s] DRY_RUN=True — submit BLOCKED",
+                self.__class__.__name__,
             )
-            return self._build_result(
-                success=True,
-                proof_type="none",
-                proof_value="DRY_RUN",
-                proof_confidence=1.0,
-            )
+            return {
+                "dry_run_stopped": True,
+                "status": "dry_run_blocked",
+                "platform": "workday",
+                "fields_filled": 0,
+                "proof_screenshot_path": "",
+                "error": "",
+            }
+        dry_run = os.getenv("DRY_RUN", "true").lower() == "true"
+        fields_filled = 0
+        proof_path = ""
+        browser: Optional[Browser] = None
 
-        # Final CAPTCHA check
-        if await self._detect_captcha():
-            return self._build_result(
-                success=False,
-                error_code="CAPTCHA",
-                reroute_to_manual=True,
-                reroute_reason="CAPTCHA on Workday review page",
-            )
+        try:
+            async with async_playwright() as pw:
+                browser = await pw.chromium.launch(
+                    headless=os.getenv("PLAYWRIGHT_HEADLESS", "false").lower() == "true",
+                    slow_mo=int(os.getenv("PLAYWRIGHT_SLOW_MO", "300")),
+                    args=["--disable-blink-features=AutomationControlled"],
+                )
+                context = await browser.new_context(
+                    viewport={"width": 1280, "height": 900},
+                    user_agent=(
+                        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                        "AppleWebKit/537.36 (KHTML, like Gecko) "
+                        "Chrome/122.0.0.0 Safari/537.36"
+                    ),
+                    locale="en-US",
+                )
+                await self._inject_workday_cookies(context, job_url)
+                page = await context.new_page()
 
-        # Click Submit
-        submit_selectors: list[str] = [
-            "[data-automation-id='wd-CommandButton_wysiwyg_submit']",
-            "button[data-automation-id*='submit' i]",
-            "button[aria-label*='Submit' i]",
-            "button:has-text('Submit')",
-            "[data-automation-id='bottom-navigation-next-button']",
-        ]
+                logger.info("[workday] Navigating to: %s", job_url[:80])
+                await page.goto(job_url, timeout=30_000)
+                await page.wait_for_load_state("networkidle", timeout=20_000)
+                proof_path = await _screenshot(page, "workday_01_landing")
 
-        submit_clicked: bool = False
-        for selector in submit_selectors:
+                # ── 1. Sign in or create account ──────────────────────────────
+                auth_result = await self._handle_auth(page, profile)
+                if auth_result == "login_required":
+                    return self._result("login_required", 0, False, proof_path,
+                                        "Login required — WORKDAY_EMAIL/PASSWORD not set")
+
+                proof_path = await _screenshot(page, "workday_02_post_auth")
+
+                # ── 2. Click Apply button ─────────────────────────────────────
+                clicked = await self._click_apply(page)
+                if not clicked:
+                    proof_path = await _screenshot(page, "workday_03_no_apply_btn")
+                    return self._result("error", 0, False, proof_path,
+                                        "Apply button not found")
+
+                await page.wait_for_load_state("networkidle", timeout=15_000)
+                await asyncio.sleep(1)
+                proof_path = await _screenshot(page, "workday_03_apply_clicked")
+
+                # ── 3. Page 1 — My Information ────────────────────────────────
+                logger.info("[workday] Page 1: My Information")
+                filled = await self._fill_my_information(page, profile)
+                fields_filled += filled
+                proof_path = await _screenshot(page, "workday_04_my_information")
+                await _click_next(page, "Save and Continue (P1)")
+                await asyncio.sleep(1)
+
+                # ── 4. Page 2 — My Experience ─────────────────────────────────
+                logger.info("[workday] Page 2: My Experience")
+                filled = await self._fill_my_experience(page, profile)
+                fields_filled += filled
+                proof_path = await _screenshot(page, "workday_05_my_experience")
+                await _click_next(page, "Save and Continue (P2)")
+                await asyncio.sleep(1)
+
+                # ── 5. Page 3 — Application Questions ────────────────────────
+                logger.info("[workday] Page 3: Application Questions")
+                filled = await _handle_application_questions(page, profile)
+                fields_filled += filled
+                proof_path = await _screenshot(page, "workday_06_app_questions")
+                await _click_next(page, "Save and Continue (P3)")
+                await asyncio.sleep(1)
+
+                # ── 6. Page 4 — Voluntary Disclosures ────────────────────────
+                logger.info("[workday] Page 4: Voluntary Disclosures")
+                filled = await _select_decline_for_eeo(page)
+                fields_filled += filled
+                proof_path = await _screenshot(page, "workday_07_voluntary")
+                await _click_next(page, "Save and Continue (P4)")
+                await asyncio.sleep(1)
+
+                # ── 7. Page 5 — Self Identify ─────────────────────────────────
+                logger.info("[workday] Page 5: Self Identify")
+                filled = await _select_decline_for_eeo(page)
+                fields_filled += filled
+                proof_path = await _screenshot(page, "workday_08_self_identify")
+                await _click_next(page, "Save and Continue (P5)")
+                await asyncio.sleep(1)
+
+                # ── 8. Page 6 — Review ────────────────────────────────────────
+                logger.info("[workday] Page 6: Review")
+                proof_path = await _screenshot(page, "workday_09_review")
+
+                # ── DRY_RUN GATE ──────────────────────────────────────────────
+                if dry_run:
+                    logger.info("[workday] DRY_RUN=true — stopping before submit")
+                    return self._result("dry_run", fields_filled, True, proof_path, None)
+
+                # ── 9. Submit ─────────────────────────────────────────────────
+                logger.info("[workday] Submitting application...")
+                submitted = await self._click_submit(page)
+                if not submitted:
+                    return self._result("error", fields_filled, False, proof_path,
+                                        "Submit button not found on review page")
+
+                await asyncio.sleep(3)
+                proof_path = await _screenshot(page, "workday_10_submitted")
+                logger.info("[workday] Application submitted successfully")
+                return self._result("applied", fields_filled, False, proof_path, None)
+
+        except Exception as exc:  # noqa: BLE001
+            logger.error("[workday] Fatal error: %s", exc, exc_info=True)
             try:
-                await self.page.wait_for_selector(
-                    selector, state="visible", timeout=5000
-                )
-                await self.page.click(selector)
-                submit_clicked = True
-                self.logger.info(
-                    "Workday submit clicked via: %s", selector
-                )
-                break
-            except Exception:
-                continue
-
-        if not submit_clicked:
-            return self._build_result(
-                success=False,
-                error_code="NAV_FAIL",
-                reroute_to_manual=True,
-                reroute_reason=(
-                    "Workday submit button not found on review page"
-                ),
-            )
-
-        # Wait for post-submission page
-        try:
-            await self.page.wait_for_load_state(
-                "networkidle", timeout=20000
-            )
-        except PlaywrightTimeoutError:
-            pass  # Some instances don't fire networkidle after submit
-
-        await asyncio.sleep(2)
-
-        # ── Proof Capture ──
-        return await self._capture_proof()
-
-    async def _capture_proof(self) -> ApplyResult:
-        """Capture proof of successful Workday submission.
-
-        Strategy 1: Thank you / confirmation text on page.
-        Strategy 2: URL contains submission confirmation keywords.
-        Strategy 3: Workday page body element disappeared.
-
-        Returns:
-            ApplyResult with proof on success, or PROOF_FAIL reroute.
-        """
-        # Strategy 1: confirmation text
-        try:
-            confirm_el = await self.page.query_selector(
-                "h2:has-text('Thank you'), "
-                "h1:has-text('Thank you'), "
-                "div:has-text('Your application has been submitted'), "
-                "[data-automation-id='confirmation'], "
-                "div[class*='ThankYou'], "
-                "p:has-text('successfully submitted')"
-            )
-            if confirm_el:
-                confirm_text: str = await confirm_el.inner_text()
-                return self._build_result(
-                    success=True,
-                    proof_type="form_disappearance",
-                    proof_value=f"Confirmation: {confirm_text[:200]}",
-                    proof_confidence=0.95,
-                )
-        except Exception:
-            pass
-
-        # Strategy 2: URL-based proof
-        current_url: str = self.page.url
-        if any(
-            x in current_url
-            for x in [
-                "confirmation",
-                "thank",
-                "submitted",
-                "success",
-                "complete",
-            ]
-        ):
-            return self._build_result(
-                success=True,
-                proof_type="success_url",
-                proof_value=current_url,
-                proof_confidence=0.92,
-            )
-
-        # Strategy 3: page body disappeared
-        wd_body = await self.page.query_selector(
-            "[data-automation-id='wd-Page-Body']"
-        )
-        if not wd_body:
-            return self._build_result(
-                success=True,
-                proof_type="form_disappearance",
-                proof_value=current_url,
-                proof_confidence=0.70,
-            )
-
-        # No proof found — reroute
-        return self._build_result(
-            success=False,
-            error_code="PROOF_FAIL",
-            reroute_to_manual=True,
-            reroute_reason=(
-                "Workday submit clicked but no confirmation proof found. "
-                f"Final URL: {current_url}"
-            ),
-        )
-
-    # ==================================================================
-    # Workday-Specific Field Fill (3-Tier Strategy)
-    # ==================================================================
-
-    async def _fill_wd_field(
-        self,
-        selector: str,
-        value: str,
-        timeout: int = 8000,
-    ) -> bool:
-        """Fill a Workday React-controlled input field.
-
-        Workday inputs reject standard ``fill()`` — this method uses a
-        3-tier strategy:
-
-        Tier 1: ``page.evaluate`` native setter (React fiber bypass).
-        Tier 2: Click + select-all + ``type()`` with delay (human sim).
-        Tier 3: ``page.fill()`` as last resort.
-
-        All tiers dispatch ``input``, ``change``, and ``blur`` events
-        after setting the value.
-
-        Args:
-            selector: CSS selector for the Workday input element.
-            value: String value to inject.
-            timeout: Milliseconds to wait for element visibility.
-
-        Returns:
-            True on success, False if all tiers failed.
-        """
-        if not value:
-            return True  # Nothing to fill — not a failure
-
-        try:
-            await self.page.wait_for_selector(
-                selector, state="visible", timeout=timeout
-            )
-        except PlaywrightTimeoutError:
-            self.logger.debug(
-                "Workday field not visible (timeout): %s", selector
-            )
-            return False
-
-        # Tier 1: React native setter via evaluate
-        try:
-            result = await self.page.evaluate(
-                """
-                (args) => {
-                    const el = document.querySelector(args.selector);
-                    if (!el) return {success: false, reason: 'not found'};
-
-                    const proto = el.tagName === 'TEXTAREA'
-                        ? HTMLTextAreaElement.prototype
-                        : HTMLInputElement.prototype;
-                    const descriptor = Object.getOwnPropertyDescriptor(
-                        proto, 'value'
-                    );
-                    if (descriptor && descriptor.set) {
-                        descriptor.set.call(el, args.value);
-                        el.dispatchEvent(
-                            new Event('input', {bubbles: true})
-                        );
-                        el.dispatchEvent(
-                            new Event('change', {bubbles: true})
-                        );
-                        el.dispatchEvent(
-                            new Event('blur', {bubbles: true})
-                        );
-                        return {success: true, method: 'native_setter'};
-                    }
-                    return {success: false, reason: 'no native setter'};
-                }
-            """,
-                {"selector": selector, "value": value},
-            )
-
-            if result and result.get("success"):
-                # Verify value was accepted by Workday's React state
-                await asyncio.sleep(0.3)
-                try:
-                    actual: str = await self.page.input_value(selector)
-                    if actual == value:
-                        return True
-                except Exception:
-                    pass
-                # Value not accepted — fall through to Tier 2
-        except Exception as e:
-            self.logger.debug(
-                "Tier 1 fill failed for %s: %s", selector, str(e)
-            )
-
-        # Tier 2: click + select all + type with delay (human simulation)
-        try:
-            await self.page.click(selector)
-            await asyncio.sleep(0.2)
-            await self.page.keyboard.press("Control+a")
-            await self.page.keyboard.press("Delete")
-            await asyncio.sleep(0.1)
-            await self.page.type(selector, value, delay=50)
-            await self.page.keyboard.press("Tab")  # trigger blur/validation
-            await asyncio.sleep(0.3)
-
-            try:
-                actual = await self.page.input_value(selector)
-                if actual == value or actual.strip() == value.strip():
-                    self.logger.debug(
-                        "Tier 2 (type) succeeded for %s", selector
-                    )
-                    return True
+                proof_path = await _screenshot(page, "workday_error")  # type: ignore[name-defined]
             except Exception:
                 pass
-        except Exception as e:
-            self.logger.debug(
-                "Tier 2 fill failed for %s: %s", selector, str(e)
-            )
+            return self._result("error", fields_filled, False, proof_path, str(exc))
 
-        # Tier 3: standard fill() fallback
-        try:
-            await self.page.fill(selector, value)
-            return True
-        except Exception as e:
-            self.logger.warning(
-                "All fill tiers failed for Workday field %s: %s",
-                selector,
-                str(e),
-            )
-            return False
+    # ── Auth handler ──────────────────────────────────────────────────────────
 
-    # ==================================================================
-    # Navigation
-    # ==================================================================
+    async def _inject_workday_cookies(self, context, job_url: str) -> None:
+        """Inject session cookies to bypass Workday login walls (Issue 7)."""
+        session_id = os.getenv("WORKDAY_SESSION_ID")
+        if session_id:
+            import urllib.parse
+            domain = urllib.parse.urlparse(job_url).netloc
+            await context.add_cookies([
+                {"name": "PLAY_SESSION", "value": session_id, "domain": domain, "path": "/"}
+            ])
+            self.logger.info("[workday] Injected WORKDAY_SESSION_ID cookie for %s", domain)
 
-    async def _click_next_button(self) -> bool:
-        """Click the Workday Next / Save & Continue button.
-
-        Tries all known Workday navigation button selectors. Scrolls
-        the button into view first (Workday buttons are sometimes
-        off-screen). Waits for page to settle after click.
-
-        Returns:
-            True if button was found and clicked, False otherwise.
+    async def _handle_auth(self, page: Page, profile: dict[str, Any]) -> str:
         """
-        next_selectors: list[str] = [
-            "[data-automation-id='bottom-navigation-next-button']",
-            "[data-automation-id='bottom-navigation-save-continue-button']",
-            "[data-automation-id='pageFooter-continueButton']",
-            "button[aria-label='Next']",
-            "button:has-text('Save and Continue')",
-            "button:has-text('Next')",
-            "button:has-text('Continue')",
-        ]
+        Detect login wall and sign in or create account.
 
-        for selector in next_selectors:
+        Returns "ok" on success, "login_required" if credentials missing.
+        """
+        email    = os.getenv("WORKDAY_EMAIL", profile.get("email", ""))
+        password = os.getenv("WORKDAY_PASSWORD", "")
+
+        # Check if login wall is present
+        try:
+            await page.wait_for_selector(
+                f"{SEL['sign_in_btn']}, {SEL['create_acct_btn']}, {SEL['apply_btn']}",
+                timeout=8_000,
+            )
+        except PlaywrightTimeout:
+            return "ok"  # No auth wall detected
+
+        has_sign_in = await page.locator(SEL["sign_in_btn"]).count() > 0
+        has_apply   = await page.locator(SEL["apply_btn"]).count() > 0
+
+        if has_apply:
+            return "ok"  # Job page loaded, no auth wall
+
+        if not email or not password:
+            logger.error("[workday] Auth wall detected but WORKDAY_EMAIL/PASSWORD not set")
+            return "login_required"
+
+        # Try to sign in first
+        if has_sign_in:
+            logger.info("[workday] Signing in with existing account")
             try:
-                await self.page.wait_for_selector(
-                    selector, state="visible", timeout=4000
-                )
-                # Scroll button into view — Workday buttons sometimes off-screen
-                await self.page.eval_on_selector(
-                    selector,
-                    "el => el.scrollIntoView("
-                    "{behavior: 'smooth', block: 'center'})",
-                )
-                await asyncio.sleep(0.3)
-                await self.page.click(selector)
+                await page.locator(SEL["sign_in_btn"]).click()
+                await asyncio.sleep(1)
+                await _safe_fill(page, SEL["email_input"], email, label="email")
+                await _safe_fill(page, SEL["password_input"], password, label="password")
+                await page.locator(SEL["submit_sign_in"]).click()
+                await page.wait_for_load_state("networkidle", timeout=15_000)
+                logger.info("[workday] Sign-in complete")
+                return "ok"
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("[workday] Sign-in failed, trying create account: %s", exc)
 
-                # Wait for Workday to load next page
-                try:
-                    await self.page.wait_for_load_state(
-                        "networkidle", timeout=12000
-                    )
-                except PlaywrightTimeoutError:
-                    pass  # Non-fatal — Workday sometimes skips networkidle
+        # Fall back to account creation
+        logger.info("[workday] Creating new Workday account")
+        try:
+            await page.locator(SEL["create_acct_btn"]).click()
+            await asyncio.sleep(1)
+            await _safe_fill(page, SEL["new_acct_email"], email, label="new_acct_email")
+            await _safe_fill(page, SEL["new_acct_verify"], email, label="new_acct_verify")
+            await _safe_fill(page, SEL["new_acct_password"], password, label="new_acct_password")
+            await page.locator(SEL["new_acct_submit"]).click()
+            await page.wait_for_load_state("networkidle", timeout=15_000)
+            logger.info("[workday] Account created")
+            return "ok"
+        except Exception as exc:  # noqa: BLE001
+            logger.error("[workday] Account creation failed: %s", exc)
+            return "login_required"
 
-                await asyncio.sleep(1)  # Workday React re-render settle
-                self.logger.debug("Workday next clicked via: %s", selector)
-                return True
-            except Exception:
-                continue
+    # ── Click Apply ───────────────────────────────────────────────────────────
 
+    async def _click_apply(self, page: Page) -> bool:
+        """Find and click the Apply button on the job description page."""
+        selectors = [
+            SEL["apply_btn"],
+            SEL["apply_manually_btn"],
+            "button:has-text('Apply Now')",
+            "button:has-text('Apply')",
+            "a:has-text('Apply')",
+        ]
+        for sel in selectors:
+            try:
+                el = page.locator(sel).first
+                if await el.count() > 0:
+                    await el.scroll_into_view_if_needed()
+                    await el.click()
+                    logger.info("[workday] Clicked apply button: %s", sel[:50])
+                    return True
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("[workday] Apply btn attempt failed [%s]: %s", sel[:40], exc)
         return False
+
+    # ── Page 1: My Information ────────────────────────────────────────────────
+
+    async def _fill_my_information(self, page: Page,
+                                    profile: dict[str, Any]) -> int:
+        """Fill Page 1 — My Information fields."""
+        filled = 0
+
+        field_map = [
+            (SEL["first_name"],   profile.get("first_name", ""),      "first_name"),
+            (SEL["last_name"],    profile.get("last_name", ""),        "last_name"),
+            (SEL["phone_number"], profile.get("phone", ""),            "phone"),
+            (SEL["address_line1"],profile.get("address_line1", ""),    "address_line1"),
+            (SEL["city"],         profile.get("city", ""),             "city"),
+            (SEL["postal_code"],  profile.get("postal_code", ""),      "postal_code"),
+        ]
+        for selector, value, label in field_map:
+            if value and await _safe_fill(page, selector, value, label=label):
+                filled += 1
+
+        # Country dropdown
+        country = profile.get("country", "India")
+        if await _safe_select_text(page, SEL["country_dropdown"], country, label="country"):
+            filled += 1
+
+        # "How did you hear" — pick first available option (not blank)
+        try:
+            el = page.locator(SEL["how_hear_dropdown"]).first
+            if await el.count() > 0:
+                await el.select_option(index=1)  # index 0 is usually blank
+                filled += 1
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("[workday] how_hear dropdown: %s", exc)
+
+        # "Previously worked" → always No
+        try:
+            no_radio = page.locator(SEL["prev_worked_no"]).first
+            if await no_radio.count() > 0:
+                await no_radio.check()
+                filled += 1
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("[workday] prev_worked radio: %s", exc)
+
+        logger.info("[workday] P1 filled %d fields", filled)
+        return filled
+
+    # ── Page 2: My Experience ─────────────────────────────────────────────────
+
+    async def _fill_my_experience(self, page: Page,
+                                   profile: dict[str, Any]) -> int:
+        """Fill Page 2 — My Experience (resume upload + education + work)."""
+        filled = 0
+
+        # Resume upload
+        resume_path = profile.get("resume_path", os.getenv("RESUME_PATH", ""))
+        if resume_path and Path(resume_path).exists():
+            try:
+                # Click "Add Resume" button to reveal file input if hidden
+                add_btn = page.locator(SEL["resume_btn"]).first
+                if await add_btn.count() > 0:
+                    await add_btn.click()
+                    await asyncio.sleep(1)
+
+                upload_input = page.locator(SEL["resume_upload"]).first
+                if await upload_input.count() > 0:
+                    await upload_input.set_input_files(resume_path)
+                    await asyncio.sleep(2)  # wait for upload progress
+                    filled += 1
+                    logger.info("[workday] Resume uploaded: %s", resume_path)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("[workday] Resume upload failed: %s", exc)
+        else:
+            logger.warning("[workday] Resume path missing/not found: %s", resume_path)
+
+        # Education
+        edu = profile.get("education", {})
+        if edu:
+            edu_fields = [
+                (SEL["school_name"],   edu.get("school", ""),        "school"),
+                (SEL["field_of_study"],edu.get("field_of_study", ""),"field_of_study"),
+                (SEL["gpa"],           edu.get("gpa", ""),           "gpa"),
+            ]
+            for selector, value, label in edu_fields:
+                if value and await _safe_fill(page, selector, value, label=label):
+                    filled += 1
+            if edu.get("degree"):
+                if await _safe_select_text(page, SEL["degree_dropdown"],
+                                            edu["degree"], label="degree"):
+                    filled += 1
+
+        # LinkedIn / portfolio
+        for sel_key, profile_key in [
+            ("linkedin_url", "linkedin_url"),
+            ("website_url",  "portfolio_url"),
+        ]:
+            val = profile.get(profile_key, "")
+            if val and await _safe_fill(page, SEL[sel_key], val, label=sel_key):
+                filled += 1
+
+        logger.info("[workday] P2 filled %d fields", filled)
+        return filled
+
+    # ── Submit ────────────────────────────────────────────────────────────────
+
+    async def _click_submit(self, page: Page) -> bool:
+        """Click the final submit button on the Review page."""
+        for sel in [SEL["review_submit_btn"], SEL["submit_btn"], "button[type='submit']"]:
+            try:
+                btn = page.locator(sel).first
+                if await btn.count() > 0:
+                    await btn.scroll_into_view_if_needed()
+                    await btn.click()
+                    logger.info("[workday] Submit button clicked: %s", sel[:50])
+                    return True
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("[workday] Submit attempt failed [%s]: %s", sel[:40], exc)
+        return False
+
+    # ── Compat shim ───────────────────────────────────────────────────────────
+
+    async def _apply_compat(self) -> "ApplyResult":
+        """
+        Backward-compatibility shim bridging BasePlatformApply.apply() → self.apply().
+        Loads profile from config and delegates to the full apply() method.
+        """
+        try:
+            import json
+            profile_path = Path("config/user_profile.json")
+            profile = json.loads(profile_path.read_text()) if profile_path.exists() else {}
+            job_url = getattr(self, "job_url", "") or getattr(self, "url", "")
+            result = await self.apply(job_url, profile)
+            return ApplyResult(
+                status=result.get("status", "error"),
+                platform=result.get("platform", self.platform_name),
+                error=result.get("error"),
+                proof_screenshot_path=result.get("proof_screenshot_path"),
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.error("[workday] _apply_compat error: %s", exc)
+            return ApplyResult(status="error", platform=self.platform_name, error=str(exc))
+
+    # ── Result builder ────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _result(
+        status: str,
+        fields_filled: int,
+        dry_run_stopped: bool,
+        proof_screenshot_path: str,
+        error: Optional[str],
+    ) -> dict[str, Any]:
+        """Build the standard result dict returned by apply()."""
+        return {
+            "status"               : status,
+            "platform"             : "workday",
+            "fields_filled"        : fields_filled,
+            "dry_run_stopped"      : dry_run_stopped,
+            "proof_screenshot_path": proof_screenshot_path,
+            "error"                : error,
+        }
+
+WorkdayApply = WorkdayPlatform

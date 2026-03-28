@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Dict, Any
+from typing import Dict, Any, Union
 
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
@@ -55,7 +55,7 @@ class LinkedInEasyApply(BasePlatformApply):
     PLATFORM_NAME: str = "linkedin"
     STEPS_TOTAL: int = 2
 
-    async def apply(self) -> ApplyResult:
+    async def apply(self, job_url: str = None, profile: dict = None) -> Union[ApplyResult, Dict[str, Any]]:
         """Detect LinkedIn job type and route appropriately.
 
         For Easy Apply jobs: extract metadata and route to manual queue.
@@ -71,6 +71,15 @@ class LinkedInEasyApply(BasePlatformApply):
             ``proof_type="success_url"``,
             ``proof_value=external_apply_url``.
         """
+        if self.dry_run:
+            self.logger.info("[%s] DRY_RUN=True — submit BLOCKED", self.__class__.__name__)
+            return {"dry_run_stopped": True, "status": "dry_run_blocked",
+                    "platform": self.__class__.__name__, "fields_filled": 0,
+                    "proof_screenshot_path": "", "error": ""}
+
+        job_url = job_url or self.job_meta.get("url", self.job_meta.get("job_url", ""))
+        profile = profile or self.user_profile
+
         self.steps_completed = 0
 
         # ── Step 1: Navigate + Verify LinkedIn ──
@@ -340,3 +349,5 @@ class LinkedInEasyApply(BasePlatformApply):
             pass
 
         return ""
+
+LinkedInEasyApplyPlatform = LinkedInEasyApply
