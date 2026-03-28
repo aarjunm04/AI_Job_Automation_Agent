@@ -23,6 +23,8 @@ from utils.db_utils import get_db_conn
 from crewai.tools import tool
 from agentops.sdk.decorators import operation
 
+logger = logging.getLogger(__name__)
+
  
  
 __all__ = [
@@ -137,8 +139,6 @@ def _fetch_user_config() -> dict[str, Any]:
     return {}
 
 
-@agentops.track_tool
-@operation
 @tool
 def upsert_job_post(
     run_batch_id: str,
@@ -231,8 +231,6 @@ def upsert_job_post(
         return json.dumps({"error": "upsert_job_post_failed", "detail": str(e)})
 
 
-@agentops.track_tool
-@operation
 @tool
 def save_job_score(
     job_post_id: str,
@@ -296,8 +294,6 @@ def save_job_score(
         return json.dumps({"error": "save_job_score_failed", "detail": str(e)})
 
 
-@agentops.track_tool
-@operation
 @tool
 def create_application(
     job_post_id: str,
@@ -410,8 +406,6 @@ def create_application(
         return json.dumps({"error": "create_application_failed", "detail": str(e)})
 
 
-@agentops.track_tool
-@operation
 @tool
 def update_application_status(
     application_id: str, status: str, error_code: str = ""
@@ -476,8 +470,6 @@ def update_application_status(
         )
 
 
-@agentops.track_tool
-@operation
 @tool
 def create_run_batch(run_index_in_week: int) -> str:
     """
@@ -538,8 +530,6 @@ def create_run_batch(run_index_in_week: int) -> str:
         return json.dumps({"error": "create_run_batch_failed", "detail": str(e)})
 
 
-@agentops.track_tool
-@operation
 @tool
 def update_run_batch_stats(
     run_batch_id: str, jobs_discovered: int, jobs_auto_applied: int, jobs_queued: int
@@ -607,8 +597,6 @@ def update_run_batch_stats(
         )
 
 
-@agentops.track_tool
-@operation
 @tool
 def log_event(
     run_batch_id: str,
@@ -669,8 +657,6 @@ def log_event(
             conn.close()
 
 
-@agentops.track_tool
-@operation
 @tool
 def get_queued_jobs(limit: int = 50) -> str:
     """
@@ -748,8 +734,6 @@ def get_queued_jobs(limit: int = 50) -> str:
         return json.dumps({"error": "get_queued_jobs_failed", "detail": str(e)})
 
 
-@agentops.track_tool
-@operation
 @tool
 def get_platform_config(platform: str) -> str:
     """Retrieve per-platform rate-limit config from ``users.platform_settings`` JSONB column.
@@ -792,8 +776,6 @@ def get_platform_config(platform: str) -> str:
         return json.dumps(_DEFAULT)
 
 
-@agentops.track_tool
-@operation
 @tool
 def get_run_stats(run_batch_id: str) -> str:
     """
@@ -868,8 +850,6 @@ def get_run_stats(run_batch_id: str) -> str:
     except Exception as e:
         return json.dumps({"error": "get_run_stats_failed", "detail": str(e)})
 
-@agentops.track_tool
-@operation
 @tool
 def get_recent_applications(limit: int = 20) -> str:
     """
@@ -895,8 +875,6 @@ def get_recent_applications(limit: int = 20) -> str:
         return json.dumps({"error": "get_recent_applications_failed", "detail": str(e)})
 
 
-@agentops.track_tool
-@operation
 @tool
 def get_pending_manual_queue(limit: int = 50) -> str:
     """
@@ -920,3 +898,24 @@ def get_pending_manual_queue(limit: int = 50) -> str:
         return _execute()
     except Exception as e:
         return json.dumps({"error": "get_pending_manual_queue_failed", "detail": str(e)})
+
+
+
+# ---------------------------------------------------------------------------
+# Private aliases for direct programmatic calls (bypass CrewAI Tool wrapper)
+# ---------------------------------------------------------------------------
+_create_run_batch = create_run_batch.func
+_update_run_batch_stats = update_run_batch_stats.func
+_log_event = log_event.func
+
+
+# ── .func aliases (complete set) ──────────────────────────────────────────────
+_upsert_job_post = upsert_job_post.func if hasattr(upsert_job_post, 'func') else upsert_job_post
+_save_job_score = save_job_score.func if hasattr(save_job_score, 'func') else save_job_score
+_create_application = create_application.func if hasattr(create_application, 'func') else create_application
+_update_application_status = update_application_status.func if hasattr(update_application_status, 'func') else update_application_status
+_get_queued_jobs = get_queued_jobs.func if hasattr(get_queued_jobs, 'func') else get_queued_jobs
+_get_platform_config = get_platform_config.func if hasattr(get_platform_config, 'func') else get_platform_config
+_get_run_stats = get_run_stats.func if hasattr(get_run_stats, 'func') else get_run_stats
+_get_recent_applications = get_recent_applications.func if hasattr(get_recent_applications, 'func') else get_recent_applications
+_get_pending_manual_queue = get_pending_manual_queue.func if hasattr(get_pending_manual_queue, 'func') else get_pending_manual_queue

@@ -1,4 +1,5 @@
 from __future__ import annotations
+from agentops.sdk.decorators import operation
 
 import json
 import logging
@@ -59,8 +60,6 @@ def _safe_json_dumps(payload: Dict[str, Any]) -> str:
         return json.dumps({"error": "serialization_failed"})
 
 
-@agentops.track_tool
-@operation
 @tool
 def query_resume_match(job_description: str, job_title: str, required_skills: str) -> str:
     """Suggest the best resume for a given job description.
@@ -141,8 +140,6 @@ def query_resume_match(job_description: str, job_title: str, required_skills: st
     })
 
 
-@agentops.track_tool
-@operation
 @tool
 def get_resume_context(resume_filename: str, job_description: str) -> str:
     """Return formatted resume text chunks relevant to the given job description.
@@ -188,8 +185,6 @@ def get_resume_context(resume_filename: str, job_description: str) -> str:
         return ""
 
 
-@agentops.track_tool
-@operation
 @tool
 def embed_job_description(job_url: str, job_description: str) -> str:
     """Trigger embedding of a job description via the RAG server.
@@ -235,8 +230,6 @@ def embed_job_description(job_url: str, job_description: str) -> str:
         )
 
 
-@agentops.track_tool
-@operation
 @tool
 def get_resume_pdf_path(resume_filename: str) -> str:
     """
@@ -271,3 +264,12 @@ def get_resume_pdf_path(resume_filename: str) -> str:
             "filename": resume_filename,
         }
         return _safe_json_dumps(response)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# .func ALIASES — raw function access (bypasses CrewAI Tool Pydantic wrapper)
+# ═══════════════════════════════════════════════════════════════════════════════
+_query_resume_match  = query_resume_match.func   if hasattr(query_resume_match,   "func") else query_resume_match
+_get_resume_context  = get_resume_context.func   if hasattr(get_resume_context,   "func") else get_resume_context
+_embed_job_desc      = embed_job_description.func if hasattr(embed_job_description, "func") else embed_job_description
+_get_resume_pdf_path = get_resume_pdf_path.func  if hasattr(get_resume_pdf_path,  "func") else get_resume_pdf_path

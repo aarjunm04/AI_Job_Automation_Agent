@@ -1,3 +1,4 @@
+from agentops.sdk.decorators import operation
 """
 Notion tools for AI Job Application Agent.
 
@@ -67,8 +68,6 @@ def _get_client() -> NotionClient:
     return _notion_client
 
 
-@agentops.track_tool
-@operation
 @tool
 def sync_application_to_job_tracker(
     application_id: str,
@@ -185,8 +184,6 @@ def sync_application_to_job_tracker(
         return json.dumps({"synced": False, "error": str(e), "db": "job_tracker"})
 
 
-@agentops.track_tool
-@operation
 @tool
 def queue_job_to_applications_db(
     job_post_id: str,
@@ -310,8 +307,6 @@ def queue_job_to_applications_db(
         return json.dumps({"queued": False, "error": str(e), "db": "applications"})
 
 
-@agentops.track_tool
-@operation
 @tool
 def update_notion_page_status(
     page_id: str, status: str, run_batch_id: str
@@ -377,8 +372,6 @@ def update_notion_page_status(
         )
 
 
-@agentops.track_tool
-@operation
 @tool
 def get_pending_manual_queue(run_batch_id: str) -> str:
     """
@@ -462,8 +455,6 @@ def get_pending_manual_queue(run_batch_id: str) -> str:
         return json.dumps([])
 
 
-@agentops.track_tool
-@operation
 @tool
 def check_notion_connection(run_batch_id: str) -> str:
     """
@@ -514,3 +505,13 @@ def check_notion_connection(run_batch_id: str) -> str:
         )
 
         return json.dumps({"connected": False, "bot_name": None, "error": str(e)})
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# .func ALIASES — raw function access (bypasses CrewAI Tool Pydantic wrapper)
+# ═══════════════════════════════════════════════════════════════════════════════
+_sync_application_to_job_tracker = sync_application_to_job_tracker.func if hasattr(sync_application_to_job_tracker, "func") else sync_application_to_job_tracker
+_queue_job_to_applications_db    = queue_job_to_applications_db.func    if hasattr(queue_job_to_applications_db,    "func") else queue_job_to_applications_db
+_update_notion_page_status       = update_notion_page_status.func       if hasattr(update_notion_page_status,       "func") else update_notion_page_status
+_get_pending_manual_queue        = get_pending_manual_queue.func        if hasattr(get_pending_manual_queue,        "func") else get_pending_manual_queue
+_check_notion_connection         = check_notion_connection.func         if hasattr(check_notion_connection,         "func") else check_notion_connection

@@ -1,3 +1,5 @@
+from __future__ import annotations
+from agentops.sdk.decorators import operation
 """
 AgentOps observability tools for AI Job Application Agent.
 
@@ -7,7 +9,6 @@ uses xAI or paid LLM providers should call these tools to maintain a full
 audit trail of failures and fallback activations.
 """
 
-from __future__ import annotations
 
 import json
 import logging
@@ -101,8 +102,6 @@ def _log_to_db(
                 pass
 
 
-@agentops.track_tool
-@operation
 @tool
 def record_agent_error(
     agent_type: str,
@@ -177,8 +176,6 @@ def record_agent_error(
     )
 
 
-@agentops.track_tool
-@operation
 @tool
 def record_fallback_event(
     agent_type: str,
@@ -254,3 +251,11 @@ def record_fallback_event(
             "to_provider": to_provider,
         }
     )
+
+
+
+# ---------------------------------------------------------------------------
+# Private aliases for direct programmatic calls (bypass CrewAI Tool wrapper)
+# ---------------------------------------------------------------------------
+_record_agent_error = record_agent_error.func
+_record_fallback_event = record_fallback_event.func

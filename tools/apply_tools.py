@@ -1,3 +1,5 @@
+from __future__ import annotations
+from agentops.sdk.decorators import operation
 """
 Apply tools for AI Job Application Agent.
 
@@ -19,7 +21,6 @@ by ``agents/apply_agent.py``.  All Playwright actions are fail-soft.
 ``DRY_RUN=true`` guards every submission, click, upload, and keyboard event.
 """
 
-from __future__ import annotations
 
 import asyncio
 import base64
@@ -112,8 +113,6 @@ _DB_URL: Optional[str] = (
 # ---------------------------------------------------------------------------
 # TOOL 1 — ATS platform detection (Playwright + ATSDetector)
 # ---------------------------------------------------------------------------
-@agentops.track_tool
-@operation
 @tool
 def detect_ats_platform(job_url: str, run_batch_id: str) -> str:
     """Detect the ATS platform powering a job application page.
@@ -225,8 +224,6 @@ def detect_ats_platform(job_url: str, run_batch_id: str) -> str:
 # ---------------------------------------------------------------------------
 # TOOL 2 — Proof of submission capture (UNCHANGED)
 # ---------------------------------------------------------------------------
-@agentops.track_tool
-@operation
 @tool
 def capture_proof(page_html: str, page_url: str, job_url: str) -> str:
     """Extract proof-of-submission signals from a post-apply page snapshot.
@@ -334,8 +331,6 @@ def capture_proof(page_html: str, page_url: str, job_url: str) -> str:
 # ---------------------------------------------------------------------------
 # TOOL 3 — CAPTCHA detection (UNCHANGED)
 # ---------------------------------------------------------------------------
-@agentops.track_tool
-@operation
 @tool
 def check_captcha_present(page_html: str, job_url: str) -> str:
     """Detect CAPTCHA or bot-challenge presence in page HTML.
@@ -810,8 +805,6 @@ async def _run_apply(
 # ---------------------------------------------------------------------------
 # TOOL 4 — Fill standard form (sync wrapper around _run_apply)
 # ---------------------------------------------------------------------------
-@agentops.track_tool
-@operation
 @tool
 def fill_standard_form(
     job_url: str,
@@ -942,8 +935,6 @@ def fill_standard_form(
 # ---------------------------------------------------------------------------
 # TOOL 5 — Per-run apply summary (UNCHANGED)
 # ---------------------------------------------------------------------------
-@agentops.track_tool
-@operation
 @tool
 def get_apply_summary(run_batch_id: str) -> str:
     """Aggregate application counts by status for a given run batch.
@@ -1029,8 +1020,6 @@ def get_apply_summary(run_batch_id: str) -> str:
 # ---------------------------------------------------------------------------
 # TOOL 6 — Route and Apply (HTTP call to apply_service)
 # ---------------------------------------------------------------------------
-@agentops.track_tool
-@operation
 @tool
 def route_and_apply(
     job_id: str,
@@ -1157,8 +1146,6 @@ def route_and_apply(
 # ---------------------------------------------------------------------------
 # TOOL 7 — Save Application Result to Postgres
 # ---------------------------------------------------------------------------
-@agentops.track_tool
-@operation
 @tool
 def save_application_result(
     job_id: str,
@@ -1238,8 +1225,6 @@ def save_application_result(
 # ---------------------------------------------------------------------------
 # TOOL 8 — Save to Manual Queue
 # ---------------------------------------------------------------------------
-@agentops.track_tool
-@operation
 @tool
 def save_to_queue(
     job_id: str,
@@ -1323,8 +1308,6 @@ def save_to_queue(
 # ---------------------------------------------------------------------------
 # TOOL 9 — Get Best Resume via RAG
 # ---------------------------------------------------------------------------
-@agentops.track_tool
-@operation
 @tool
 def get_best_resume(
     job_title: str,
@@ -1429,8 +1412,6 @@ def get_best_resume(
 # ---------------------------------------------------------------------------
 # TOOL 10 — Verify Apply Budget
 # ---------------------------------------------------------------------------
-@agentops.track_tool
-@operation
 @tool
 def verify_apply_budget(
     projected_cost: float,
@@ -1485,3 +1466,18 @@ def verify_apply_budget(
             "remaining_budget": -1,  # Unknown
             "error": str(exc),
         })
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# .func ALIASES — raw function access (bypasses CrewAI Tool Pydantic wrapper)
+# ═══════════════════════════════════════════════════════════════════════════════
+_detect_ats_platform     = detect_ats_platform.func     if hasattr(detect_ats_platform,     "func") else detect_ats_platform
+_capture_proof           = capture_proof.func           if hasattr(capture_proof,           "func") else capture_proof
+_check_captcha_present   = check_captcha_present.func   if hasattr(check_captcha_present,   "func") else check_captcha_present
+_fill_standard_form      = fill_standard_form.func      if hasattr(fill_standard_form,      "func") else fill_standard_form
+_get_apply_summary       = get_apply_summary.func       if hasattr(get_apply_summary,       "func") else get_apply_summary
+_route_and_apply         = route_and_apply.func         if hasattr(route_and_apply,         "func") else route_and_apply
+_save_application_result = save_application_result.func if hasattr(save_application_result, "func") else save_application_result
+_save_to_queue           = save_to_queue.func           if hasattr(save_to_queue,           "func") else save_to_queue
+_get_best_resume         = get_best_resume.func         if hasattr(get_best_resume,         "func") else get_best_resume
+_verify_apply_budget     = verify_apply_budget.func     if hasattr(verify_apply_budget,     "func") else verify_apply_budget

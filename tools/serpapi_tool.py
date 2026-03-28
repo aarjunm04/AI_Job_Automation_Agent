@@ -1,3 +1,4 @@
+from __future__ import annotations
 """SerpAPI Google Jobs tool for supplementary job discovery.
 
 Implements 4-key round-robin rotation across SERPAPI_API_KEY_1..4.
@@ -5,7 +6,6 @@ Used as fallback when primary scrapers return < 100 jobs per run.
 READ-ONLY discovery tool — never modifies any data.
 """
 
-from __future__ import annotations
 
 import threading
 import json
@@ -13,6 +13,7 @@ import logging
 import os
 import time
 import agentops
+from agentops.sdk.decorators import operation
 from serpapi import GoogleSearch
 from typing import List, Dict, Any, Optional
 
@@ -68,7 +69,7 @@ def _get_next_key() -> Optional[str]:
         _key_index += 1
         return key
 
-@agentops.track_tool
+@operation
 def search_google_jobs(
     query: str = "",
     location: str = "Remote",
