@@ -782,7 +782,7 @@ class LLMInterface:
             cost_usd = (total_tokens / 1000.0) * cost_per_1k
 
             if cost_usd > 0:
-                record_llm_cost.func(
+                record_llm_cost(
                     provider=provider,
                     cost_usd=cost_usd,
                     agent_type="ASYNC_COMPLETE",
