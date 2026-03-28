@@ -50,8 +50,8 @@ from utils.proxy_rate_limit import get_playwright_proxy, get_next_proxy, mark_pr
 # ---------------------------------------------------------------------------
 # Module-level logger
 # ---------------------------------------------------------------------------
-LOG = logging.getLogger(__name__)
-LOG.setLevel(os.getenv("LOG_LEVEL", "INFO"))
+logger = logging.getLogger(__name__)
+logger.setLevel(os.getenv("LOG_LEVEL", "INFO"))
 
 __all__ = ["app", "ApplyRequest", "ApplyResponse", "PLATFORM_REGISTRY"]
 
@@ -155,7 +155,7 @@ def _get_db_conn():
             if attempt < 2:
                 time.sleep(2 ** attempt)
             else:
-                LOG.error("Database connection failed after 3 attempts: %s", e)
+                logger.error("Database connection failed after 3 attempts: %s", e)
                 raise
 
 
@@ -177,7 +177,7 @@ def _get_user_profile() -> Dict[str, Any]:
             "years_experience": str(meta.get("years_experience_total", "0")),
         }
     except Exception as exc:  # noqa: BLE001
-        LOG.error("_get_user_profile: failed to load from config_loader: %s", exc)
+        logger.error("_get_user_profile: failed to load from config_loader: %s", exc)
         return {}
 
 
@@ -216,7 +216,7 @@ def _insert_application(
     except Exception as e:
         if conn:
             conn.rollback()
-        LOG.error("Failed to insert application: %s", e)
+        logger.error("Failed to insert application: %s", e)
         return None
     finally:
         if conn:
@@ -246,7 +246,7 @@ def _insert_queued_job(
     except Exception as e:
         if conn:
             conn.rollback()
-        LOG.error("Failed to insert queued job: %s", e)
+        logger.error("Failed to insert queued job: %s", e)
         return False
     finally:
         if conn:
@@ -275,7 +275,7 @@ def _log_audit_event(
         )
         conn.commit()
     except Exception as e:
-        LOG.warning("Failed to log audit event: %s", e)
+        logger.warning("Failed to log audit event: %s", e)
     finally:
         if conn:
             conn.close()
@@ -305,14 +305,14 @@ async def _execute_apply(
     if not resume_path.exists():
         default_resume = "Aarjun_Gen.pdf"
         resume_path = RESUME_DIR / default_resume
-        LOG.warning("Resume %s not found, using default: %s", request.resume_path, default_resume)
+        logger.warning("Resume %s not found, using default: %s", request.resume_path, default_resume)
     
     # Check budget before proceeding
     if request.run_batch_id:
         try:
             budget_result = json.loads(check_xai_run_cap(request.run_batch_id))
             if budget_result.get("abort"):
-                LOG.critical("Budget cap hit - aborting apply for job %s", request.job_id)
+                logger.critical("Budget cap hit - aborting apply for job %s", request.job_id)
                 return ApplyResponse(
                     status="failed",
                     job_id=request.job_id,
@@ -322,12 +322,12 @@ async def _execute_apply(
                     duration_seconds=time.time() - start_time,
                 )
         except Exception as e:
-            LOG.warning("Budget check failed (proceeding): %s", e)
+            logger.warning("Budget check failed (proceeding): %s", e)
     
     # Check if platform is supported
     platform_lower = request.platform.lower()
     if platform_lower not in PLATFORM_REGISTRY:
-        LOG.warning("Unsupported platform %s - routing to manual queue", platform_lower)
+        logger.warning("Unsupported platform %s - routing to manual queue", platform_lower)
         return ApplyResponse(
             status="queued",
             job_id=request.job_id,
@@ -401,7 +401,7 @@ async def _execute_apply(
             try:
                 await page.screenshot(path=screenshot_path, full_page=True)
             except Exception as ss_err:
-                LOG.warning("Screenshot failed: %s", ss_err)
+                logger.warning("Screenshot failed: %s", ss_err)
                 screenshot_path = None
             
             # Determine status
@@ -429,7 +429,7 @@ async def _execute_apply(
             )
             
         except Exception as e:
-            LOG.error("Apply execution failed for job %s: %s", request.job_id, e, exc_info=True)
+            logger.error("Apply execution failed for job %s: %s", request.job_id, e, exc_info=True)
             
             # Screenshot on error
             try:
@@ -491,7 +491,7 @@ async def apply_to_job(request: ApplyRequest) -> ApplyResponse:
     Returns:
         ApplyResponse with status (applied/queued/failed), proof, and metadata.
     """
-    LOG.info(
+    logger.info(
         "Received apply request: job_id=%s platform=%s url=%s",
         request.job_id,
         request.platform,
@@ -539,7 +539,7 @@ async def apply_to_job(request: ApplyRequest) -> ApplyResponse:
                 application_id=app_id,
             )
     
-    LOG.info(
+    logger.info(
         "Apply completed: job_id=%s status=%s duration=%.2fs",
         request.job_id,
         response.status,
@@ -579,7 +579,7 @@ def get_pending_queue() -> Dict[str, Any]:
             "jobs": [dict(row) for row in rows],
         }
     except Exception as e:
-        LOG.error("Failed to get pending queue: %s", e)
+        logger.error("Failed to get pending queue: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         if conn:
@@ -649,7 +649,7 @@ async def retry_queued_job(job_id: str) -> ApplyResponse:
     except HTTPException:
         raise
     except Exception as e:
-        LOG.error("Failed to retry queued job %s: %s", job_id, e)
+        logger.error("Failed to retry queued job %s: %s", job_id, e)
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         if conn:
@@ -662,16 +662,60 @@ async def retry_queued_job(job_id: str) -> ApplyResponse:
 @app.on_event("startup")
 async def startup_event():
     """Initialize service on startup."""
-    LOG.info("Auto Apply Service starting on port 8003...")
-    LOG.info("DRY_RUN mode: %s", DRY_RUN)
-    LOG.info("Supported platforms: %s", list(PLATFORM_REGISTRY.keys()))
+    logger.info("Auto Apply Service starting on port 8003...")
+    logger.info("DRY_RUN mode: %s", DRY_RUN)
+    logger.info("Supported platforms: %s", list(PLATFORM_REGISTRY.keys()))
     
     # Verify resume directory exists
     if not RESUME_DIR.exists():
-        LOG.warning("Resume directory %s does not exist", RESUME_DIR)
+        logger.warning("Resume directory %s does not exist", RESUME_DIR)
 
 
 @app.on_event("shutdown")
 async def shutdown_event():
     """Cleanup on shutdown."""
-    LOG.info("Auto Apply Service shutting down...")
+    logger.info("Auto Apply Service shutting down...")
+
+
+class ApplyService:
+    """
+    Orchestrator that routes an ApplyRequest to the correct platform handler.
+    Called by ApplyAgent. All platform apply() calls go through here.
+    """
+
+    def __init__(self) -> None:
+        self.logger = logging.getLogger(__name__)
+
+    async def apply(self, request: "ApplyRequest", page) -> "ApplyResponse":
+        """Route request to correct platform and execute apply flow."""
+        from auto_apply.platforms import PLATFORM_MAP
+        platform_cls = PLATFORM_MAP.get(request.platform)
+        if platform_cls is None:
+            return ApplyResponse(
+                job_id=request.job_id,
+                platform=request.platform,
+                status="error",
+                error_message=f"No handler for platform: {request.platform}",
+            )
+        try:
+            handler = platform_cls(
+                page=page,
+                job_meta=request.job_meta,
+                user_profile=request.user_profile,
+                dry_run=request.dry_run,
+            )
+            result = await handler.apply()
+            return ApplyResponse(
+                job_id=request.job_id,
+                platform=request.platform,
+                status="dry_run" if request.dry_run else "success",
+                result=result,
+            )
+        except Exception as exc:
+            self.logger.error("[ApplyService] apply() failed: %s", exc, exc_info=True)
+            return ApplyResponse(
+                job_id=request.job_id,
+                platform=request.platform,
+                status="error",
+                error_message=str(exc),
+            )
