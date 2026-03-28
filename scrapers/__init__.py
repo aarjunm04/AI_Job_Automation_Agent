@@ -41,27 +41,27 @@ Advanced (direct access to browser/adapter layer):
     from scrapers import JobSpyAdapter
 """
 
-import logging as _logging
+import logging
 
-_logger = _logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 try:
     from scrapers.scraper_engine import ScraperEngine
 except Exception as _e:  # pragma: no cover
-    _logger.warning("scrapers: could not import ScraperEngine: %s", _e)
+    logger.warning("scrapers: could not import ScraperEngine: %s", _e)
     ScraperEngine = None  # type: ignore[assignment,misc]
 
 try:
     from scrapers.scraper_service import PlaywrightManager, GLOBAL_PLAYWRIGHT_MANAGER
 except Exception as _e:  # pragma: no cover
-    _logger.warning("scrapers: could not import PlaywrightManager: %s", _e)
+    logger.warning("scrapers: could not import PlaywrightManager: %s", _e)
     PlaywrightManager = None  # type: ignore[assignment,misc]
     GLOBAL_PLAYWRIGHT_MANAGER = None  # type: ignore[assignment]
 
 try:
     from scrapers.jobspy_adapter import JobSpyAdapter
 except Exception as _e:  # pragma: no cover
-    _logger.warning("scrapers: could not import JobSpyAdapter: %s", _e)
+    logger.warning("scrapers: could not import JobSpyAdapter: %s", _e)
     JobSpyAdapter = None  # type: ignore[assignment,misc]
 
 __all__ = [

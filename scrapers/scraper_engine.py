@@ -71,7 +71,7 @@ logging.basicConfig(
     handlers=[logging.StreamHandler()],
 )
 
-LOG = logging.getLogger("scraper_engine")
+logger = logging.getLogger(__name__)
 
 
 # ================================================================================
@@ -106,27 +106,27 @@ def _make_proxied_request(
     if proxies:
         kwargs["proxies"] = proxies
     else:
-        LOG.debug("No proxy configured — direct request to %s", url)
+        logger.debug("No proxy configured — direct request to %s", url)
 
     last_exc: Optional[Exception] = None
     for attempt in range(1, 4):  # max 3 attempts
-    	try:
-    		if method.upper() == "POST":
-    			return requests.post(url, **kwargs)
-    		return requests.get(url, **kwargs)
-    	except (requests.exceptions.ProxyError,
-    			requests.exceptions.ConnectionError) as e:
-    		last_exc = e
-    		LOG.warning(
-    			"Proxy request attempt %d/3 failed for %s: %s — rotating proxy",
-    			attempt, url, str(e),
-    		)
-    		new_proxies = get_proxy_dict()
-    		if new_proxies:
-    			kwargs["proxies"] = new_proxies
+        try:
+            if method.upper() == "POST":
+                return requests.post(url, **kwargs)
+            return requests.get(url, **kwargs)
+        except (requests.exceptions.ProxyError,
+                requests.exceptions.ConnectionError) as e:
+            last_exc = e
+            logger.warning(
+                "Proxy request attempt %d/3 failed for %s: %s — rotating proxy",
+                attempt, url, str(e),
+            )
+            new_proxies = get_proxy_dict()
+            if new_proxies:
+                kwargs["proxies"] = new_proxies
 
     # All proxies failed — try direct as last resort
-    LOG.warning(
+    logger.warning(
         "All proxy attempts failed for %s — attempting direct request", url
     )
     kwargs.pop("proxies", None)
@@ -180,13 +180,13 @@ class ProxyPool:
         self.direct_fallback: bool = False
 
         if self.proxies:
-            LOG.info(
+            logger.info(
                 "ProxyPool initialized with %d proxies | failure_threshold=%d",
                 len(self.proxies),
                 self.failure_threshold,
             )
         else:
-            LOG.info("ProxyPool initialized with no proxies. Running direct-only.")
+            logger.info("ProxyPool initialized with no proxies. Running direct-only.")
 
     def _discover_proxies(self) -> List[str]:
         proxies: List[str] = []
@@ -208,7 +208,7 @@ class ProxyPool:
         # Filter out proxies over failure threshold
         healthy = [p for p in self.proxies if self.failures.get(p, 0) < self.failure_threshold]
         if not healthy:
-            LOG.warning(
+            logger.warning(
                 "All proxies exceeded failure threshold. Entering direct fallback mode."
             )
             self.direct_fallback = True
@@ -224,14 +224,14 @@ class ProxyPool:
         if proxy is None or proxy not in self.failures:
             return
         self.failures[proxy] = self.failures.get(proxy, 0) + 1
-        LOG.warning(
+        logger.warning(
             "Proxy failure recorded | proxy=%s | failures=%d",
             proxy,
             self.failures[proxy],
         )
         # If all proxies are now unhealthy, switch to direct mode.
         if all(count >= self.failure_threshold for count in self.failures.values()):
-            LOG.error(
+            logger.error(
                 "All proxies unhealthy (>= %d failures). Switching to direct fallback.",
                 self.failure_threshold,
             )
@@ -245,7 +245,7 @@ class ProxyPool:
             return
         if self.failures[proxy] > 0:
             self.failures[proxy] = 0
-            LOG.info("Proxy success | resetting failure counter | proxy=%s", proxy)
+            logger.info("Proxy success | resetting failure counter | proxy=%s", proxy)
 
 
 # ================================================================================
@@ -495,7 +495,7 @@ class Normalizer:
                 raw.get("tags") or raw.get("required_skills") or raw.get("skills") or []
             )
             if len(description) < 20 and not raw_tags_check:
-                LOG.debug(
+                logger.debug(
                     "Dropping job '%s' — description too short (%d chars) and no tags",
                     title,
                     len(description),
@@ -585,7 +585,7 @@ class Normalizer:
 
             return normalized
         except Exception as e:  # pragma: no cover
-            LOG.warning("Failed to normalize job: %s", e)
+            logger.warning("Failed to normalize job: %s", e)
             return None
 
 
@@ -617,7 +617,7 @@ class FilterEngine:
             jt.lower() for jt in filters.get("exclude_job_types", [])
         ]
         
-        LOG.info(
+        logger.info(
             "FilterEngine initialized | required_keywords=%d | exclude_seniority=%d | exclude_job_types=%d",
             len(self.required_keywords),
             len(self.exclude_seniority),
@@ -683,21 +683,21 @@ class ScoringEngine:
         cfg: ConfigLoader,
     ) -> None:
         prefs: dict = cfg.user.get("job_preferences", {})
-        # Fallback to search_queries if target_titles is missing
-        self.target_titles: list[str] = prefs.get("target_titles", prefs.get("search_queries", []))
+        # Read search_queries from user_profile job_preferences
+        self.search_queries: list[str] = prefs.get("search_queries", prefs.get("search_queries", []))
         self.seniority_keywords: list[str] = [kw.lower() for kw in prefs.get("hard_filters", {}).get("exclude_seniority_keywords", ["senior", "lead", "staff", "principal"])]
         
         # Abbreviation Expansion (F2a)
         _abbrev_map = {"ML": "Machine Learning", "AI": "Artificial Intelligence",
                        "NLP": "Natural Language Processing", "LLM": "Large Language Model"}
-        _expanded: list[str] = list(self.target_titles)
-        for title in self.target_titles:
+        _expanded: list[str] = list(self.search_queries)
+        for title in self.search_queries:
             for abbr, full in _abbrev_map.items():
                 if abbr in title:
                     _expanded.append(title.replace(abbr, full))
                 if full in title:
                     _expanded.append(title.replace(full, abbr))
-        self.target_titles = list(set(_expanded))
+        self.search_queries = list(set(_expanded))
         
         raw_skills: dict = cfg.user.get("skills", {})
         self.all_skills: set[str] = {
@@ -723,9 +723,9 @@ class ScoringEngine:
         self.fuzzy_threshold: int = int(score_cfg.get("fuzzy_title_threshold", 80))
         self.skills_min_count: int = int(score_cfg.get("skills_min_count", 3))
 
-        LOG.info(
+        logger.info(
             "ScoringEngine initialized | target_titles=%d | skills=%d | min_score=%.1f",
-            len(self.target_titles),
+            len(self.search_queries),
             len(self.all_skills),
             self.min_score,
         )
@@ -740,7 +740,7 @@ class ScoringEngine:
         title_lower: str = job.get("title", "").lower()
         title_matched: bool = any(
             fuzz.partial_ratio(t.lower(), title_lower) >= self.fuzzy_threshold
-            for t in self.target_titles
+            for t in self.search_queries
         )
         score += self.title_weight if title_matched else 0
 
@@ -829,7 +829,7 @@ class ScraperEngine:
         # Initialize scrapers
         self._init_scrapers()
 
-        LOG.info(
+        logger.info(
             "ScraperEngine initialized | scrapers=%d | min_jobs_target=%d | safety_net=%s",
             len(self.scrapers),
             self.min_jobs_target,
@@ -849,18 +849,18 @@ class ScraperEngine:
             adapter = JobSpyAdapter(self.cfg)
             if adapter.enabled_sites:
                 scrapers.append(adapter)
-                LOG.info("✓ JobSpy adapter initialized with %d sites", len(adapter.enabled_sites))
+                logger.info("✓ JobSpy adapter initialized with %d sites", len(adapter.enabled_sites))
         except Exception as e:
-            LOG.warning("JobSpyAdapter initialization failed: %s", e)
+            logger.warning("JobSpyAdapter initialization failed: %s", e)
 
         # 2. Site-specific scrapers
         from scrapers.scraper_service import (
-            RemoteOKScraper, HimalayasScraper, RemotiveScraper,
+            RemoteOKAPIScraper, HimalayasScraper, RemotiveScraper,
             WeWorkRemotelyScraper, ArbeitnowScraper, JobicyScraper,
         )
 
         _rest_scrapers = [
-            ("remoteok",       RemoteOKScraper),
+            ("remoteok",       RemoteOKAPIScraper),
             ("himalayas",      HimalayasScraper),
             ("remotive",       RemotiveScraper),
             ("weworkremotely", WeWorkRemotelyScraper),
@@ -872,12 +872,12 @@ class ScraperEngine:
             if _platform_cfg.get(_name, {}).get("active", False):
                 try:
                     scrapers.append(_cls())
-                    LOG.info("✓ %s scraper registered", _name)
+                    logger.info("✓ %s scraper registered", _name)
                 except Exception as exc:
-                    LOG.error("✗ %s scraper failed to register: %s", _name, exc)
+                    logger.error("✗ %s scraper failed to register: %s", _name, exc)
 
         self.scrapers = scrapers
-        LOG.info("Scraper registration complete | total=%d", len(self.scrapers))
+        logger.info("Scraper registration complete | total=%d", len(self.scrapers))
 
     # ------------------------------------------------------------------ #
     # HTTP HELPERS
@@ -929,7 +929,7 @@ class ScraperEngine:
 
         for scraper, result in zip(self.scrapers, scraper_results):
             if isinstance(result, Exception):
-                LOG.error("Scraper '%s' raised: %s", scraper.name, result)
+                logger.error("Scraper '%s' raised: %s", scraper.name, result)
                 self.metrics.scrapers_failed += 1
                 self.metrics.sites_scraped[scraper.name] = {
                     "count": 0,
@@ -947,7 +947,7 @@ class ScraperEngine:
                 }
 
         self.metrics.total_jobs_raw = len(all_raw_jobs)
-        LOG.info(
+        logger.info(
             "Primary scrapers done: %d raw jobs from %d scrapers",
             len(all_raw_jobs),
             self.metrics.scrapers_succeeded,
@@ -956,39 +956,46 @@ class ScraperEngine:
         # ---- Step 2: SerpAPI safety-net (called ONCE, OUTSIDE loop) -----
         # Safety-net: only trigger SerpAPI if primary scrapers
         # returned fewer than the minimum job threshold
-        SAFETY_NET_THRESHOLD = config_loader.get_run_config().get("jobs_per_run_target", 100)
+        SAFETY_NET_THRESHOLD = config_loader.get_run_config().get(
+            "jobs_per_run_target", 100
+        )
         if self.enable_safety_net and len(all_raw_jobs) < SAFETY_NET_THRESHOLD:
-            LOG.info(
+            logger.info(
                 "Safety-net triggered: %d jobs from primary scrapers "
                 "(threshold: %d) — activating SerpAPI",
-                len(all_raw_jobs), SAFETY_NET_THRESHOLD,
+                len(all_raw_jobs),
+                SAFETY_NET_THRESHOLD,
             )
+
+            # Primary source: explicit search_queries from user_profile
             search_queries: list[str] = (
-                self.cfg.user
-                .get("job_preferences", {})
-                .get("search_queries", [])
-                self.search_term: str = " ".join(search_queries[:3])
+                self.cfg.user.get("job_preferences", {}).get("search_queries", [])
             )
-            self.search_term: str = " ".join(search_queries[:3])
+
             if not search_queries:
-                # Fallback to target_titles from user_profile
+                # Fallback to search_queries from user_profile
                 search_queries = (
-                    self.cfg.user
-                    .get("job_preferences", {})
-                    .get("target_titles", [])
+                    self.cfg.user.get("job_preferences", {}).get("search_queries", [])
                 )[:5]
-            
+
+            # Use up to first 3 queries to build a generic search term
+            self.search_term = " ".join(search_queries[:3])
+
             serp_query = (search_queries[0] if search_queries else "").strip()
             if not serp_query:
-                LOG.warning(
-                    "SerpAPI safety-net: no search_queries configured in user_profile — using empty query"
+                logger.warning(
+                    "SerpAPI safety-net: no search_queries configured in "
+                    "user_profile — using empty query"
                 )
+
             try:
                 try:
-                    from tools.serpapi_tool import search_google_jobs  # local import (optional dep)
+                    # local import (optional dependency)
+                    from tools.serpapi_tool import search_google_jobs  # type: ignore[import]
                 except Exception as import_exc:  # noqa: BLE001
-                    LOG.warning(
-                        "SerpAPI safety-net: could not import search_google_jobs — skipping: %s",
+                    logger.warning(
+                        "SerpAPI safety-net: could not import search_google_jobs — "
+                        "skipping: %s",
                         import_exc,
                     )
                     search_google_jobs = None  # type: ignore[assignment]
@@ -1010,7 +1017,7 @@ class ScraperEngine:
                     )
                 serp_jobs = json.loads(serp_json_str)
                 if isinstance(serp_jobs, list):
-                    LOG.info(
+                    logger.info(
                         "SerpAPI safety-net returned %d additional jobs",
                         len(serp_jobs),
                     )
@@ -1021,15 +1028,15 @@ class ScraperEngine:
                         "errors": 0,
                     }
                 elif isinstance(serp_jobs, dict) and "error" in serp_jobs:
-                    LOG.warning(
+                    logger.warning(
                         "SerpAPI safety-net failed: %s", serp_jobs["error"]
                     )
             except Exception as e:
-                LOG.warning(
+                logger.warning(
                     "SerpAPI safety-net exception: %s", str(e)
                 )
         else:
-            LOG.info(
+            logger.info(
                 "Safety-net not needed: %d jobs collected from "
                 "primary scrapers", len(all_raw_jobs),
             )
@@ -1049,13 +1056,13 @@ class ScraperEngine:
             # Hard filters
             passed, reason = self.filter_engine.passes(normalized)
             if not passed:
-                LOG.debug("Job excluded by FilterEngine: %s | reason=%s", normalized.get('title'), reason)
+                logger.debug("Job excluded by FilterEngine: %s | reason=%s", normalized.get('title'), reason)
                 continue
 
             # YAML-driven static pre-filter scoring (0-100 internal, 0.0-1.0 output)
             score = self.scoring_engine.calculate_score(normalized)
             if score < self.scoring_engine.min_score:
-                LOG.debug("Job excluded by scoring (score=%.1f < %.1f): %s", 
+                logger.debug("Job excluded by scoring (score=%.1f < %.1f): %s", 
                           score, self.scoring_engine.min_score, normalized.get('title'))
                 continue
 
@@ -1119,7 +1126,7 @@ class ScraperEngine:
                 score_ranges["0-49"] += 1
         self.metrics.score_distribution = score_ranges
 
-        LOG.info(
+        logger.info(
             "Scrape completed: %d filtered jobs (from %d raw, %d deduped) in %.0f ms (%.1f jobs/min)",
             self.metrics.total_jobs_filtered,
             self.metrics.total_jobs_raw,
@@ -1142,18 +1149,18 @@ class ScraperEngine:
         try:
             with LATEST_RUN_PATH.open("w", encoding="utf-8") as f:
                 json.dump(self.results, f, indent=2)
-            LOG.info("Results saved to %s", LATEST_RUN_PATH)
+            logger.info("Results saved to %s", LATEST_RUN_PATH)
         except Exception as e:  # pragma: no cover
-            LOG.error("Failed to save results: %s", e)
+            logger.error("Failed to save results: %s", e)
 
     def _save_metrics(self) -> None:
         """Save metrics to JSON file."""
         try:
             with LATEST_METRICS_PATH.open("w", encoding="utf-8") as f:
                 json.dump(self.metrics.to_dict(), f, indent=2)
-            LOG.info("Metrics saved to %s", LATEST_METRICS_PATH)
+            logger.info("Metrics saved to %s", LATEST_METRICS_PATH)
         except Exception as e:  # pragma: no cover
-            LOG.error("Failed to save metrics: %s", e)
+            logger.error("Failed to save metrics: %s", e)
 
     # ------------------------------------------------------------------ #
     # PUBLIC ACCESSORS
@@ -1192,15 +1199,15 @@ async def main() -> None:
     """Main entry point."""
     engine = ScraperEngine()
     jobs, metrics = await engine.run()
-    LOG.info("=" * 60)
-    LOG.info("SCRAPER COMPLETED")
-    LOG.info("FILTERED JOBS: %d", metrics.total_jobs_filtered)
-    LOG.info("RAW JOBS: %d", metrics.total_jobs_raw)
-    LOG.info("DEDUPED: %d", metrics.deduped_jobs)
-    LOG.info("EXECUTION TIME: %.0fms", metrics.execution_time_ms)
-    LOG.info("=" * 60)
-    LOG.info("Results saved to: %s", LATEST_RUN_PATH)
-    LOG.info("Metrics saved to: %s", LATEST_METRICS_PATH)
+    logger.info("=" * 60)
+    logger.info("SCRAPER COMPLETED")
+    logger.info("FILTERED JOBS: %d", metrics.total_jobs_filtered)
+    logger.info("RAW JOBS: %d", metrics.total_jobs_raw)
+    logger.info("DEDUPED: %d", metrics.deduped_jobs)
+    logger.info("EXECUTION TIME: %.0fms", metrics.execution_time_ms)
+    logger.info("=" * 60)
+    logger.info("Results saved to: %s", LATEST_RUN_PATH)
+    logger.info("Metrics saved to: %s", LATEST_METRICS_PATH)
 
 
 if __name__ == "__main__":

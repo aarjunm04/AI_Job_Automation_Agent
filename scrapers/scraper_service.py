@@ -18,7 +18,7 @@ Responsibilities:
 └── Raw job extraction (no normalization/dedupe)
 
 Legacy classes kept (not exported):
-    RemoteOKScraper, SimplyHiredScraper, StackOverflowScraper, HiringCafeScraper
+    RemoteOKAPIScraper, SimplyHiredScraper, StackOverflowScraper, HiringCafeScraper
 
 Usage by ScraperEngine:
     scraper = WellfoundScraper(jobs_limit=20)
@@ -61,8 +61,16 @@ logging.basicConfig(
         logging.FileHandler("playwright_scrapers.log"),
     ],
 )
-LOG = logging.getLogger("playwright_scrapers")
-LOG.setLevel(logging.INFO)
+logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# ENVIRONMENT LOADING
+# ---------------------------------------------------------------------------
+_env_path = os.getenv("DOTENV_PATH", os.path.expanduser("~/java.env"))
+if os.path.exists(_env_path):
+    load_dotenv(dotenv_path=_env_path, override=False)
+
 
 # =================================================================================
 # STEALTH HELPERS (module-level — shared by all scrapers)
@@ -126,12 +134,12 @@ class ProxyManager:
     """Manages static Webshare proxies loaded from ~/java.env."""
 
     def __init__(self) -> None:
-        load_dotenv(Path.home() / "java.env")
+
         self.proxies: List[ProxyNode] = []
         self._proxy_index: int = 0
         self._lock = asyncio.Lock()
         self._load_static_proxies()
-        LOG.info("Loaded %d static proxies", len(self.proxies))
+        logger.info("Loaded %d static proxies", len(self.proxies))
 
     def _load_static_proxies(self) -> None:
         """
@@ -163,12 +171,12 @@ class ProxyManager:
                     password=password,
                 )
                 self.proxies.append(node)
-                LOG.info("Loaded proxy from %s", key)
+                logger.info("Loaded proxy from %s", key)
             except Exception as e:
-                LOG.warning("Failed to parse proxy %s: %s", key, e)
+                logger.warning("Failed to parse proxy %s: %s", key, e)
 
         if not self.proxies:
-            LOG.warning("No valid proxies found. Running without proxies.")
+            logger.warning("No valid proxies found. Running without proxies.")
 
     def select_proxy(self) -> Optional[ProxyNode]:
         """Round-robin selection with fallback to least-failed proxy."""
@@ -247,7 +255,7 @@ class PlaywrightManager:
                 ],
             )
             self._initialized = True
-            LOG.info("Playwright browser + stealth initialized")
+            logger.info("Playwright browser + stealth initialized")
 
     async def new_context(self, require_proxy: bool = False) -> BrowserContext:
         """Create a new browser context with proxy rotation + stealth init script."""
@@ -257,7 +265,7 @@ class PlaywrightManager:
 
         # Verify proxy health — try up to 3 proxies before falling back to direct
         if proxy_node and not self.proxy_manager._verify_proxy(proxy_node):
-            LOG.warning("Proxy %s failed health check — rotating", proxy_node.server)
+            logger.warning("Proxy %s failed health check — rotating", proxy_node.server)
             proxy_node.mark_failure()
             for _ in range(2):
                 proxy_node = self.proxy_manager.rotate_proxy()
@@ -269,7 +277,7 @@ class PlaywrightManager:
             if not proxy_node:
                 if require_proxy:
                     raise RuntimeError("All proxies failed health check — require_proxy set, aborting")
-                LOG.warning("All proxy candidates failed health check — using direct")
+                logger.warning("All proxy candidates failed health check — using direct")
 
         proxy_config = (
             {
@@ -325,7 +333,7 @@ class PlaywrightManager:
         """Clean shutdown — close browser if open."""
         if self._browser:
             await self._browser.close()
-            LOG.info("Playwright browser closed")
+            logger.info("Playwright browser closed")
 
 
 # =================================================================================
@@ -358,9 +366,9 @@ class BasePlaywrightScraper:
             try:
                 return await self._scrape_once(manager)
             except Exception as e:
-                LOG.warning("%s attempt %d failed: %s", self.name, attempt + 1, e)
+                logger.warning("%s attempt %d failed: %s", self.name, attempt + 1, e)
                 if attempt == self.max_retries:
-                    LOG.error("%s all retries exhausted", self.name)
+                    logger.error("%s all retries exhausted", self.name)
                     return []
                 await asyncio.sleep(2**attempt)
         return []
@@ -377,14 +385,14 @@ class BasePlaywrightScraper:
             page.set_default_timeout(10000)
 
             await page.goto(self.start_url, timeout=15000, wait_until="domcontentloaded")
-            LOG.debug("%s: navigated to %s", self.name, self.start_url)
+            logger.debug("%s: navigated to %s", self.name, self.start_url)
 
             for _ in range(self.scroll_times):
                 await page.evaluate("window.scrollBy(0, document.body.scrollHeight)")
                 await page.wait_for_timeout(1000 + random.randint(0, 500))
 
             cards = await page.query_selector_all(self.job_card_selector)
-            LOG.info("%s: found %d job cards", self.name, len(cards))
+            logger.info("%s: found %d job cards", self.name, len(cards))
 
             for card in cards[: self.jobs_limit]:
                 job = await self._extract_job(card)
@@ -395,11 +403,11 @@ class BasePlaywrightScraper:
             estimated_kb = len(results) * 150
             await manager.report_success(context, estimated_kb)
 
-            LOG.info("%s: extracted %d jobs", self.name, len(results))
+            logger.info("%s: extracted %d jobs", self.name, len(results))
             return results
 
         except Exception as e:
-            LOG.error("%s: scrape failed — %s", self.name, e)
+            logger.error("%s: scrape failed — %s", self.name, e)
             if context:
                 await manager.report_failure(context)
             raise
@@ -507,7 +515,7 @@ class WellfoundScraper(BasePlaywrightScraper):
         """
         session_cookie = os.getenv("WELLFOUND_SESSION_COOKIE", "")
         if not session_cookie:
-            LOG.warning(
+            logger.warning(
                 "WellfoundScraper: WELLFOUND_SESSION_COOKIE not set — "
                 "Wellfound requires a logged-in session to access job listings. "
                 "Skipping Wellfound scrape. Set WELLFOUND_SESSION_COOKIE in "
@@ -555,7 +563,7 @@ class WellfoundScraper(BasePlaywrightScraper):
                         }
                     ]
                 )
-                LOG.info("WellfoundScraper: injected session cookie")
+                logger.info("WellfoundScraper: injected session cookie")
 
             page = await context.new_page()
             timeout_ms = int(os.getenv("PLAYWRIGHT_TIMEOUT_MS", "60000"))
@@ -572,7 +580,7 @@ class WellfoundScraper(BasePlaywrightScraper):
             # Check for login wall — if redirected to /login or /users/sign_in
             current = page.url
             if "/login" in current or "/sign_in" in current or "/sign_up" in current:
-                LOG.warning(
+                logger.warning(
                     "WellfoundScraper: redirected to login wall (%s). "
                     "Session cookie may be expired. Skipping.",
                     current,
@@ -582,7 +590,7 @@ class WellfoundScraper(BasePlaywrightScraper):
             try:
                 await page.wait_for_selector(self.job_card_selector, timeout=15000)
             except Exception:
-                LOG.warning(
+                logger.warning(
                     "WellfoundScraper: no job cards found at %s — "
                     "session may be invalid or page structure changed.",
                     self.start_url,
@@ -594,7 +602,7 @@ class WellfoundScraper(BasePlaywrightScraper):
                 await asyncio.sleep(1.0 + random.random() * 0.5)
 
             cards = await page.query_selector_all(self.job_card_selector)
-            LOG.info("%s: found %d job cards", self.name, len(cards))
+            logger.info("%s: found %d job cards", self.name, len(cards))
 
             scraped_at = datetime.datetime.utcnow().isoformat() + "Z"
             for card in cards[: self.jobs_limit]:
@@ -604,11 +612,11 @@ class WellfoundScraper(BasePlaywrightScraper):
                     results.append(job)
 
             await manager.report_success(context, len(results) * 200)
-            LOG.info("%s: extracted %d jobs", self.name, len(results))
+            logger.info("%s: extracted %d jobs", self.name, len(results))
             return results
 
         except Exception as e:
-            LOG.error("%s: scrape failed — %s", self.name, e)
+            logger.error("%s: scrape failed — %s", self.name, e)
             if context:
                 await manager.report_failure(context)
             raise
@@ -642,7 +650,7 @@ class WellfoundScraper(BasePlaywrightScraper):
             link = await self._safe_attr(card, self.link_selector, "href")
 
             if not title or not link:
-                LOG.debug(
+                logger.debug(
                     "WellfoundScraper._extract_job: returning None — title=%r link=%r",
                     title,
                     link,
@@ -663,7 +671,7 @@ class WellfoundScraper(BasePlaywrightScraper):
                 "raw_html_snippet": raw_html,
             }
         except Exception as exc:
-            LOG.debug("WellfoundScraper._extract_job: exception — %s", exc)
+            logger.debug("WellfoundScraper._extract_job: exception — %s", exc)
             return None
 
 
@@ -723,7 +731,7 @@ class YCStartupScraper(BasePlaywrightScraper):
                 break
             except Exception as exc:
                 wait = 2 ** attempt
-                LOG.warning(
+                logger.warning(
                     "YCStartupScraper.scrape: attempt %d/%d failed: %s — retrying in %ds",
                     attempt + 1,
                     self.max_retries,
@@ -733,7 +741,7 @@ class YCStartupScraper(BasePlaywrightScraper):
                 if attempt < self.max_retries - 1:
                     await asyncio.sleep(wait)
                 else:
-                    LOG.error("YCStartupScraper.scrape: all retries exhausted")
+                    logger.error("YCStartupScraper.scrape: all retries exhausted")
         return results
 
     def _get_next_page_url(self, current_url: str, page: int) -> Optional[str]:
@@ -770,7 +778,7 @@ class YCStartupScraper(BasePlaywrightScraper):
             try:
                 await page.wait_for_selector(self.job_card_selector, timeout=15000)
             except Exception:
-                LOG.warning(
+                logger.warning(
                     "YCStartupScraper: job card selector %r not found — "
                     "page may have changed structure",
                     self.job_card_selector,
@@ -782,7 +790,7 @@ class YCStartupScraper(BasePlaywrightScraper):
                 await asyncio.sleep(1.0 + random.random() * 0.5)
 
             cards = await page.query_selector_all(self.job_card_selector)
-            LOG.info("%s: found %d job cards via CSS selector", self.name, len(cards))
+            logger.info("%s: found %d job cards via CSS selector", self.name, len(cards))
 
             scraped_at = datetime.datetime.utcnow().isoformat() + "Z"
             for card in cards[: self.jobs_limit]:
@@ -792,11 +800,11 @@ class YCStartupScraper(BasePlaywrightScraper):
                     results.append(job)
 
             await manager.report_success(context, len(results) * 150)
-            LOG.info("%s: extracted %d jobs", self.name, len(results))
+            logger.info("%s: extracted %d jobs", self.name, len(results))
             return results
 
         except Exception as e:
-            LOG.error("%s: scrape failed — %s", self.name, e)
+            logger.error("%s: scrape failed — %s", self.name, e)
             if context:
                 await manager.report_failure(context)
             raise
@@ -830,7 +838,7 @@ class YCStartupScraper(BasePlaywrightScraper):
             link = await self._safe_attr(card, self.link_selector, "href")
 
             if not title or not link:
-                LOG.debug(
+                logger.debug(
                     "YCStartupScraper._extract_job: returning None — title=%r link=%r",
                     title,
                     link,
@@ -851,7 +859,7 @@ class YCStartupScraper(BasePlaywrightScraper):
                 "raw_html_snippet": raw_html,
             }
         except Exception as exc:
-            LOG.debug("YCStartupScraper._extract_job: exception — %s", exc)
+            logger.debug("YCStartupScraper._extract_job: exception — %s", exc)
             return None
 
 
@@ -955,7 +963,7 @@ class ArcDevScraper(BasePlaywrightScraper):
                 break
             except Exception as exc:
                 wait = 2 ** attempt
-                LOG.warning(
+                logger.warning(
                     "ArcDevScraper.scrape: attempt %d/%d failed: %s — retrying in %ds",
                     attempt + 1,
                     self.max_retries,
@@ -965,7 +973,7 @@ class ArcDevScraper(BasePlaywrightScraper):
                 if attempt < self.max_retries - 1:
                     await asyncio.sleep(wait)
                 else:
-                    LOG.error("ArcDevScraper.scrape: all retries exhausted")
+                    logger.error("ArcDevScraper.scrape: all retries exhausted")
         return results
 
     def _get_next_page_url(self, current_url: str, page: int) -> Optional[str]:
@@ -1008,7 +1016,7 @@ class ArcDevScraper(BasePlaywrightScraper):
                     parsed = json.loads(raw_json)
                     jobs_from_json = self._extract_from_next_data(parsed)
                     if jobs_from_json:
-                        LOG.info(
+                        logger.info(
                             "%s: extracted %d jobs via __NEXT_DATA__",
                             self.name,
                             len(jobs_from_json),
@@ -1016,7 +1024,7 @@ class ArcDevScraper(BasePlaywrightScraper):
                         await manager.report_success(context, len(jobs_from_json) * 200)
                         return jobs_from_json[: self.jobs_limit]
             except Exception as next_err:
-                LOG.debug(
+                logger.debug(
                     "%s: __NEXT_DATA__ extraction failed (%s) — falling back to CSS",
                     self.name,
                     next_err,
@@ -1026,7 +1034,7 @@ class ArcDevScraper(BasePlaywrightScraper):
             try:
                 await page.wait_for_selector(self.job_card_selector, timeout=15000)
             except Exception:
-                LOG.warning(
+                logger.warning(
                     "ArcDevScraper: job card selector %r not found after 15s",
                     self.job_card_selector,
                 )
@@ -1037,7 +1045,7 @@ class ArcDevScraper(BasePlaywrightScraper):
                 await asyncio.sleep(1.2 + random.random() * 0.6)
 
             cards = await page.query_selector_all(self.job_card_selector)
-            LOG.info("%s: found %d job cards via CSS", self.name, len(cards))
+            logger.info("%s: found %d job cards via CSS", self.name, len(cards))
 
             scraped_at = datetime.datetime.utcnow().isoformat() + "Z"
             for card in cards[: self.jobs_limit]:
@@ -1047,11 +1055,11 @@ class ArcDevScraper(BasePlaywrightScraper):
                     results.append(job)
 
             await manager.report_success(context, len(results) * 200)
-            LOG.info("%s: extracted %d jobs (CSS fallback)", self.name, len(results))
+            logger.info("%s: extracted %d jobs (CSS fallback)", self.name, len(results))
             return results
 
         except Exception as e:
-            LOG.error("%s: scrape failed — %s", self.name, e)
+            logger.error("%s: scrape failed — %s", self.name, e)
             if context:
                 await manager.report_failure(context)
             raise
@@ -1129,7 +1137,7 @@ class ArcDevScraper(BasePlaywrightScraper):
                     }
                 )
         except Exception as exc:
-            LOG.debug("%s: error walking __NEXT_DATA__: %s", self.name, exc)
+            logger.debug("%s: error walking __NEXT_DATA__: %s", self.name, exc)
         return results
 
     async def _extract_job(self, card) -> Optional[Dict[str, Any]]:
@@ -1155,7 +1163,7 @@ class ArcDevScraper(BasePlaywrightScraper):
             link = await self._safe_attr(card, self.link_selector, "href")
 
             if not title or not link:
-                LOG.debug(
+                logger.debug(
                     "ArcDevScraper._extract_job: returning None — title=%r link=%r",
                     title,
                     link,
@@ -1176,7 +1184,7 @@ class ArcDevScraper(BasePlaywrightScraper):
                 "raw_html_snippet": raw_html,
             }
         except Exception as exc:
-            LOG.debug("ArcDevScraper._extract_job: exception — %s", exc)
+            logger.debug("ArcDevScraper._extract_job: exception — %s", exc)
             return None
 
 
@@ -1229,7 +1237,7 @@ class ToptalScraper(BasePlaywrightScraper):
 
 # ---- Legacy scrapers (kept for reference; NOT exported) ----------------------
 
-class RemoteOKScraper(BasePlaywrightScraper):
+class RemoteOKPlaywrightScraper(BasePlaywrightScraper):
     """Legacy Playwright scraper for RemoteOK. Replaced by RemoteOKAPIScraper."""
 
     name = "remoteok_pw"
@@ -1364,12 +1372,12 @@ class WeWorkRemotelyScraper(BaseAPIScraper):
                 if len(results) >= self.jobs_limit:
                     break
             except Exception as e:
-                LOG.error("WWR RSS feed %s failed: %s", feed_url, e)
+                logger.error("WWR RSS feed %s failed: %s", feed_url, e)
 
         return results
 
 
-class RemoteOKScraper(BaseAPIScraper):
+class RemoteOKAPIScraper(BaseAPIScraper):
     """RemoteOK Public API scraper."""
 
     name = "remoteok"
@@ -1383,7 +1391,7 @@ class RemoteOKScraper(BaseAPIScraper):
             response.raise_for_status()
             data = response.json()
         except Exception as e:
-            LOG.error("RemoteOK API failed: %s", e)
+            logger.error("RemoteOK API failed: %s", e)
             return []
 
         results: List[Dict[str, Any]] = []
@@ -1431,7 +1439,7 @@ class HimalayasScraper(BaseAPIScraper):
         while len(results) < self.jobs_limit:
             try:
                 params = {"limit": limit, "offset": offset}
-                LOG.info("Himalayas request: %s params=%s", self.endpoint, params)
+                logger.info("Himalayas request: %s params=%s", self.endpoint, params)
                 # NO PROXY as per Batch 11 requirements
                 response = _http_requests.get(
                     self.endpoint, 
@@ -1444,7 +1452,7 @@ class HimalayasScraper(BaseAPIScraper):
                 
                 jobs = data.get("jobs", [])
                 total = data.get("totalCount", 0)
-                LOG.debug("Himalayas page=%d raw_count=%d total=%d", 
+                logger.debug("Himalayas page=%d raw_count=%d total=%d", 
                          page, len(jobs), total)
                 
                 if not jobs:
@@ -1479,7 +1487,7 @@ class HimalayasScraper(BaseAPIScraper):
                 if len(jobs) < limit:
                     break
             except Exception as e:
-                LOG.error("Himalayas API failed at offset %d: %s", offset, e)
+                logger.error("Himalayas API failed at offset %d: %s", offset, e)
                 break
         return results
 
@@ -1497,7 +1505,7 @@ class ArbeitnowScraper(BaseAPIScraper):
             data = response.json()
             jobs = data.get("data", [])
         except Exception as e:
-            LOG.error("Arbeitnow API failed: %s", e)
+            logger.error("Arbeitnow API failed: %s", e)
             return []
 
         results: List[Dict[str, Any]] = []
@@ -1538,7 +1546,7 @@ class JobicyScraper(BaseAPIScraper):
             data = response.json()
             jobs = data.get("jobs", [])
         except Exception as e:
-            LOG.error("Jobicy API failed: %s", e)
+            logger.error("Jobicy API failed: %s", e)
             return []
 
         results: List[Dict[str, Any]] = []
@@ -1584,7 +1592,7 @@ class RemotiveScraper(BaseAPIScraper):
             data = response.json()
             jobs = data.get("jobs", [])
         except Exception as e:
-            LOG.error("Remotive API failed: %s", e)
+            logger.error("Remotive API failed: %s", e)
             return []
 
         results: List[Dict[str, Any]] = []
@@ -1638,9 +1646,9 @@ def _shutdown_playwright() -> None:
         try:
             loop.run_until_complete(GLOBAL_PLAYWRIGHT_MANAGER.shutdown())
         except Exception as e:
-            LOG.warning("Error during Playwright shutdown: %s", e)
+            logger.warning("Error during Playwright shutdown: %s", e)
     except Exception as e:
-        LOG.warning("_shutdown_playwright: unexpected error: %s", e)
+        logger.warning("_shutdown_playwright: unexpected error: %s", e)
 
 
 atexit.register(_shutdown_playwright)
@@ -1662,7 +1670,7 @@ __all__ = [
     "ArcDevScraper",
     "NodeskScraper",
     "ToptalScraper",
-    "RemoteOKScraper",
+    "RemoteOKAPIScraper",
     "HimalayasScraper",
     "ArbeitnowScraper",
     "JobicyScraper",
@@ -1696,7 +1704,7 @@ def _verify_scraper_api_key(
     if _SCRAPER_API_KEY and x_api_key == _SCRAPER_API_KEY:
         return x_api_key
     if not _SCRAPER_API_KEY:
-        LOG.warning("SCRAPER_SERVICE_API_KEY not set — auth disabled")
+        logger.warning("SCRAPER_SERVICE_API_KEY not set — auth disabled")
         return x_api_key
     raise HTTPException(status_code=401, detail="Invalid API key")
 
@@ -1744,7 +1752,7 @@ async def scrape_jobs(
         engine = ScraperEngine(min_jobs_target=request.max_jobs)
         jobs, metrics = await engine.run()
         duration = round(time.time() - start, 2)
-        LOG.info(
+        logger.info(
             "POST /scrape batch=%s jobs=%d duration=%.2fs",
             request.run_batch_id,
             len(jobs),
@@ -1758,7 +1766,7 @@ async def scrape_jobs(
             "duration_seconds": duration,
         }
     except Exception as exc:
-        LOG.error("POST /scrape failed: %s", exc)
+        logger.error("POST /scrape failed: %s", exc)
         return {
             "run_batch_id": request.run_batch_id,
             "jobs_found": 0,
@@ -1791,7 +1799,7 @@ async def health() -> Dict[str, Any]:
         await browser.close()
         await pw.stop()
     except Exception as exc:
-        LOG.warning("Health: Playwright check failed: %s", exc)
+        logger.warning("Health: Playwright check failed: %s", exc)
         result["playwright"] = "error"
         result["status"] = "error"
     return result

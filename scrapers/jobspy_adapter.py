@@ -40,17 +40,17 @@ from config.config_loader import ConfigLoader
 # LOGGING
 # ================================================================================
 
-LOG = logging.getLogger("jobspy_adapter")
+logger = logging.getLogger(__name__)
 
-if not LOG.handlers:
+if not logger.handlers:
     handler = logging.StreamHandler()
     formatter = logging.Formatter(
         "%(asctime)s | %(name)s | %(levelname)s | %(message)s"
     )
     handler.setFormatter(formatter)
-    LOG.addHandler(handler)
+    logger.addHandler(handler)
 
-LOG.setLevel(logging.INFO)
+logger.setLevel(logging.INFO)
 
 # ================================================================================
 # JOBSPY IMPORTS + PATCHING
@@ -64,7 +64,7 @@ try:
     JOBSPY_AVAILABLE = True
 except Exception as e:  # pragma: no cover
     JOBSPY_AVAILABLE = False
-    LOG.error("JobSpy not available: %s", e)
+    logger.error("JobSpy not available: %s", e)
 
 # ---- Country.from_string PATCH --------------------------------------------------
 # Prevent crashes from invalid country strings (e.g. "armenia")
@@ -81,7 +81,7 @@ if JOBSPY_AVAILABLE:
             return _real_from_string("worldwide")
 
     Country.from_string = _safe_from_string  # type: ignore[attr-defined]
-    LOG.info("Patched JobSpy Country.from_string() successfully.")
+    logger.info("Patched JobSpy Country.from_string() successfully.")
 
 # ================================================================================
 # CONSTANTS
@@ -253,8 +253,8 @@ class JobSpyAdapter:
         self.hours_old = int(hours_old)
         
         # Search terms from user preferences
-        target_titles = cfg.user.get("job_preferences", {}).get("target_titles", [])
-        self.search_term = " ".join(target_titles[:3]) if target_titles else ""
+        search_queries = cfg.user.get("job_preferences", {}).get("search_queries", [])
+        self.search_term = " ".join(search_queries[:3]) if search_queries else ""
 
         # Filter platforms that have jobspy_enabled=True
         self.enabled_sites: List[Site] = []
@@ -267,7 +267,7 @@ class JobSpyAdapter:
         allowed_countries = cfg.user.get("job_preferences", {}).get("locations", {}).get("allowed_countries", [])
         self.glassdoor_country = str(allowed_countries[0]).lower() if allowed_countries else DEFAULT_COUNTRY
 
-        LOG.info(
+        logger.info(
             "JobSpyAdapter initialized | enabled_sites=%s | jobs_per_site=%d | hours_old=%d | glassdoor_country=%s | search_term=%s",
             [s.value for s in self.enabled_sites],
             self.jobs_per_site,
@@ -321,7 +321,7 @@ class JobSpyAdapter:
           does not impact others.
         """
         if not JOBSPY_AVAILABLE:
-            LOG.error("JobSpy is not available at runtime.")
+            logger.error("JobSpy is not available at runtime.")
             return []
 
         rows: List[Dict[str, Any]] = []
@@ -330,7 +330,7 @@ class JobSpyAdapter:
             site_name = getattr(site, "value", str(site))
             try:
                 country_arg = self._resolve_country_for_site(site)
-                LOG.info(
+                logger.info(
                     "Running JobSpy for site=%s | results=%d | hours_old=%d | country_indeed=%s",
                     site_name,
                     self.jobs_per_site,
@@ -346,7 +346,7 @@ class JobSpyAdapter:
                     try:
                         proxy = get_proxy_dict()
                     except Exception as e:  # noqa: BLE001
-                        LOG.warning("JobSpy proxy config failed for %s — running without proxy: %s", site_name, e)
+                        logger.warning("JobSpy proxy config failed for %s — running without proxy: %s", site_name, e)
                         proxy = None
 
                 df: pd.DataFrame = scrape_jobs(
@@ -361,7 +361,7 @@ class JobSpyAdapter:
                 )
 
                 if df is None or df.empty:
-                    LOG.warning("JobSpy returned empty DataFrame for site=%s", site_name)
+                    logger.warning("JobSpy returned empty DataFrame for site=%s", site_name)
                     continue
 
                 records = df.to_dict(orient="records")
@@ -373,33 +373,33 @@ class JobSpyAdapter:
                     rows.append(job_dict)
                     site_count += 1
 
-                LOG.info("JobSpy site=%s returned %d usable raw jobs", site_name, site_count)
+                logger.info("JobSpy site=%s returned %d usable raw jobs", site_name, site_count)
 
             except ImportError as e:
-                LOG.error("JobSpy import failed for site=%s: %s", site_name, e)
+                logger.error("JobSpy import failed for site=%s: %s", site_name, e)
             except AttributeError as e:
-                LOG.error(
+                logger.error(
                     "JobSpy attribute error for site=%s: %s. Version may be incompatible.",
                     site_name,
                     e,
                     exc_info=True,
                 )
             except ValueError as e:
-                LOG.error(
+                logger.error(
                     "JobSpy value error for site=%s: %s. Check parameters.",
                     site_name,
                     e,
                     exc_info=True,
                 )
             except Exception as e:  # pragma: no cover - safety net
-                LOG.error(
+                logger.error(
                     "JobSpy scrape failed for site=%s with unexpected error: %s",
                     site_name,
                     e,
                     exc_info=True,
                 )
 
-        LOG.info("JobSpy returned %d total raw jobs across all sites", len(rows))
+        logger.info("JobSpy returned %d total raw jobs across all sites", len(rows))
         return rows
 
     # ------------------------------------------------------------------ #
