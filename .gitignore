@@ -416,3 +416,6 @@ config/user_profile.json
 scripts/
 ./scripts
 scripts
+
+#backups from shell scripts
+.patch_backup_20260327_172637
