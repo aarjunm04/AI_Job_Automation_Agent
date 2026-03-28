@@ -1483,7 +1483,6 @@ async def general_exception_handler(request: Request, exc: Exception):
 # MAIN ENTRY POINT
 # ═══════════════════════════════════════════════════════════════════════════
 
-@agentops.track_tool
 def main() -> None:
     """Start production server"""
     logger.info("=" * 80)
