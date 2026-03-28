@@ -1,3 +1,4 @@
+from agentops.sdk.decorators import operation
 """
 Scraper tools for AI Job Application Agent.
 
@@ -15,6 +16,8 @@ import asyncio
 import concurrent.futures
 from typing import Optional, List, Dict, Any
 
+logger = logging.getLogger(__name__)
+
 from crewai.tools import tool
 import agentops
 from agentops.sdk.decorators import agent, operation
@@ -24,8 +27,6 @@ import psycopg2.extras
 from scrapers.jobspy_adapter import JobSpyAdapter
 from scrapers.scraper_engine import (
     ScraperEngine,
-    RemoteOKAPIScraper,
-    HimalayasAPIScraper,
 )
 from tools.serpapi_tool import search_google_jobs
 from scrapers.scraper_service import (
@@ -33,10 +34,14 @@ from scrapers.scraper_service import (
     WellfoundScraper,
     WeWorkRemotelyScraper,
     NodeskScraper,
+    RemoteOKAPIScraper,
+    HimalayasScraper,
 )
 from tools.postgres_tools import upsert_job_post, log_event, get_platform_config
 from utils.db_utils import get_db_conn
 from config.config_loader import config_loader
+
+
 
 __all__ = [
     "run_jobspy_scrape",
@@ -99,8 +104,6 @@ def _with_retry(func, max_retries: int = 3):
     return wrapper
 
 
-@agentops.track_tool
-@operation
 @tool
 def run_jobspy_scrape(
     run_batch_id: str,
@@ -193,8 +196,6 @@ def run_jobspy_scrape(
         )
 
 
-@agentops.track_tool
-@operation
 @tool
 def run_rest_api_scrape(
     run_batch_id: str, platforms: str = "remoteok,himalayas"
@@ -231,7 +232,7 @@ def run_rest_api_scrape(
             if platform_name == "remoteok":
                 scraper = RemoteOKAPIScraper(jobs_per_site=50)
             elif platform_name == "himalayas":
-                scraper = HimalayasAPIScraper(jobs_per_site=50)
+                scraper = HimalayasScraper(jobs_per_site=50)
             else:
                 errors.append(f"Unknown platform: {platform_name}")
                 continue
@@ -298,8 +299,6 @@ def run_rest_api_scrape(
     )
 
 
-@agentops.track_tool
-@operation
 @tool
 def run_playwright_scrape(
     run_batch_id: str, platform: str, max_jobs: int = 30
@@ -438,8 +437,6 @@ def run_playwright_scrape(
         )
 
 
-@agentops.track_tool
-@operation
 @tool
 def run_serpapi_scrape(
     run_batch_id: str,
@@ -551,8 +548,6 @@ def run_serpapi_scrape(
         )
 
 
-@agentops.track_tool
-@operation
 @tool
 def run_safety_net_scrape(run_batch_id: str, current_job_count: int) -> str:
     """
@@ -638,8 +633,6 @@ def run_safety_net_scrape(run_batch_id: str, current_job_count: int) -> str:
         )
 
 
-@agentops.track_tool
-@operation
 @tool
 def normalise_and_dedup(run_batch_id: str) -> str:
     """
@@ -728,8 +721,6 @@ def normalise_and_dedup(run_batch_id: str) -> str:
             conn.close()
 
 
-@agentops.track_tool
-@operation
 @tool
 def get_scrape_summary(run_batch_id: str) -> str:
     """
@@ -811,3 +802,17 @@ def get_scrape_summary(run_batch_id: str) -> str:
             "error": str(last_exc),
         }
     )
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# .func ALIASES — raw function access (bypasses CrewAI Tool Pydantic wrapper)
+# Use these underscore aliases when calling tools DIRECTLY from agent code.
+# NEVER call the @tool version directly from an agent — always use _alias.
+# ═══════════════════════════════════════════════════════════════════════════════
+_run_jobspy_scrape     = run_jobspy_scrape.func     if hasattr(run_jobspy_scrape,     "func") else run_jobspy_scrape
+_run_rest_api_scrape   = run_rest_api_scrape.func   if hasattr(run_rest_api_scrape,   "func") else run_rest_api_scrape
+_run_playwright_scrape = run_playwright_scrape.func if hasattr(run_playwright_scrape, "func") else run_playwright_scrape
+_run_serpapi_scrape    = run_serpapi_scrape.func    if hasattr(run_serpapi_scrape,    "func") else run_serpapi_scrape
+_run_safety_net_scrape = run_safety_net_scrape.func if hasattr(run_safety_net_scrape, "func") else run_safety_net_scrape
+_normalise_and_dedup   = normalise_and_dedup.func   if hasattr(normalise_and_dedup,   "func") else normalise_and_dedup
+_get_scrape_summary    = get_scrape_summary.func    if hasattr(get_scrape_summary,    "func") else get_scrape_summary
