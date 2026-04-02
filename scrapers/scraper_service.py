@@ -1383,6 +1383,10 @@ class RemoteOKAPIScraper(BaseAPIScraper):
     name = "remoteok"
     endpoint = "https://remoteok.com/api"
 
+    def __init__(self, jobs_per_site: int = 50, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.jobs_per_site = jobs_per_site
+
     def _run_sync(self) -> List[Dict[str, Any]]:
         try:
             # RemoteOK requires a User-Agent
@@ -1415,7 +1419,7 @@ class RemoteOKAPIScraper(BaseAPIScraper):
                 "tags": item.get("tags") or [],
                 "scraped_at": datetime.datetime.utcnow().isoformat() + "Z",
             })
-            if len(results) >= self.jobs_limit:
+            if len(results) >= self.jobs_per_site:
                 break
         return results
 
@@ -1429,6 +1433,10 @@ class HimalayasScraper(BaseAPIScraper):
     name = "himalayas"
     endpoint = "https://himalayas.app/jobs/api"
 
+    def __init__(self, jobs_per_site: int = 50, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.jobs_per_site = jobs_per_site
+
     def _run_sync(self) -> List[Dict[str, Any]]:
         results: List[Dict[str, Any]] = []
         limit = 50
@@ -1436,7 +1444,7 @@ class HimalayasScraper(BaseAPIScraper):
         
         # Paginate to reach jobs_limit
         page = 1
-        while len(results) < self.jobs_limit:
+        while len(results) < self.jobs_per_site:
             try:
                 params = {"limit": limit, "offset": offset}
                 logger.info("Himalayas request: %s params=%s", self.endpoint, params)
@@ -1479,7 +1487,7 @@ class HimalayasScraper(BaseAPIScraper):
                         "tags": j.get("skills") or [],
                         "scraped_at": datetime.datetime.utcnow().isoformat() + "Z",
                     })
-                    if len(results) >= self.jobs_limit:
+                    if len(results) >= self.jobs_per_site:
                         break
                 
                 offset += limit
