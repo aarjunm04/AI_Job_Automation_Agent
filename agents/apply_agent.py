@@ -46,6 +46,7 @@ from tools.postgres_tools import (
     create_application,
     update_application_status,
     log_event,
+    _log_event,
     get_platform_config,
 )
 from tools.budget_tools import (
@@ -55,7 +56,9 @@ from tools.budget_tools import (
 )
 from tools.agentops_tools import (
     record_agent_error,
+    _record_agent_error,
     record_fallback_event,
+    _record_fallback_event,
 )
 from utils.db_utils import get_db_conn
 
@@ -70,9 +73,6 @@ __all__ = ["ApplyAgent"]
 # ---------------------------------------------------------------------------
 
 
-@agentops.track_agent(name="ApplyAgent")
-@agent
-@agentops.track_agent(name="ApplyAgent")
 class ApplyAgent:
     """CrewAI Apply Agent — autonomous job application executor.
 
@@ -519,7 +519,7 @@ class ApplyAgent:
                 # fill_standard_form returned dry_run=True — count but do not
                 # treat as a real application.
                 self._applied_count += 1
-                log_event(
+                _log_event(
                     run_batch_id=self.run_batch_id,
                     level="INFO",
                     event_type="dry_run_skip",
@@ -537,7 +537,7 @@ class ApplyAgent:
                 )
             elif result.get("applied", False):
                 self._applied_count += 1
-                log_event(
+                _log_event(
                     run_batch_id=self.run_batch_id,
                     level="INFO",
                     event_type="job_applied",
@@ -562,7 +562,7 @@ class ApplyAgent:
                 )
             else:
                 self._failed_count += 1
-                log_event(
+                _log_event(
                     run_batch_id=self.run_batch_id,
                     level="ERROR",
                     event_type="job_apply_failed",
@@ -596,7 +596,7 @@ class ApplyAgent:
             )
             self._failed_count += 1
             try:
-                record_agent_error(
+                _record_agent_error(
                     agent_type="ApplyAgent",
                     error_message=str(exc),
                     run_batch_id=self.run_batch_id,
@@ -666,7 +666,7 @@ class ApplyAgent:
                     pg_exc,
                 )
 
-            log_event(
+            _log_event(
                 run_batch_id=self.run_batch_id,
                 level="WARNING",
                 event_type="job_rerouted_to_manual",
@@ -714,7 +714,7 @@ class ApplyAgent:
             to_model: str = getattr(
                 self.fallback_llm_1, "model", "fallback_1"
             )
-            record_fallback_event(
+            _record_fallback_event(
                 agent_type="ApplyAgent",
                 from_provider=failed_provider,
                 to_provider=str(to_model),
@@ -732,7 +732,7 @@ class ApplyAgent:
 
         if self._fallback_level == 1 and self.fallback_llm_2 is not None:
             to_model = getattr(self.fallback_llm_2, "model", "fallback_2")
-            record_fallback_event(
+            _record_fallback_event(
                 agent_type="ApplyAgent",
                 from_provider=failed_provider,
                 to_provider=str(to_model),
@@ -1166,7 +1166,7 @@ ROUTING MANIFEST (JSON)
             # ----------------------------------------------------------
             # Step 1: log run start
             # ----------------------------------------------------------
-            log_event(
+            _log_event(
                 run_batch_id=self.run_batch_id,
                 level="INFO",
                 event_type="apply_run_start",
@@ -1313,7 +1313,7 @@ ROUTING MANIFEST (JSON)
                             "ApplyAgent.run: fallback LLM also failed: %s",
                             fallback_exc,
                         )
-                        record_agent_error(
+                        _record_agent_error(
                             agent_type="ApplyAgent",
                             error_message=str(fallback_exc),
                             run_batch_id=self.run_batch_id,
@@ -1326,7 +1326,7 @@ ROUTING MANIFEST (JSON)
                         "ApplyAgent.run: no fallback available — "
                         "proceeding with programmatic execution"
                     )
-                    record_agent_error(
+                    _record_agent_error(
                         agent_type="ApplyAgent",
                         error_message=str(primary_exc),
                         run_batch_id=self.run_batch_id,
@@ -1478,7 +1478,7 @@ ROUTING MANIFEST (JSON)
                 f"Failed={self._failed_count} | "
                 f"Budget_aborted={self._budget_aborted}"
             )
-            log_event(
+            _log_event(
                 run_batch_id=self.run_batch_id,
                 level="INFO",
                 event_type="apply_run_complete",
@@ -1509,7 +1509,7 @@ ROUTING MANIFEST (JSON)
                 exc_info=True,
             )
             try:
-                record_agent_error(
+                _record_agent_error(
                     agent_type="ApplyAgent",
                     error_message=str(exc),
                     run_batch_id=self.run_batch_id,

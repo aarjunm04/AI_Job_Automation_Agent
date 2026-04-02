@@ -40,6 +40,7 @@ from tools.postgres_tools import (
     _create_run_batch,
     _update_run_batch_stats,
     _log_event,
+    _get_run_stats,
 )
 from tools.budget_tools import (
     reset_run_cost_tracker,
@@ -161,7 +162,6 @@ def _record_run_summary(run_batch_id: str) -> bool:
 # ---------------------------------------------------------------------------
 
 
-@agentops.track_agent(name="MasterAgent")
 class MasterAgent:
     """CrewAI Master Agent — full pipeline orchestrator.
 
@@ -565,10 +565,27 @@ class MasterAgent:
                     "success": False,
                 }
 
+            # FIX 5: AnalyserAgent instantiation missing user_id
+            _user_id: str = ""
+            try:
+                import psycopg2.extras as _pge
+                from utils.db_utils import get_db_conn as _get_db_conn
+                _u_conn = _get_db_conn()
+                _u_cursor = _u_conn.cursor(cursor_factory=_pge.RealDictCursor)
+                _u_cursor.execute("SELECT id FROM users ORDER BY id LIMIT 1")
+                _u_row = _u_cursor.fetchone()
+                _u_conn.close()
+                if _u_row:
+                    _user_id = str(_u_row["id"])
+                else:
+                    self.logger.warning("_run_analyser_phase: users table empty — user_id will be empty string")
+            except Exception as _ue:
+                self.logger.warning("_run_analyser_phase: could not fetch user_id: %s", _ue)
+
             # Instantiate and run analyser
             analyser_agent = AnalyserAgent(
                 run_batch_id=self.run_batch_id,
-                user_id=self.user_id,
+                user_id=_user_id,
             )
             result: Dict[str, Any] = analyser_agent.run()
 
@@ -879,8 +896,8 @@ class MasterAgent:
         # Get final Postgres stats
         run_stats: Dict[str, Any] = {}
         try:
-            raw_stats: str = get_run_stats.run(
-                json.dumps({"run_batch_id": self.run_batch_id})
+            raw_stats: str = _get_run_stats(
+                run_batch_id=self.run_batch_id
             )
             run_stats = json.loads(raw_stats)
         except Exception as exc:  # noqa: BLE001

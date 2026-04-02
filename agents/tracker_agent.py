@@ -33,7 +33,7 @@ from crewai import Agent, Task, Crew, Process
 from config.settings import db_config
 from integrations.llm_interface import LLMInterface
 from integrations.notion import NotionClient, FinalReport
-from tools.agentops_tools import record_agent_error
+from tools.agentops_tools import record_agent_error, _record_agent_error
 from tools.notion_tools import (
     check_notion_connection,
     get_pending_manual_queue,
@@ -107,9 +107,6 @@ def _end_agentops_session(end_state: str = "Success") -> bool:
 # TrackerAgent
 # ---------------------------------------------------------------------------
 
-@agentops.track_agent(name="TrackerAgent")
-@agent
-@agentops.track_agent(name="TrackerAgent")
 class TrackerAgent:
     """Final pipeline agent: Notion sync, AgentOps summary, run-session close.
 
@@ -499,7 +496,7 @@ If some Notion syncs failed, include them in the "errors" list as strings.
 
             # Best-effort AgentOps error recording
             try:
-                record_agent_error(
+                _record_agent_error(
                     agent_type="TrackerAgent",
                     error_message=str(exc),
                     run_batch_id=self.run_batch_id,

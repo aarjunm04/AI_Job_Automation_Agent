@@ -101,7 +101,6 @@ class DeveloperAgentResult:
 # ======================================================================
 
 
-@agentops.track_agent(name="DeveloperAgent")
 class DeveloperAgent:
     """Autonomous post-session analysis and improvement suggestion agent.
 
@@ -280,7 +279,7 @@ class DeveloperAgent:
     # Analysis Method 1: Platform Failure Rates
     # ==================================================================
 
-    @agentops.track_tool(name="analyse_platform_failure_rates")
+    
     async def _analyse_platform_failure_rates(self) -> None:
         """Analyse application success/failure rates per platform.
 
@@ -418,7 +417,7 @@ class DeveloperAgent:
     # Analysis Method 2: Selector Drift
     # ==================================================================
 
-    @agentops.track_tool(name="analyse_selector_drift")
+
     async def _analyse_selector_drift(self) -> None:
         """Detect selector drift by analysing ``NAV_FAIL`` error patterns.
 
@@ -538,7 +537,7 @@ class DeveloperAgent:
     # Analysis Method 3: Proof Confidence
     # ==================================================================
 
-    @agentops.track_tool(name="analyse_proof_confidence")
+    
     async def _analyse_proof_confidence(self) -> None:
         """Analyse average proof confidence scores per platform.
 
@@ -640,7 +639,7 @@ class DeveloperAgent:
     # Analysis Method 4: Budget Burn
     # ==================================================================
 
-    @agentops.track_tool(name="analyse_budget_burn")
+    
     async def _analyse_budget_burn(self) -> None:
         """Monitor LLM API token usage and budget burn rate.
 
@@ -754,7 +753,7 @@ class DeveloperAgent:
     # Analysis Method 5: Resume Performance
     # ==================================================================
 
-    @agentops.track_tool(name="analyse_resume_performance")
+    
     async def _analyse_resume_performance(self) -> None:
         """Analyse which resume variants correlate with successful applies.
 
@@ -868,7 +867,6 @@ class DeveloperAgent:
     # Analysis Method 6: Error Code Distribution
     # ==================================================================
 
-    @agentops.track_tool(name="analyse_error_code_distribution")
     async def _analyse_error_code_distribution(self) -> None:
         """Analyse distribution of error codes in ``audit_logs``.
 

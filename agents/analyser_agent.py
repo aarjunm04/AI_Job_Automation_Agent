@@ -34,10 +34,10 @@ import psycopg2
 import psycopg2.extras
 from crewai import Agent, Task, Crew, Process
 import agentops
-from agentops.sdk.decorators import agent, operation
+from agentops.sdk.decorators import agent, operation, tool
 
 from integrations.llm_interface import LLMInterface
-from tools.rag_tools import query_resume_match, get_resume_context, embed_job_description
+from tools.rag_tools import query_resume_match, _query_resume_match, get_resume_context, embed_job_description
 from tools.postgres_tools import log_event, save_job_score, get_run_stats, get_platform_config
 from tools.budget_tools import check_xai_run_cap, record_llm_cost, get_cost_summary
 from tools.agentops_tools import record_agent_error, record_fallback_event
@@ -99,9 +99,6 @@ def _provider_from_model(model: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-@agentops.track_agent(name="AnalyserAgent")
-@agent
-@agentops.track_agent(name="AnalyserAgent")
 class AnalyserAgent:
     """
     CrewAI Analyser Agent — eligibility filter, RAG resume matching, routing.
@@ -403,7 +400,7 @@ class AnalyserAgent:
     # ------------------------------------------------------------------
     # Internal: score a single job (programmatic RAG path)
     # ------------------------------------------------------------------
-
+    
     def _score_job(self, job: dict[str, Any]) -> dict[str, Any]:
         """
         Score a single job post using the RAG resume-match tools.
@@ -428,21 +425,28 @@ class AnalyserAgent:
         default_resume = os.getenv("DEFAULT_RESUME", "Aarjun_Gen.pdf")
 
         fallback_result: dict[str, Any] = {
+            "job_id": job.get("id"),
+            "resume_id": None,
+            "rag_score": 0.0,
+            "form_complexity": None,
+            "route": "manual_queue",
+            "raw_response": "",
+            "error": "scoring_failed",
             "job_post_id": job_post_id,
             "fit_score": 0.0,
-            "route": "skip",
             "resume_suggested": default_resume,
             "eligibility_pass": False,
             "reasons_json": {"error": "scoring_failed"},
         }
 
         try:
-            # Call RAG match tool directly
-            raw: str = query_resume_match(
+            # Call RAG match tool directly via .run()
+            raw: str = query_resume_match.run(
                 job_description=job.get("description", ""),
                 job_title=job_title,
                 required_skills=job.get("required_skills", ""),
             )
+            
 
             data: dict[str, Any] = {}
             try:
@@ -494,9 +498,15 @@ class AnalyserAgent:
             )
 
             return {
+                "job_id": job.get("id"),
+                "resume_id": resume_id,
+                "rag_score": fit_score,
+                "form_complexity": "simple",
+                "route": route,
+                "raw_response": raw,
+                "error": "",
                 "job_post_id": job_post_id,
                 "fit_score": fit_score,
-                "route": route,
                 "resume_suggested": resume_suggested,
                 "eligibility_pass": eligibility_pass,
                 "reasons_json": reasons_json,
@@ -509,6 +519,7 @@ class AnalyserAgent:
                 exc,
                 exc_info=True,
             )
+            fallback_result["error"] = str(exc)
             return fallback_result
 
     # ------------------------------------------------------------------
@@ -552,9 +563,15 @@ class AnalyserAgent:
                             exc,
                         )
                         results.append({
+                            "job_id": job.get("id"),
+                            "resume_id": None,
+                            "rag_score": 0.0,
+                            "form_complexity": None,
+                            "route": "manual_queue",
+                            "raw_response": "",
+                            "error": str(exc),
                             "job_post_id": str(job.get("id", "")),
                             "fit_score": 0.0,
-                            "route": "skip",
                             "resume_suggested": os.getenv("DEFAULT_RESUME", "Aarjun_Gen.pdf"),
                             "eligibility_pass": False,
                             "reasons_json": {"error": str(exc)},
@@ -808,7 +825,7 @@ class AnalyserAgent:
         """
         if self._fallback_level == 0 and self.fallback_llm_1 is not None:
             to_model: str = getattr(self.fallback_llm_1, "model", "fallback_1")
-            record_fallback_event(
+            getattr(record_fallback_event, "run", record_fallback_event)(
                 agent_type="AnalyserAgent",
                 from_provider=failed_provider,
                 to_provider=str(to_model),
@@ -825,7 +842,7 @@ class AnalyserAgent:
 
         if self._fallback_level == 1 and self.fallback_llm_2 is not None:
             to_model = getattr(self.fallback_llm_2, "model", "fallback_2")
-            record_fallback_event(
+            getattr(record_fallback_event, "run", record_fallback_event)(
                 agent_type="AnalyserAgent",
                 from_provider=failed_provider,
                 to_provider=str(to_model),
@@ -893,6 +910,14 @@ class AnalyserAgent:
     # ------------------------------------------------------------------
 
     def _build_agent(self) -> Agent:
+        self.llm = self.llm_interface.get_llm("ANALYSER_AGENT")
+        if self._fallback_level == 1:
+            self._current_llm = self.llm_interface.get_fallback_llm("ANALYSER_AGENT", level=1)
+        elif self._fallback_level == 2:
+            self._current_llm = self.llm_interface.get_fallback_llm("ANALYSER_AGENT", level=2)
+        else:
+            self._current_llm = self.llm
+        
         """
         Build the CrewAI Agent instance for the analyser pass.
 
@@ -1047,7 +1072,7 @@ JOB LIST (JSON)
             # ----------------------------------------------------------
             # Step 1: log start
             # ----------------------------------------------------------
-            log_event(
+            getattr(log_event, "run", log_event)(
                 run_batch_id=self.run_batch_id,
                 level="INFO",
                 event_type="analyser_run_start",
@@ -1070,7 +1095,7 @@ JOB LIST (JSON)
                     "AnalyserAgent.run: no jobs found for batch %s — returning early",
                     self.run_batch_id,
                 )
-                log_event(
+                getattr(log_event, "run", log_event)(
                     run_batch_id=self.run_batch_id,
                     level="INFO",
                     event_type="analyser_run_complete",
@@ -1103,6 +1128,8 @@ JOB LIST (JSON)
             import asyncio
             prompt = task.description
             try:
+                import nest_asyncio
+                nest_asyncio.apply()
                 crew_output = asyncio.run(
                     self._call_with_fallback(prompt, self.run_batch_id)
                 )
@@ -1111,7 +1138,7 @@ JOB LIST (JSON)
                     "AnalyserAgent.run: fallback LLM also failed: %s", fallback_exc
                 )
                 from tools.agentops_tools import record_agent_error
-                record_agent_error(
+                getattr(record_agent_error, "run", record_agent_error)(
                     agent_type="AnalyserAgent",
                     error_message=str(fallback_exc),
                     run_batch_id=self.run_batch_id,
@@ -1252,7 +1279,7 @@ JOB LIST (JSON)
                 f"budget_aborted={budget_aborted}"
             )
             self.logger.info("AnalyserAgent.run: %s", summary_msg)
-            log_event(
+            getattr(log_event, "run", log_event)(
                 run_batch_id=self.run_batch_id,
                 level="INFO",
                 event_type="analyser_run_complete",
@@ -1278,7 +1305,7 @@ JOB LIST (JSON)
                 "AnalyserAgent.run: unhandled exception: %s", exc, exc_info=True
             )
             try:
-                record_agent_error(
+                getattr(record_agent_error, "run", record_agent_error)(
                     agent_type="AnalyserAgent",
                     error_message=str(exc),
                     run_batch_id=self.run_batch_id,

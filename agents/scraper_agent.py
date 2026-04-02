@@ -80,9 +80,7 @@ def _load_platform_config() -> Dict[str, Any]:
     return _platform_config
 
 
-@agentops.track_agent(name="ScraperAgent")
 @agent
-@agentops.track_agent(name="ScraperAgent")
 class ScraperAgent:
     """
     CrewAI Scraper Agent for job discovery.
@@ -165,9 +163,7 @@ Execute a comprehensive job discovery run across all configured platforms.
 STEP 1: JobSpy Scrape (LinkedIn + Indeed)
 - Call run_jobspy_scrape with:
   - run_batch_id: {self.run_batch_id}
-  - search_query: "{search_query}"
-  - location: "Remote"
-  - results_wanted: 50
+  The tool reads all search queries from config/user_profile.json automatically.
 
 STEP 2: REST API Scrape (RemoteOK + Himalayas)
 - Call run_rest_api_scrape with:
@@ -324,18 +320,15 @@ IMPORTANT:
 
         try:
             self.logger.info("Fallback Step 1: JobSpy Scrape")
-            run_jobspy_scrape(
+            run_jobspy_scrape.run(
                 run_batch_id=self.run_batch_id,
-                search_query=search_query,
-                location="Remote",
-                results_wanted=50
             )
         except Exception as e:
             self.logger.error(f"Fallback JobSpy failed: {e}")
 
         try:
             self.logger.info("Fallback Step 2: REST API Scrape")
-            run_rest_api_scrape(
+            run_rest_api_scrape.run(
                 run_batch_id=self.run_batch_id,
                 platforms="remoteok,himalayas"
             )
@@ -344,7 +337,7 @@ IMPORTANT:
 
         try:
             self.logger.info("Fallback Step 3: SerpAPI Scrape")
-            run_serpapi_scrape(
+            run_serpapi_scrape.run(
                 run_batch_id=self.run_batch_id,
                 query=search_query,
                 location="Remote",
@@ -365,13 +358,13 @@ IMPORTANT:
 
         try:
             self.logger.info("Fallback Step 5: Check Total Job Count")
-            summary_str = get_scrape_summary(run_batch_id=self.run_batch_id)
+            summary_str = get_scrape_summary.run(run_batch_id=self.run_batch_id)
             summary = json.loads(summary_str)
             total_jobs = summary.get("total_jobs", 0)
 
             if total_jobs < min_jobs:
                 self.logger.info("Fallback Step 6: Safety Net Activation")
-                run_safety_net_scrape(
+                run_safety_net_scrape.run(
                     run_batch_id=self.run_batch_id,
                     current_job_count=total_jobs
                 )
@@ -380,13 +373,13 @@ IMPORTANT:
 
         try:
             self.logger.info("Fallback Step 7: Normalize and Deduplicate")
-            normalise_and_dedup(run_batch_id=self.run_batch_id)
+            normalise_and_dedup.run(run_batch_id=self.run_batch_id)
         except Exception as e:
             self.logger.error(f"Fallback Deduplication failed: {e}")
 
         try:
             self.logger.info("Fallback Step 8: Final Summary")
-            final_summary_str = get_scrape_summary(run_batch_id=self.run_batch_id)
+            final_summary_str = get_scrape_summary.run(run_batch_id=self.run_batch_id)
             final_summary = json.loads(final_summary_str)
         except Exception as e:
             self.logger.error(f"Fallback Final Summary failed: {e}")
@@ -407,11 +400,11 @@ IMPORTANT:
         """
         try:
             # Log run start
-            log_event(
+            log_event.run(
                 run_batch_id=self.run_batch_id,
                 level="INFO",
                 event_type="scraper_run_start",
-                message="Scraper Agent starting job discovery",
+                message=f"ScraperAgent run started for batch {self.run_batch_id}",
             )
 
             self.logger.info(f"Starting scraper run for batch: {self.run_batch_id}")
@@ -438,11 +431,11 @@ IMPORTANT:
                     f"Budget cap hit ({abort_reason}). "
                     "Bypassing LLM orchestration and using fallback scrape sequence."
                 )
-                log_event(
+                log_event.run(
                     run_batch_id=self.run_batch_id,
                     level="WARNING",
-                    event_type="scraper_llm_bypassed_budget",
-                    message=f"Budget cap hit ({abort_reason}). Using hardcoded scrape fallback.",
+                    event_type="scraper_budget_cap",
+                    message=f"Budget cap hit {abort_reason}. Using hardcoded scrape fallback.",
                 )
                 result_data = self._fallback_scrape_sequence()
                 used_fallback = True
@@ -467,11 +460,11 @@ IMPORTANT:
                         f"LLM execution failed: {llm_e}. "
                         "Bypassing LLM orchestration and using fallback scrape sequence."
                     )
-                    log_event(
+                    log_event.run(
                         run_batch_id=self.run_batch_id,
                         level="WARNING",
-                        event_type="scraper_llm_bypassed_error",
-                        message=f"LLM failed ({llm_e}). Using hardcoded scrape fallback.",
+                        event_type="scraper_llm_failure",
+                        message=f"LLM failed {llm_e}. Using hardcoded scrape fallback.",
                     )
                     result_data = self._fallback_scrape_sequence()
                     used_fallback = True
@@ -498,7 +491,7 @@ IMPORTANT:
             jobs_queued = 0  # Will be set by Analyser Agent later
 
             # Update run batch stats
-            update_run_batch_stats(
+            update_run_batch_stats.run(
                 run_batch_id=self.run_batch_id,
                 jobs_discovered=total_jobs,
                 jobs_auto_applied=jobs_auto_applied,
@@ -506,16 +499,11 @@ IMPORTANT:
             )
 
             # Log completion
-            log_event(
+            log_event.run(
                 run_batch_id=self.run_batch_id,
                 level="INFO",
                 event_type="scraper_run_complete",
                 message=f"Scraper complete — {total_jobs} jobs discovered",
-            )
-
-            self.logger.info(
-                f"Scraper run completed: {total_jobs} jobs discovered across "
-                f"{len(by_platform)} platforms"
             )
 
             return {
@@ -532,18 +520,12 @@ IMPORTANT:
             self.logger.error(f"Scraper run failed with exception: {e}", exc_info=True)
 
             # Log critical error
-            log_event(
+            log_event.run(
                 run_batch_id=self.run_batch_id,
-                level="CRITICAL",
-                event_type="scraper_run_failed",
-                message=f"Scraper run failed: {str(e)}",
+                level="ERROR",
+                event_type="scraper_phase_exception",
+                message=f"Scraper run phase exception — detail: {str(e)}",
             )
-
-            return {
-                "success": False,
-                "error": str(e),
-                "run_batch_id": self.run_batch_id,
-            }
 
     def get_enabled_platforms(self, category: str = "primary") -> List[str]:
         """
