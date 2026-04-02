@@ -48,8 +48,14 @@ _AGENT_CONFIG: dict[str, dict[str, Any]] = {
         "fallback_2": None,
     },
     "SCRAPER_AGENT": {
-        "primary": ("perplexity/sonar", "PERPLEXITY_API_KEY", None),
-        "fallback_1": None,
+        # CrewAI orchestration LLM — must support tool-calling message
+        # protocol. Groq llama-3.3-70b-versatile is free tier, fast,
+        # and fully OpenAI-tool-call compatible. Perplexity sonar is
+        # NOT used here — it is reserved for the async complete()
+        # scraper_chain in run_serpapi_scrape (direct HTTP call, no
+        # CrewAI agentic loop).
+        "primary":    ("groq/llama-3.3-70b-versatile", "GROQ_API_KEY", None),
+        "fallback_1": ("cerebras/llama3.3-70b", "CEREBRAS_API_KEY", None),
         "fallback_2": None,
     },
     "ANALYSER_AGENT": {
@@ -90,7 +96,15 @@ class LLMInterface:
     Returns configured CrewAI LLM objects for each agent type per the
     IDE_README.md AGENT SYSTEM table. Supports primary and fallback chains
     with per-provider retry, exponential backoff, and unavailability tracking.
-    """
+
+    Current Agent System (Primary LLM):
+    - Master    → Groq llama-3.3-70b-versatile
+    - Scraper   → Groq llama-3.3-70b-versatile (CrewAI orchestration) | Perplexity sonar reserved for async complete() serpapi calls only
+    - Analyser  → xAI grok-4-fast-reasoning
+    - Apply     → xAI grok-4-1-fast-reasoning
+    - Tracker   → Groq llama-3.3-70b-versatile
+    - Developer → xAI grok-3-mini-latest
+"""
 
     # Auth-error substrings that should NOT be retried
     _AUTH_SIGNALS: tuple[str, ...] = (
