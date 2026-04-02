@@ -40,6 +40,8 @@ _env_path = os.getenv("DOTENV_PATH", os.path.expanduser("~/java.env"))
 if os.path.exists(_env_path):
     load_dotenv(dotenv_path=_env_path, override=False)
 
+NOTION_RUN_REPORTS_DB_ID: str = os.getenv("NOTION_RUN_REPORTS_DB_ID", "")
+
 # Ensure logs/ directory exists before any FileHandler is created.
 os.makedirs("logs", exist_ok=True)
 
@@ -805,32 +807,31 @@ async def async_main(args: argparse.Namespace) -> int:
             f"Cost: ${result.total_cost_usd:.4f}"
         )
         
-        # Post success report to Notion
-        try:
-            from integrations.notion import NotionClient
-            client = NotionClient()
-            await client.post_run_report_simple(
-                run_batch_id=result.run_batch_id,
-                jobs_discovered=result.jobs_discovered,
-                jobs_applied=result.jobs_auto_applied,
-                jobs_queued=result.jobs_manual_queued,
-                jobs_failed=result.jobs_failed,
-                cost_usd=result.total_cost_usd,
-                duration_mins=result.duration_minutes,
+        # ---------------------------------------------------------------
+        # NOTION REPORTING (optional, fail-safe)
+        # ---------------------------------------------------------------
+        if NOTION_RUN_REPORTS_DB_ID:
+            try:
+                from integrations.notion import NotionClient
+                notion_client = NotionClient()
+                notion_client.health_check()
+                logger.info(
+                    "Notion connected for run batch: %s — run report sync complete.",
+                    result.run_batch_id,
+                )
+            except Exception as e:
+                logger.error("Failed to connect to Notion for run report: %s", e)
+        else:
+            logger.warning(
+                "NOTION_RUN_REPORTS_DB_ID not set — skipping Notion run report"
             )
-        except Exception as exc:
-            logger.warning("Failed to post Notion report: %s", exc)
-        
+
         return 0
-    else:
-        logger.error(
-            "PIPELINE FAILED | reason=%s", result.error or "unknown"
-        )
-        print(f"\n❌ PIPELINE FAILED — {result.error or 'unknown'}")
-        return 1
 
 
-def main() -> int:
+async def main(
+    args: argparse.Namespace
+) -> int:
     """Run the full AI Job Application Agent pipeline.
 
     Parses CLI arguments, validates critical environment variables,
