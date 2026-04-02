@@ -38,30 +38,7 @@ __all__ = ["WellfoundPlatform"]
 logger = logging.getLogger(__name__)
 
 
-class WellfoundPlatform(BasePlatformApply):
-    def __init__(
-        self,
-        job_meta: dict | None = None,
-        user_profile: dict | None = None,
-        **kwargs,
-    ) -> None:
-        """
-        Flexible __init__ that satisfies BasePlatformApply's signature
-        while allowing zero-arg instantiation for testing.
 
-        Args:
-            job_meta     : Job metadata dict (url, title, company, etc.)
-            user_profile : User profile dict (name, email, resume_path, etc.)
-        """
-        self.job_meta    = job_meta    or {}
-        self.user_profile = user_profile or {}
-        # Expose job_url directly for compat shim
-        self.job_url     = self.job_meta.get("url", self.job_meta.get("job_url", ""))
-        # Call super only if it accepts these args to avoid MRO crash
-        try:
-            super().__init__(job_meta=self.job_meta, user_profile=self.user_profile, **kwargs)
-        except TypeError:
-            pass  # BasePlatformApply may not accept kwargs — fail soft
 
 # ─────────────────────────────────────────────────────────────────────────────
 # CONFIRMED LIVE SELECTORS

@@ -547,7 +547,7 @@ ATS_SELECTOR_REGISTRY: dict[ATSType, ATSProfile] = {
 # ═══════════════════════════════════════════════════════════════════════════
 
 URL_PATTERNS: dict[ATSType, list[str]] = {
-    ATSType.GREENHOUSE: ["greenhouse.io", "boards.greenhouse.io"],
+    ATSType.GREENHOUSE: ["greenhouse.io", "boards.greenhouse.io", "job-boards.greenhouse.io"],
     ATSType.LEVER: ["jobs.lever.co", "lever.co/"],
     ATSType.WORKDAY: ["workday.com", "myworkdayjobs.com", "wd3.myworkdayjobs.com"],
     ATSType.ASHBY: ["ashbyhq.com", "jobs.ashbyhq.com"],

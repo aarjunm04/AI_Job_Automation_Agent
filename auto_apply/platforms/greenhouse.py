@@ -19,6 +19,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+import time
 from typing import Dict, Any, Union, Optional
 
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
@@ -365,6 +367,33 @@ class GreenhouseApply(BasePlatformApply):
                 )
 
             # Click submit
+            fields_filled = 0
+            dry_run = os.getenv("DRY_RUN", "false").lower() == "true"
+            if dry_run:
+                logger.info("GreenhousePlatform DRY_RUN=True — submit BLOCKED")
+                screenshot_path = f"/tmp/greenhouse_dryrun_{int(time.time())}.png"
+                await self.page.screenshot(path=screenshot_path, full_page=True)
+                result = ApplyResult(
+                    success=False,
+                    proof_type="none",
+                    proof_value=None,
+                    proof_confidence=0.0,
+                    error_code="DRY_RUN",
+                    reroute_to_manual=False,
+                    reroute_reason="",
+                    steps_completed=self.steps_completed,
+                    steps_total=3,
+                    platform="greenhouse",
+                    job_url=self.job_meta.get("url", ""),
+                )
+                result.status = "dry_run_blocked"
+                result.platform = "greenhouse"
+                result.fields_filled = fields_filled
+                result.dry_run_stopped = True
+                result.proof_screenshot_path = screenshot_path
+                result.error = ""
+                return result
+
             submit_clicked: bool = await self._click_next_or_continue(
                 [
                     "button[data-provides='submit-application']",
