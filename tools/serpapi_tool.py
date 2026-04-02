@@ -16,6 +16,7 @@ import agentops
 from agentops.sdk.decorators import operation
 from serpapi import GoogleSearch
 from typing import List, Dict, Any, Optional
+import hashlib
 
 logger = logging.getLogger(__name__)
 
@@ -100,6 +101,50 @@ def search_google_jobs(
 
     max_attempts = min(3, len(_SERPAPI_KEYS))
 
+    def _do_search(
+        query_params: dict[str, str],
+        api_key: str,
+    ) -> list[dict[str, Any]]:
+        """Performs the SerpAPI search and normalises results."""
+        params = {
+            "engine": "google_jobs",
+            "api_key": api_key,
+            **query_params,
+        }
+
+        search = GoogleSearch(params)
+        response = search.get_dict()
+
+        if "error" in response:
+            raise RuntimeError(f"SerpAPI error: {response['error']}")
+
+        raw_jobs = response.get("jobs_results", [])
+        normalised_jobs = []
+        for job in raw_jobs:
+            title = job["title"]
+            company_name = job["company_name"]
+            job_id = job.get("job_id", "")
+            if not job_id:
+                # Create a stable job_id if one isn't provided.
+                job_id_str = f"{title}{company_name}"
+                job_id = hashlib.sha256(job_id_str.encode('utf-8')).hexdigest()
+
+            apply_link = ""
+            if apply_options := job.get("apply_options", []):
+                if isinstance(apply_options, list) and apply_options:
+                    apply_link = apply_options[0].get("link", "")
+
+            normalised_jobs.append({
+                "title": title,
+                "company_name": company_name,
+                "location": job["location"],
+                "description": job.get("description", "")[:3000],
+                "job_id": job_id,
+                "apply_link": apply_link,
+                "source": "serpapi",
+            })
+        return normalised_jobs
+
     def _do_search():
         key = _get_next_key()
         if not key:
@@ -107,9 +152,10 @@ def search_google_jobs(
         params = {
             "engine": "google_jobs",
             "q": query,
-            "location": location,
-            "num": num_results,
-            "api_key": key
+            "location": "United States",
+            "ltype": "1",
+            "api_key": key,
+            "num": 10,
         }
         results = GoogleSearch(params).get_dict()
         if "error" in results:

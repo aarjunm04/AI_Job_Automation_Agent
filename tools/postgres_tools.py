@@ -12,8 +12,11 @@ import os
 import json
 import logging
 import time
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional, Union
 from functools import wraps
+from datetime import datetime
+import math
+import pandas as pd
 
 import psycopg2
 import psycopg2.extras
@@ -39,10 +42,32 @@ __all__ = [
     "get_platform_config",
     "get_run_stats",
     "get_recent_applications",
-    "get_pending_manual_queue",
+    "_upsert_job_post",
+    "_log_event",
+    "_get_platform_config",
+    "_get_run_stats",
 ]
- 
- 
+
+
+def _sanitize_timestamp(value: Any) -> Optional[datetime]:
+    """Return None if value is NaN, inf, or not a valid datetime."""
+    if pd.isnull(value):  # handles NaT, NaN, None all at once
+        return None
+    if isinstance(value, float) and (math.isnan(value) or math.isinf(value)):
+        return None
+    if isinstance(value, datetime):
+        return value
+    try:
+        # Attempt to convert to a pandas Timestamp and then to a Python datetime
+        ts = pd.Timestamp(value)
+        if pd.isnull(ts):
+            return None
+        return ts.to_pydatetime()
+    except (ValueError, TypeError):
+        logger.warning(f"Could not convert value '{value}' to a valid timestamp, returning None.")
+        return None
+
+
 def _get_conn() -> PgConnection:
     """Get database connection via centralised db_utils."""
     return get_db_conn()
@@ -164,7 +189,6 @@ def upsert_job_post(
     Returns:
         JSON string with job_post_id and action (inserted or updated).
     """
-
     @_with_retry(max_retries=3)
     def _execute() -> str:
         conn = None
@@ -172,7 +196,7 @@ def upsert_job_post(
             conn = _get_conn()
             cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
-            posted_at_value = posted_at if posted_at else None
+            posted_at_value = _sanitize_timestamp(posted_at)
             for attempt in range(3):
                 try:
                     cursor.execute(
@@ -197,38 +221,27 @@ def upsert_job_post(
                             posted_at_value,
                         ),
                     )
-                    break
-                except psycopg2.OperationalError as e:
-                    if attempt == 2:
-                        logger.error("DB execute failed after 3 attempts: %s", e)
+                    result = cursor.fetchone()
+                    conn.commit()
+                    action = "inserted" if result["inserted"] else "updated"
+                    logger.info(
+                        f"Successfully {action} job post: {result['id']} for {url}"
+                    )
+                    return json.dumps(
+                        {"job_post_id": result["id"], "action": action}
+                    )
+                except psycopg2.Error as e:
+                    logger.error(f"Failed to upsert job post: {e}")
+                    conn.rollback()
+                    if attempt < 2:
+                        time.sleep(2**attempt)
+                    else:
                         raise
-                    time.sleep(2 ** attempt)
-
-            result = cursor.fetchone()
-            conn.commit()
-
-            action = "inserted" if result["inserted"] else "updated"
-            logger.info(
-                f"Job post {action}: {title} at {company} (id: {result['id']})"
-            )
-
-            return json.dumps({"job_post_id": str(result["id"]), "action": action})
-
-        except Exception as e:
-            if conn:
-                conn.rollback()
-            logger.error(f"Failed to upsert job post: {e}")
-            return json.dumps(
-                {"error": "upsert_job_post_failed", "detail": str(e)}
-            )
         finally:
             if conn:
                 conn.close()
 
-    try:
-        return _execute()
-    except Exception as e:
-        return json.dumps({"error": "upsert_job_post_failed", "detail": str(e)})
+    return _execute()
 
 
 @tool
@@ -506,6 +519,20 @@ def create_run_batch(run_index_in_week: int) -> str:
                 f"index={run_index_in_week}"
             )
 
+            # FIX 4: run_batches table never written
+            try:
+                cursor.execute(
+                    """
+                    INSERT INTO run_batches (run_batch_id, mode, status, dry_run, started_at, updated_at)
+                    VALUES (%s, %s, %s, %s, NOW(), NOW())
+                    ON CONFLICT DO NOTHING
+                    """,
+                    (str(result["id"]), "full", "running", False),
+                )
+                conn.commit()
+            except Exception as rb_exc:
+                logger.warning("create_run_batch: run_batches insert failed (non-critical): %s", rb_exc)
+
             return json.dumps(
                 {
                     "run_batch_id": str(result["id"]),
@@ -575,6 +602,25 @@ def update_run_batch_stats(
                 f"Run batch stats updated: id={run_batch_id}, discovered={jobs_discovered}, "
                 f"applied={jobs_auto_applied}, queued={jobs_queued}"
             )
+
+            # FIX 4: run_batches table never written
+            try:
+                cursor.execute(
+                    """
+                    UPDATE run_batches
+                    SET jobs_found = %s,
+                        jobs_applied = %s,
+                        jobs_queued = %s,
+                        status = 'completed',
+                        completed_at = NOW(),
+                        updated_at = NOW()
+                    WHERE run_batch_id = %s
+                    """,
+                    (jobs_discovered, jobs_auto_applied, jobs_queued, run_batch_id),
+                )
+                conn.commit()
+            except Exception as rb_exc:
+                logger.warning("update_run_batch_stats: run_batches update failed (non-critical): %s", rb_exc)
 
             return json.dumps({"updated": updated})
 

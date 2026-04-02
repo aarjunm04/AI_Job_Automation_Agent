@@ -13,6 +13,8 @@ import json
 import logging
 import time
 import asyncio
+import nest_asyncio
+nest_asyncio.apply()
 import concurrent.futures
 from typing import Optional, List, Dict, Any
 
@@ -37,7 +39,7 @@ from scrapers.scraper_service import (
     RemoteOKAPIScraper,
     HimalayasScraper,
 )
-from tools.postgres_tools import upsert_job_post, log_event, get_platform_config
+from tools.postgres_tools import upsert_job_post, _upsert_job_post, log_event, _log_event, get_platform_config, _get_platform_config
 from utils.db_utils import get_db_conn
 from config.config_loader import config_loader
 
@@ -105,95 +107,88 @@ def _with_retry(func, max_retries: int = 3):
 
 
 @tool
-def run_jobspy_scrape(
-    run_batch_id: str,
-    search_query: str,
-    location: str = "Remote",
-    results_wanted: int = 50,
-) -> str:
-    """
-    Scrape LinkedIn and Indeed via JobSpy library.
+def run_jobspy_scrape(run_batch_id: str) -> str:
+    """Run JobSpy across all configured search queries.
+
+    Reads search_queries from config/user_profile.json via config_loader.
+    Creates one JobSpyAdapter per query, runs them sequentially, and
+    aggregates all results. Upserts every discovered job into Postgres.
+    Fail-soft: one bad query does not abort the rest.
 
     Args:
-        run_batch_id: UUID of the run batch.
-        search_query: Job search query string.
-        location: Location filter (default: "Remote").
-        results_wanted: Number of results to fetch per platform.
+        run_batch_id: UUID string for this pipeline run, used for dedup/logging.
 
     Returns:
-        JSON string with scraping results and statistics.
+        JSON string with aggregate stats dict (jobs_found, jobs_upserted, etc.).
     """
-    try:
-        # Run JobSpy ONLY (avoid triggering other scrapers).
-        allowed_countries = []
+    prefs: dict = config_loader.get_job_preferences()
+    queries: list[str] = prefs.get("search_queries", ["AI Engineer"])
+    run_cfg: dict = config_loader.get_run_config()
+    hours_old: int = int(run_cfg.get("hours_old", 72))
+    results_per_query: int = int(run_cfg.get("results_per_query", 25))
+
+    all_jobs: list[dict] = []
+    for query in queries:
         try:
-            allowed_countries = _get_engine().filter_engine.allowed_countries
-        except Exception:
-            allowed_countries = []
+            # FIX 2: JobSpyAdapter missing cfg arg and dead concurrency kwarg
+            from config.config_loader import ConfigLoader
+            _cfg = ConfigLoader()
+            adapter = JobSpyAdapter(
+                cfg=_cfg,
+                jobs_per_site=results_per_query,
+                hours_old=hours_old,
+            )
+            # Override the search_term on the adapter for this specific query
+            adapter.search_term = query
+            jobs = asyncio.run(adapter.run())
+            all_jobs.extend(jobs if isinstance(jobs, list) else [])
+            logger.info(
+                "run_jobspy_scrape: query='%s' returned %d jobs", query, len(jobs)
+            )
+        except Exception as exc:
+            logger.error(
+                "run_jobspy_scrape: query='%s' failed — %s", query, exc
+            )
+            continue  # fail-soft — one bad query does not abort the run
 
-        hours_old = 72
-        adapter = JobSpyAdapter(
-            jobs_per_site=int(results_wanted),
-            concurrency=4,
-            hours_old=hours_old,
-            allowed_countries=allowed_countries,
-        )
-        raw_jobs = asyncio.run(adapter.run())
+    logger.info(
+        "run_jobspy_scrape: total aggregated jobs=%d across %d queries",
+        len(all_jobs), len(queries)
+    )
 
-        jobs_upserted = 0
-        errors = []
+    # Upsert all aggregated jobs into Postgres
+    jobs_upserted = 0
+    errors: list[str] = []
+    for job in all_jobs:
+        try:
+            result = _upsert_job_post(
+                run_batch_id=run_batch_id,
+                source_platform=job.get("source", "jobspy"),
+                title=job.get("title", ""),
+                company=job.get("company", ""),
+                url=job.get("job_url", ""),
+                location=job.get("location", "Remote"),
+                posted_at=job.get("posted_date", ""),
+            )
+            result_data = json.loads(result)
+            if "error" not in result_data:
+                jobs_upserted += 1
+            else:
+                errors.append(result_data["error"])
+        except Exception as upsert_exc:
+            logger.error("run_jobspy_scrape: upsert failed — %s", upsert_exc)
+            errors.append(str(upsert_exc))
 
-        for job in raw_jobs:
-            try:
-                result = upsert_job_post.run(
-                    run_batch_id=run_batch_id,
-                    source_platform=job.get("source", "jobspy"),
-                    title=job.get("title", ""),
-                    company=job.get("company", ""),
-                    url=job.get("job_url", ""),
-                    location=job.get("location", location),
-                    posted_at=job.get("posted_date", ""),
-                )
-                result_data = json.loads(result)
-                if "error" not in result_data:
-                    jobs_upserted += 1
-                else:
-                    errors.append(result_data["error"])
-            except Exception as e:
-                logger.error(f"Failed to upsert job: {e}")
-                errors.append(str(e))
-
-        logger.info(
-            f"JobSpy scrape completed: {len(raw_jobs)} found, {jobs_upserted} upserted"
-        )
-
-        return json.dumps(
-            {
-                "platform": "jobspy",
-                "jobs_found": len(raw_jobs),
-                "jobs_upserted": jobs_upserted,
-                "run_batch_id": run_batch_id,
-                "errors": errors[:10],  # Limit error list
-            }
-        )
-
-    except Exception as e:
-        logger.error(f"JobSpy scrape failed: {e}")
-        log_event.run(
-            run_batch_id=run_batch_id,
-            level="ERROR",
-            event_type="jobspy_scrape_failed",
-            message=f"JobSpy scrape failed: {str(e)}",
-        )
-        return json.dumps(
-            {
-                "platform": "jobspy",
-                "jobs_found": 0,
-                "jobs_upserted": 0,
-                "run_batch_id": run_batch_id,
-                "errors": [str(e)],
-            }
-        )
+    return json.dumps(
+        {
+            "platform": "jobspy",
+            "jobs_found": len(all_jobs),
+            "jobs_upserted": jobs_upserted,
+            "queries_run": len(queries),
+            "run_batch_id": run_batch_id,
+            "errors": errors[:10],
+        }
+    )
 
 
 @tool
@@ -219,7 +214,7 @@ def run_rest_api_scrape(
     for platform_name in platform_list:
         try:
             # Get platform config for rate limiting
-            config_result = get_platform_config.run(platform_name)
+            config_result = _get_platform_config(platform_name)
             config = json.loads(config_result)
 
             if "error" in config:
@@ -230,9 +225,11 @@ def run_rest_api_scrape(
             # Initialize appropriate scraper
             scraper = None
             if platform_name == "remoteok":
-                scraper = RemoteOKAPIScraper(jobs_per_site=50)
+                # FIX 1: Wrong kwarg on RemoteOKAPIScraper
+                scraper = RemoteOKAPIScraper(jobs_limit=50)
             elif platform_name == "himalayas":
-                scraper = HimalayasScraper(jobs_per_site=50)
+                # FIX 1: Wrong kwarg on HimalayasScraper
+                scraper = HimalayasScraper(jobs_limit=50)
             else:
                 errors.append(f"Unknown platform: {platform_name}")
                 continue
@@ -248,7 +245,7 @@ def run_rest_api_scrape(
                 # Normalize and upsert each job
                 for job in raw_jobs:
                     try:
-                        result = upsert_job_post.run(
+                        result = _upsert_job_post(
                             run_batch_id=run_batch_id,
                             source_platform=platform_name,
                             title=job.get("title", ""),
@@ -281,7 +278,7 @@ def run_rest_api_scrape(
 
         except Exception as e:
             logger.error(f"REST API scrape failed for {platform_name}: {e}")
-            log_event.run(
+            _log_event(
                 run_batch_id=run_batch_id,
                 level="ERROR",
                 event_type="rest_api_scrape_failed",
@@ -314,6 +311,15 @@ def run_playwright_scrape(
     Returns:
         JSON string with scraping results and statistics.
     """
+    # FIX 3: proxy_list_str undefined in run_playwright_scrape
+    _proxy_parts: list[str] = []
+    for _i in range(1, 11):
+        for _pool in (1, 2):
+            _val = os.getenv(f"WEBSHARE_PROXY_{_pool}_{_i}", "").strip()
+            if _val:
+                _proxy_parts.append(_val)
+    proxy_list_str: str = ",".join(_proxy_parts)
+
     try:
         playwright_timeout_ms = 30000
         playwright_timeout_s = max(1.0, playwright_timeout_ms / 1000.0)
@@ -371,7 +377,7 @@ def run_playwright_scrape(
 
         for job in raw_jobs:
             try:
-                result = upsert_job_post.run(
+                result = _upsert_job_post(
                     run_batch_id=run_batch_id,
                     source_platform=platform,
                     title=job.get("title", ""),
@@ -409,14 +415,14 @@ def run_playwright_scrape(
         blocked = "captcha" in error_msg or "blocked" in error_msg or "403" in error_msg
 
         if blocked:
-            log_event.run(
+            _log_event(
                 run_batch_id=run_batch_id,
                 level="WARNING",
                 event_type="playwright_blocked",
                 message=f"{platform} blocked or CAPTCHA detected: {str(e)}",
             )
         else:
-            log_event.run(
+            _log_event(
                 run_batch_id=run_batch_id,
                 level="ERROR",
                 event_type="playwright_scrape_failed",
@@ -440,112 +446,86 @@ def run_playwright_scrape(
 @tool
 def run_serpapi_scrape(
     run_batch_id: str,
-    query: str,
+    query: str = "",
     location: str = "Remote",
     results_wanted: int = 25,
     **kwargs,
 ) -> str:
     """
     Scrape Google Jobs via SerpAPI with key rotation.
-
-    Args:
-        run_batch_id: UUID of the run batch.
-        query: Job search query string.
-        location: Location filter (default: "Remote").
-        results_wanted: Number of results to fetch.
-
-    Returns:
-        JSON string with scraping results and statistics.
+    Reads search_queries from config/user_profile.json.
+    If query arg is non-empty it is used as a single override;
+    otherwise all configured search_queries are run in sequence.
     """
-    try:
-        # Delegate to serpapi_tool — handles key rotation, AgentOps tracking,
-        # credit tracking, and fail-soft error handling internally.
-        result_str = search_google_jobs(
-            query=query,
-            location=location,
-            num_results=results_wanted,
-        )
-        raw_jobs: list = []
+    prefs: dict = config_loader.get_job_preferences()
+    configured_queries: list[str] = prefs.get("search_queries", ["AI Engineer"])
+    queries_to_run: list[str] = [query] if query.strip() else configured_queries
+
+    all_raw_jobs: list[dict] = []
+    all_errors: list[str] = []
+
+    for q in queries_to_run:
         try:
-            parsed = json.loads(result_str)
-            if isinstance(parsed, list):
-                raw_jobs = parsed
-            elif isinstance(parsed, dict) and "error" in parsed:
-                logger.warning(
-                    "SerpAPI scrape returned error: %s", parsed["error"]
-                )
-                log_event.run(
-                    run_batch_id=run_batch_id,
-                    level="WARNING",
-                    event_type="serpapi_scrape_failed",
-                    message=f"SerpAPI error: {parsed['error']}",
-                )
-                return json.dumps(
-                    {
-                        "jobs_found": 0,
-                        "jobs_upserted": 0,
-                        "api_key_used": "none",
-                        "errors": [parsed["error"]],
-                    }
-                )
-        except (json.JSONDecodeError, TypeError) as parse_err:
-            logger.error("SerpAPI result parse failed: %s", parse_err)
-            raw_jobs = []
+            result_str = search_google_jobs(
+                query=q,
+                location=location,
+                num_results=results_wanted,
+            )
+            
+            if not result_str:
+                logger.warning("run_serpapi_scrape: query='%s' returned no results", q)
+                continue
 
-        jobs_upserted = 0
-        errors = []
-
-        for job in raw_jobs:
             try:
-                result = upsert_job_post.run(
-                    run_batch_id=run_batch_id,
-                    source_platform="google_jobs",
-                    title=job.get("title", ""),
-                    company=job.get("company", ""),
-                    url=job.get("job_url", ""),
-                    location=job.get("location", location),
-                    posted_at=job.get("posted_date", ""),
+                result_data = json.loads(result_str)
+                jobs = result_data.get("jobs", [])
+                all_raw_jobs.extend(jobs)
+                logger.info(
+                    "run_serpapi_scrape: query='%s' returned %d jobs", q, len(jobs)
                 )
-                result_data = json.loads(result)
-                if "error" not in result_data:
-                    jobs_upserted += 1
-                else:
-                    errors.append(result_data["error"])
-            except Exception as upsert_err:
-                logger.error("Failed to upsert job: %s", upsert_err)
-                errors.append(str(upsert_err))
+            except json.JSONDecodeError:
+                logger.error("run_serpapi_scrape: query='%s' failed to parse JSON: %s", q, result_str[:200])
+                all_errors.append(f"JSON parse error for query '{q}'")
+                continue
 
-        logger.info(
-            "SerpAPI scrape completed: %d jobs found, %d upserted",
-            len(raw_jobs),
-            jobs_upserted,
-        )
+        except Exception as exc:
+            logger.error("run_serpapi_scrape: query='%s' failed — %s", q, exc)
+            all_errors.append(str(exc))
+            continue  # fail-soft
 
-        return json.dumps(
-            {
-                "jobs_found": len(raw_jobs),
-                "jobs_upserted": jobs_upserted,
-                "api_key_used": "serpapi_tool",
-                "errors": errors[:10],
-            }
-        )
+    # Upsert all aggregated jobs into Postgres
+    jobs_upserted = 0
+    for job in all_raw_jobs:
+        try:
+            result = _upsert_job_post(
+                run_batch_id=run_batch_id,
+                source_platform="serpapi_google_jobs",
+                title=job.get("title", ""),
+                company=job.get("company_name", ""),
+                url=job.get("related_links", [{}])[0].get("link", ""),
+                location=job.get("location", "Remote"),
+                posted_at=job.get("detected_extensions", {}).get("posted_at", ""),
+                raw_job_data=job,
+            )
+            result_data = json.loads(result)
+            if "error" not in result_data:
+                jobs_upserted += 1
+            else:
+                all_errors.append(result_data["error"])
+        except Exception as upsert_exc:
+            logger.error("run_serpapi_scrape: upsert failed — %s", upsert_exc)
+            all_errors.append(str(upsert_exc))
 
-    except Exception as e:
-        log_event.run(
-            run_batch_id=run_batch_id,
-            level="ERROR",
-            event_type="serpapi_scrape_failed",
-            message=f"SerpAPI scrape failed: {str(e)}",
-        )
-        logger.error("SerpAPI scrape failed: %s", e)
-        return json.dumps(
-            {
-                "jobs_found": 0,
-                "jobs_upserted": 0,
-                "api_key_used": "none",
-                "errors": [str(e)],
-            }
-        )
+    return json.dumps(
+        {
+            "platform": "serpapi",
+            "jobs_found": len(all_raw_jobs),
+            "jobs_upserted": jobs_upserted,
+            "queries_run": len(queries_to_run),
+            "run_batch_id": run_batch_id,
+            "errors": all_errors[:10],
+        }
+    )
 
 
 @tool
@@ -573,7 +553,7 @@ def run_safety_net_scrape(run_batch_id: str, current_job_count: int) -> str:
                 }
             )
 
-        log_event.run(
+        _log_event(
             run_batch_id=run_batch_id,
             level="INFO",
             event_type="safety_net_triggered",
@@ -590,7 +570,7 @@ def run_safety_net_scrape(run_batch_id: str, current_job_count: int) -> str:
 
         for platform in platforms:
             try:
-                result = run_playwright_scrape.run(
+                result = _run_playwright_scrape(
                     run_batch_id=run_batch_id, platform=platform, max_jobs=30
                 )
                 result_data = json.loads(result)
@@ -604,7 +584,7 @@ def run_safety_net_scrape(run_batch_id: str, current_job_count: int) -> str:
 
             except Exception as e:
                 logger.error(f"Safety net scrape failed for {platform}: {e}")
-                log_event.run(
+                _log_event(
                     run_batch_id=run_batch_id,
                     level="ERROR",
                     event_type="safety_net_scrape_failed",

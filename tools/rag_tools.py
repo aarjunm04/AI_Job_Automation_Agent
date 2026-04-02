@@ -16,7 +16,8 @@ from tools.postgres_tools import _fetch_user_config
 
 # RAG server connection — set in docker-compose environment block
 RAG_SERVER_URL: str = os.getenv("RAG_SERVER_URL", "http://ai_rag_server:8090")
-RAG_API_KEY: str = os.getenv("SCRAPER_SERVICE_API_KEY", "")
+RAG_API_KEY: str = os.getenv("RAG_API_KEY", "")
+
 
 
 logger = logging.getLogger(__name__)
@@ -47,6 +48,9 @@ __all__ = [
     "get_resume_context",
     "embed_job_description",
     "get_resume_pdf_path",
+    "_query_resume_match",
+    "_get_resume_context",
+    "_embed_job_description",
 ]
 
 
@@ -112,32 +116,9 @@ def query_resume_match(job_description: str, job_title: str, required_skills: st
         if attempt < 2:
             time.sleep(2 ** attempt)
 
-    # All retries exhausted — fall back to DB default_resume
-    logger.error("query_resume_match: RAG server unreachable after 3 attempts, using DB fallback")
-    fallback_resume: str = "AarjunGen.pdf"
-    try:
-        _cfg: Dict[str, Any] = _fetch_user_config()
-        _db_resume: Optional[str] = _cfg.get("user_settings", {}).get("default_resume")
-        if _db_resume:
-            fallback_resume = str(_db_resume)
-        else:
-            logger.warning(
-                "query_resume_match: default_resume NULL in users.user_settings "
-                "— using hardcoded fallback"
-            )
-    except Exception as db_exc:  # noqa: BLE001
-        logger.warning(
-            "query_resume_match: DB fallback for default_resume also failed (%s) "
-            "— using hardcoded AarjunGen.pdf",
-            db_exc,
-        )
-    return _safe_json_dumps({
-        "resume_suggested": fallback_resume,
-        "similarity_score": 0.0,
-        "fit_score": 0.0,
-        "match_reasoning": "rag_unavailable_db_fallback",
-        "talking_points": [],
-    })
+    # All retries exhausted — return RAG server unreachable
+    logger.error("query_resume_match: RAG server unreachable after 3 attempts")
+    return json.dumps({"error": "RAG server unreachable", "score": 0.0, "resume_id": None})
 
 
 @tool
@@ -269,7 +250,7 @@ def get_resume_pdf_path(resume_filename: str) -> str:
 # ═══════════════════════════════════════════════════════════════════════════════
 # .func ALIASES — raw function access (bypasses CrewAI Tool Pydantic wrapper)
 # ═══════════════════════════════════════════════════════════════════════════════
-_query_resume_match  = query_resume_match.func   if hasattr(query_resume_match,   "func") else query_resume_match
-_get_resume_context  = get_resume_context.func   if hasattr(get_resume_context,   "func") else get_resume_context
-_embed_job_desc      = embed_job_description.func if hasattr(embed_job_description, "func") else embed_job_description
-_get_resume_pdf_path = get_resume_pdf_path.func  if hasattr(get_resume_pdf_path,  "func") else get_resume_pdf_path
+_query_resume_match  = query_resume_match.func
+_get_resume_context  = get_resume_context.func
+_embed_job_description = embed_job_description.func
+_get_resume_pdf_path = get_resume_pdf_path.func
