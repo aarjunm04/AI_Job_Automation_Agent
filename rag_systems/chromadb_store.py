@@ -316,7 +316,14 @@ class ChromaStore:
                                 "metadata": metas[idx],
                                 "document": docs[idx]
                             })
-                    return hits
+                    results = hits
+                    for r in results:
+                        dist = float(r.get("distance", 1.0))
+                        r["resume_id"] = r.get("metadata", {}).get("resume_id", r.get("id", ""))
+                        r["score"]     = round(max(0.0, min(1.0, 1.0 - dist)), 6)
+                        r["filename"]  = r.get("metadata", {}).get("filename", r.get("id", ""))
+                        r["text"]      = r.get("document", "")
+                    return results
 
                 except Exception as e:
                     attempts += 1
@@ -347,7 +354,14 @@ class ChromaStore:
                 hits = [h for h in hits if match(h["metadata"], where)]
 
             hits.sort(key=lambda x: x["distance"])
-            return hits[:n_results]
+            results = hits[:n_results]
+            for r in results:
+                dist = float(r.get("distance", 1.0))
+                r["resume_id"] = r.get("metadata", {}).get("resume_id", r.get("id", ""))
+                r["score"]     = round(max(0.0, min(1.0, 1.0 - dist)), 6)
+                r["filename"]  = r.get("metadata", {}).get("filename", r.get("id", ""))
+                r["text"]      = r.get("document", "")
+            return results
 
     def query_anchor(self, query_embedding: List[float], n_results: int = 7) -> List[Dict[str, Any]]:
         """

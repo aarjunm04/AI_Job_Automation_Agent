@@ -236,9 +236,12 @@ class ServerConfig:
     PORT: int = 8090
     RELOAD: bool = False
     WORKERS: int = 1
+    CHROMADB_HOST: str = os.getenv("CHROMADB_HOST", "ai_chromadb")
+    CHROMADB_PORT: int = int(os.getenv("CHROMADB_PORT", "8000"))
+    CHROMA_COLLECTION: str = os.getenv("CHROMA_COLLECTION", "resumes")
 
     # API Key (single server-wide key)
-    API_KEY: str = os.getenv("SCRAPER_SERVICE_API_KEY", "")
+    API_KEY: str = os.getenv("RAG_API_KEY", "")
     MASTER_API_KEY: str = API_KEY
     
     # Collect all valid client keys (single-key model, kept as a set for compatibility)
@@ -852,6 +855,26 @@ async def lifespan(app: FastAPI):
         logger.info(f"✓ RAG Engine initialized")
         logger.info(f"✓ Loaded {len(engine.list_resumes())} resumes")
         
+        # Auto-ingest if ChromaDB has no anchors
+        try:
+            from rag_systems.ingestion import ingest_all_resumes
+            import chromadb as _chroma
+            _client = _chroma.HttpClient(
+                host=ServerConfig.CHROMADB_HOST,
+                port=ServerConfig.CHROMADB_PORT,
+            )
+            _col = _client.get_or_create_collection(ServerConfig.CHROMA_COLLECTION)
+            
+            anchors = _col.get(where={"anchor": True}, include=["metadatas"], limit=1)
+            if _col.count() == 0 or len(anchors["ids"]) == 0:
+                logger.info("Startup: ChromaDB empty or missing anchors — running auto-ingestion")
+                result = ingest_all_resumes()
+                logger.info("Startup: auto-ingestion complete — %s", result)
+            else:
+                logger.info("Startup: ChromaDB has %d docs — skipping auto-ingest", _col.count())
+        except Exception as _exc:
+            logger.warning("Startup: auto-ingestion check failed (non-fatal): %s", _exc)
+
         # Start session cleanup task
         session_manager.cleanup_task = asyncio.create_task(
             session_manager.start_cleanup_task()
@@ -973,7 +996,7 @@ async def verify_api_key(
     valid_keys = {
         key
         for key in [
-            os.getenv("SCRAPER_SERVICE_API_KEY"),
+            os.getenv("RAG_API_KEY"),
         ]
         if key
     }
@@ -998,7 +1021,7 @@ async def verify_x_api_key(
     x_api_key: str = Header(..., alias="X-API-Key"),
 ) -> str:
     """Verify X-API-Key header for /match and /autofill endpoints."""
-    expected = os.getenv("SCRAPER_SERVICE_API_KEY", "")
+    expected = os.getenv("RAG_API_KEY", "")
     if expected and x_api_key == expected:
         return x_api_key
     logger.warning("Invalid X-API-Key attempted: %s***", x_api_key[:4] if x_api_key else "")
@@ -1402,12 +1425,34 @@ async def match_resume(
         )
         job_payload: Dict[str, Any] = {"job_text": job_text}
         result = select_resume(job_payload)
+        candidates = result.get("candidates", [])
+        top_resume_id = result.get("top_resume_id", "")
+        top_score = float(result.get("top_score", 0.0))
+
+        match_reasoning = ""
+        talking_points = []
+
+        if candidates:
+            top = candidates[0]
+            match_reasoning = (
+                f"Selected {top_resume_id} with final_score={top.get('final_score', 0.0):.4f}, "
+                f"anchor_similarity={top.get('anchor_similarity', 0.0):.4f}, "
+                f"chunk_score={top.get('chunk_score', 0.0):.4f}, "
+                f"metadata_bonus={top.get('metadata_bonus', 0.0):.4f}"
+            )
+            talking_points = [
+                f"Anchor similarity: {top.get('anchor_similarity', 0.0):.4f}",
+                f"Chunk score: {top.get('chunk_score', 0.0):.4f}",
+                f"Metadata bonus: {top.get('metadata_bonus', 0.0):.4f}",
+                f"Recommended chunks: {len(top.get('recommended_chunks', []))}",
+            ]
+
         return JSONResponse(content={
-            "resume_suggested": result.get("resume_suggested", ""),
-            "similarity_score": result.get("similarity_score", 0.0),
-            "fit_score": result.get("fit_score", 0.0),
-            "match_reasoning": result.get("match_reasoning", ""),
-            "talking_points": result.get("talking_points", []),
+            "resume_suggested": top_resume_id,
+            "similarity_score": top_score,
+            "fit_score": top_score,
+            "match_reasoning": match_reasoning,
+            "talking_points": talking_points,
         })
     except Exception as exc:
         logger.error("POST /match failed: %s", exc)
@@ -1493,11 +1538,11 @@ def main() -> None:
     logger.info(f"Workers: 1 (production mode)")
     
     logger.info("API key configuration:")
-    server_key = os.getenv("SCRAPER_SERVICE_API_KEY", "")
+    server_key = os.getenv("RAG_API_KEY", "")
     if server_key:
-        logger.info("  ✓ SCRAPER_SERVICE_API_KEY configured: %s***", server_key[:4])
+        logger.info("  ✓ RAG_API_KEY configured: %s***", server_key[:4])
     else:
-        logger.warning("  ✗ SCRAPER_SERVICE_API_KEY is not configured")
+        logger.warning("  ✗ RAG_API_KEY is not configured")
     
     logger.info(f"Rate Limit: {ServerConfig.RATE_LIMIT_REQUESTS} req/{ServerConfig.RATE_LIMIT_WINDOW_SECONDS}s")
     logger.info(f"Cache: {'Enabled' if ServerConfig.CACHE_ENABLED else 'Disabled'}")

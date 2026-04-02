@@ -323,8 +323,19 @@ class ResumeEngine:
         candidates = []
 
         for a in anchors:
-            meta = a.get("metadata", {})
-            rid = meta.get("resume_id")
+            meta = a.get("metadata", {}) or {}
+            rid = (
+                a.get("resume_id")
+                or meta.get("resume_id")
+                or meta.get("filename")
+                or a.get("filename")
+                or a.get("id")
+            )
+
+            if isinstance(rid, str) and rid.startswith("resume_vector::"):
+                parts = rid.split("::")
+                if len(parts) >= 2:
+                    rid = parts[1]
             if not rid:
                 continue
 
@@ -340,7 +351,10 @@ class ResumeEngine:
                 chunk_score += weights[idx] * sim
 
             # metadata nudge
-            bonus = 0.1 if (self.resumes[rid].role_focus.lower() in job_text.lower()) else 0.0
+            resume_entry = self.resumes.get(rid)
+            bonus = 0.0
+            if resume_entry and resume_entry.role_focus.lower() in job_text.lower():
+                bonus = 0.1
 
             final = (0.45 * anchor_sim) + (0.50 * chunk_score) + (0.05 * bonus)
 
