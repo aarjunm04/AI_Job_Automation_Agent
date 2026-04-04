@@ -17,8 +17,24 @@ from typing import Any, Optional
 
 from crewai import LLM
 from dotenv import load_dotenv
+from pathlib import Path
 
-load_dotenv()
+# Load environment variables from java.env in home directory or project root
+env_path = Path.home() / "java.env" if (Path.home() / "java.env").exists() else Path("java.env")
+load_dotenv(dotenv_path=env_path)
+
+# --- CRITICAL LITELLM ENVIRONMENT OVERRIDES ---
+# LiteLLM aggressively prioritizes environment variables over kwargs.
+# If these are malformed in the local environment, it causes Errno 8 and 404s.
+# We forcefully correct them here before any LLM object is instantiated.
+
+if os.getenv("XAI_BASE_URL") == "xai":
+    os.environ["XAI_BASE_URL"] = "https://api.x.ai/v1"
+
+# Force Cerebras to use the correct model ID and base URL
+os.environ["CEREBRAS_MODEL"] = "llama-3.3-70b"
+
+# ----------------------------------------------
 
 __all__ = ["LLMInterface"]
 
@@ -43,39 +59,57 @@ VALID_AGENT_TYPES = frozenset({
 # Provider config: (model, api_key_env, base_url or None)
 _AGENT_CONFIG: dict[str, dict[str, Any]] = {
     "MASTER_AGENT": {
-        "primary": ("groq/llama-3.3-70b-versatile", "GROQ_API_KEY", None),
-        "fallback_1": ("cerebras/llama3.3-70b", "CEREBRAS_API_KEY", None),
+        "primary": (f"groq/{os.getenv('GROQ_MODEL')}", "GROQ_API_KEY", os.getenv("GROQ_BASE_URL")),
+        "fallback_1": (os.getenv("CEREBRAS_MODEL"), "CEREBRAS_API_KEY", os.getenv("CEREBRAS_BASE_URL")),
         "fallback_2": None,
     },
     "SCRAPER_AGENT": {
-        # CrewAI orchestration LLM — must support tool-calling message
-        # protocol. Groq llama-3.3-70b-versatile is free tier, fast,
-        # and fully OpenAI-tool-call compatible. Perplexity sonar is
-        # NOT used here — it is reserved for the async complete()
-        # scraper_chain in run_serpapi_scrape (direct HTTP call, no
-        # CrewAI agentic loop).
-        "primary":    ("groq/llama-3.3-70b-versatile", "GROQ_API_KEY", None),
-        "fallback_1": ("cerebras/llama3.3-70b", "CEREBRAS_API_KEY", None),
+        "primary": (f"groq/{os.getenv('GROQ_MODEL')}", "GROQ_API_KEY", os.getenv("GROQ_BASE_URL")),
+        "fallback_1": (os.getenv("CEREBRAS_MODEL"), "CEREBRAS_API_KEY", os.getenv("CEREBRAS_BASE_URL")),
         "fallback_2": None,
     },
     "ANALYSER_AGENT": {
-        "primary": ("xai/grok-4-fast-reasoning", "XAI_API_KEY", "https://api.x.ai/v1"),
-        "fallback_1": ("sambanova/Meta-Llama-3.1-70B-Instruct", "SAMBANOVA_API_KEY", None),
-        "fallback_2": ("cerebras/llama3.3-70b", "CEREBRAS_API_KEY", None),
+        "primary": (f"xai/{os.getenv('XAI_DEFAULT_MODEL')}", "XAI_API_KEY", os.getenv("XAI_BASE_URL")),
+        "fallback_1": (os.getenv("CEREBRAS_MODEL"), "CEREBRAS_API_KEY", os.getenv("CEREBRAS_BASE_URL")),
+        "fallback_2": None,
     },
     "APPLY_AGENT": {
-        "primary": ("xai/grok-4-1-fast-reasoning", "XAI_API_KEY", "https://api.x.ai/v1"),
-        "fallback_1": ("sambanova/Meta-Llama-3.1-70B-Instruct", "SAMBANOVA_API_KEY", None),
-        "fallback_2": ("cerebras/llama3.3-70b", "CEREBRAS_API_KEY", None),
+        "primary": (
+            f"xai/{os.getenv('XAI_DEFAULT_MODEL')}",
+            "XAI_API_KEY",
+            os.getenv("XAI_BASE_URL"),
+        ),
+        "fallback_1": (
+            os.getenv("CEREBRAS_MODEL"),
+            "CEREBRAS_API_KEY",
+            os.getenv("CEREBRAS_BASE_URL"),
+        ),
+        "fallback_2": None,
     },
     "TRACKER_AGENT": {
-        "primary": ("groq/llama-3.3-70b-versatile", "GROQ_API_KEY", None),
-        "fallback_1": ("cerebras/llama3.3-70b", "CEREBRAS_API_KEY", None),
+        "primary": (
+            f"groq/{os.getenv('GROQ_MODEL')}",
+            "GROQ_API_KEY",
+            os.getenv("GROQ_BASE_URL"),
+        ),
+        "fallback_1": (
+            os.getenv("CEREBRAS_MODEL"),
+            "CEREBRAS_API_KEY",
+            os.getenv("CEREBRAS_BASE_URL"),
+        ),
         "fallback_2": None,
     },
     "DEVELOPER_AGENT": {
-        "primary": ("xai/grok-3-mini-latest", "XAI_API_KEY", "https://api.x.ai/v1"),
-        "fallback_1": ("perplexity/sonar", "PERPLEXITY_API_KEY", None),
+        "primary": (
+            f"xai/{os.getenv('XAI_DEFAULT_MODEL')}",
+            "XAI_API_KEY",
+            os.getenv("XAI_BASE_URL"),
+        ),
+        "fallback_1": (
+            f"perplexity/{os.getenv('PERPLEXITY_DEFAULT_MODEL')}",
+            "PERPLEXITY_API_KEY",
+            os.getenv("PERPLEXITY_BASE_URL"),
+        ),
         "fallback_2": None,
     },
 }
@@ -155,6 +189,11 @@ class LLMInterface:
         llm: Optional[LLM] = None
         for attempt in range(1, 4):  # max 3 attempts
             try:
+                # Safety net for xAI base URL if not loaded from environment
+                if provider_name == "xai" and not base_url:
+                    base_url = "https://api.x.ai/v1"
+                    self.logger.info("xAI base_url not found in environment, using default: %s", base_url)
+
                 llm = _create_llm(model, api_key, base_url)
                 break  # success — exit retry loop
             except Exception as e:
@@ -547,6 +586,7 @@ class LLMInterface:
         max_tokens: int = 1024,
         purpose: str = "general",
         budget_remaining: Optional[float] = None,
+        run_batch_id: Optional[str] = None,
     ) -> str:
         """
         Execute an LLM completion with a spec-compliant fallback chain.
@@ -581,23 +621,16 @@ class LLMInterface:
         analyser_apply_chain: list[tuple[str, str, str, str, bool]] = [
             (
                 "xai",
-                os.getenv("XAI_DEFAULT_MODEL", "grok-3-mini"),
+                os.getenv("XAI_DEFAULT_MODEL"),
                 "XAI_API_KEY",
-                os.getenv("XAI_BASE_URL", "https://api.x.ai/v1"),
+                os.getenv("XAI_BASE_URL"),
                 True,
             ),
             (
-                "sambanova",
-                os.getenv("SAMBANOVA_MODEL", "Meta-Llama-3.3-70B-Instruct"),
-                "SAMBANOVA_API_KEY",
-                os.getenv("SAMBANOVA_BASE_URL", "https://api.sambanova.ai/v1"),
-                False,
-            ),
-            (
                 "cerebras",
-                os.getenv("CEREBRAS_MODEL", "llama3.1-70b"),
+                os.getenv("CEREBRAS_MODEL"),
                 "CEREBRAS_API_KEY",
-                os.getenv("CEREBRAS_BASE_URL", "https://api.cerebras.ai/v1"),
+                os.getenv("CEREBRAS_BASE_URL"),
                 False,
             ),
         ]
@@ -605,23 +638,23 @@ class LLMInterface:
         scraper_chain: list[tuple[str, str, str, str, bool]] = [
             (
                 "perplexity",
-                os.getenv("PERPLEXITY_MODEL", "sonar"),
+                os.getenv("PERPLEXITY_MODEL"),
                 "PERPLEXITY_API_KEY",
-                os.getenv("PERPLEXITY_BASE_URL", "https://api.perplexity.ai"),
+                os.getenv("PERPLEXITY_BASE_URL"),
                 True,
             ),
             (
                 "groq",
-                os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile"),
+                os.getenv("GROQ_MODEL"),
                 "GROQ_API_KEY",
-                os.getenv("GROQ_BASE_URL", "https://api.groq.com/openai/v1"),
+                os.getenv("GROQ_BASE_URL"),
                 False,
             ),
             (
                 "cerebras",
-                os.getenv("CEREBRAS_MODEL", "llama3.1-70b"),
+                os.getenv("CEREBRAS_MODEL"),
                 "CEREBRAS_API_KEY",
-                os.getenv("CEREBRAS_BASE_URL", "https://api.cerebras.ai/v1"),
+                os.getenv("CEREBRAS_BASE_URL"),
                 False,
             ),
         ]
@@ -665,7 +698,7 @@ class LLMInterface:
 
                         if is_paid:
                             await self._track_cost_async(
-                                provider_name, projected_tokens_in, max_tokens
+                                provider_name, projected_tokens_in, max_tokens, run_batch_id
                             )
 
                         self.logger.info(
@@ -707,7 +740,7 @@ class LLMInterface:
                 if log_event is not None:
                     try:
                         log_event(
-                            run_batch_id="async_call",
+                            run_batch_id=run_batch_id or "async_call",
                             level="ERROR",
                             event_type="llm_provider_failed",
                             message=f"caller={caller} provider={provider_name} error={last_error}",
@@ -723,7 +756,7 @@ class LLMInterface:
                         agent_type="LLMInterface",
                         from_provider=provider_name,
                         to_provider=next_provider,
-                        run_batch_id="async_call",
+                        run_batch_id=run_batch_id or "async_call",
                         fallback_level=level + 1,
                         reason=str(last_error) if last_error else "",
                     )
@@ -754,7 +787,7 @@ class LLMInterface:
             "model": model,
             "messages": [{"role": "user", "content": prompt}],
             "max_tokens": max_tokens,
-            "temperature": 0.7,
+            "temperature": 0.0,
         }
 
         # Adjust for Perplexity's different API
@@ -786,6 +819,7 @@ class LLMInterface:
         provider: str,
         tokens_in: int,
         tokens_out: int,
+        run_batch_id: Optional[str] = None,
     ) -> None:
         """Track LLM cost asynchronously via budget_tools."""
         try:
@@ -800,7 +834,7 @@ class LLMInterface:
                     provider=provider,
                     cost_usd=cost_usd,
                     agent_type="ASYNC_COMPLETE",
-                    run_batch_id="async_call",
+                    run_batch_id=run_batch_id or "async_call",
                 )
         except Exception as e:
             self.logger.warning("Failed to track cost: %s", e)
