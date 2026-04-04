@@ -184,11 +184,16 @@ def _build_job_dict(record: Dict[str, Any]) -> Dict[str, Any]:
     }
 
     # Optional structured fields
-    posted_date = (
-        record.get("date_posted") or record.get("posted_date") or record.get("date")
-    )
-    if posted_date is not None:
-        job["posted_date"] = posted_date
+    raw_date = record.get("date_posted") or record.get("posted_date") or record.get("date")
+    if raw_date is None or (isinstance(raw_date, float) and math.isnan(raw_date)):
+        posted_at = None
+    elif isinstance(raw_date, (int, float)):
+        posted_at = pd.Timestamp(raw_date, unit='s', tz='UTC').isoformat()
+    else:
+        posted_at = str(raw_date)
+
+    if posted_at:
+        job["posted_at"] = posted_at
 
     salary = record.get("salary") or record.get("compensation")
     if salary is not None:
