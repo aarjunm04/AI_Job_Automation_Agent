@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import logging
 import os
 import time
@@ -547,10 +548,11 @@ class AnalyserAgent:
         results: list[dict[str, Any]] = []
         try:
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                future_to_job = {
-                    executor.submit(self._score_job, job): job
-                    for job in jobs
-                }
+                future_to_job = {}
+                for job in jobs:
+                    future_to_job[executor.submit(self._score_job, job)] = job
+                    time.sleep(0.4)  # Throttling to protect RAG server
+                
                 for future in as_completed(future_to_job):
                     try:
                         result = future.result(timeout=60)
@@ -593,8 +595,9 @@ class AnalyserAgent:
 
     async def _call_llm(
         self,
-        messages: list[dict],
-        temperature: float = 0.1,
+        prompt: str,
+        purpose: str = "analyser_job_scoring",
+        max_tokens: int = 2048,
     ) -> str:
         """Call the configured LLM provider chain with exponential backoff.
 
@@ -603,8 +606,9 @@ class AnalyserAgent:
         Raises RuntimeError if all providers fail.
 
         Args:
-            messages: List of role/content message dicts.
-            temperature: Sampling temperature for the LLM call.
+            prompt: The prompt string to send to the LLM.
+            purpose: A string identifying the purpose of the call for logging/budgeting.
+            max_tokens: The maximum number of tokens for the response.
 
         Returns:
             Raw response string from the first successful provider.
@@ -612,37 +616,43 @@ class AnalyserAgent:
         Raises:
             RuntimeError: When all configured providers are exhausted.
         """
-        from integrations import llm_interface as _llm_interface
-
-        providers = [
-            os.getenv("XAI_DEFAULT_MODEL", "grok-3-fast"),
-            os.getenv("SAMBANOVA_API_KEY") and os.getenv("SAMBANOVA_MODEL", "Llama-3.1-70B-Instruct"),
-            os.getenv("CEREBRAS_API_KEY") and os.getenv("CEREBRAS_MODEL", "llama-3.3-70b"),
-        ]
         last_error: Optional[Exception] = None
-        valid_providers = [p for p in providers if p]
-
-        for attempt, model in enumerate(valid_providers, 1):
+        
+        for attempt in range(3): # 0=primary, 1=fallback1, 2=fallback2
             try:
-                response = await _llm_interface.call_with_fallback(
-                    model=model,
-                    messages=messages,
-                    temperature=temperature,
-                    max_tokens=int(os.getenv("XAI_MAX_TOKENS", "2048")),
+                response = await self.llm_interface.complete(
+                    prompt=prompt,
+                    max_tokens=max_tokens,
+                    purpose=purpose,
                 )
+                if attempt > 0:
+                    self.logger.info(
+                        "LLM call succeeded on attempt %d (fallback level %d)",
+                        attempt + 1, attempt
+                    )
                 return response
             except Exception as exc:
                 last_error = exc
                 self.logger.warning(
-                    "LLM attempt %d/%d failed (model=%s): %s",
-                    attempt,
-                    len(valid_providers),
-                    model,
+                    "LLM attempt %d failed: %s",
+                    attempt + 1,
                     exc,
                 )
+                
+                # Switch to next fallback LLM for the *next* complete() call
+                # The llm_interface should handle the actual switching logic
+                # This agent's responsibility is to retry
+                can_fallback = self._switch_to_fallback(
+                    failed_provider=str(self._current_llm)
+                )
+
+                if not can_fallback:
+                    self.logger.error("All LLM providers failed. Last error: %s", last_error)
+                    raise RuntimeError("LLM fallback chain exhausted") from last_error
+                
                 await asyncio.sleep(2 ** attempt)
 
-        self.logger.error("All LLM providers failed. Last: %s", last_error)
+        self.logger.error("All LLM providers failed after retries. Last: %s", last_error)
         raise RuntimeError("LLM fallback chain exhausted") from last_error
 
     # ------------------------------------------------------------------
@@ -664,6 +674,8 @@ class AnalyserAgent:
         results: list[dict[str, Any]] = []
         for idx, job in enumerate(jobs, 1):
             prompt = (
+                "SYSTEM: YOU ARE A JSON-ONLY RESPONSE ENGINE. DO NOT TALK. DO NOT EXPLAIN. "
+                "OUTPUT ONLY RAW JSON. IF YOU ADD CONVERSATIONAL TEXT, THE SYSTEM WILL CRASH.\n\n"
                 "You are a job fit scorer. Score this job for candidate fit.\n"
                 "Return ONLY a valid JSON object (no markdown, no explanation).\n"
                 'Format: {"job_index": 1, "fit_score": 0.85, '
@@ -677,10 +689,10 @@ class AnalyserAgent:
                 f"Description: {str(job.get('description', ''))[:800]}\n"
             )
             try:
-                response_text = await self._call_llm(messages=[
-                    {"role": "system", "content": "Return only valid JSON objects. No markdown."},
-                    {"role": "user", "content": prompt},
-                ])
+                response_text = await self._call_llm(
+                    prompt=prompt,
+                    purpose="analyser_job_scoring_individual"
+                )
                 score = json.loads(response_text)
                 score["job_index"] = idx
                 results.append(score)
@@ -713,12 +725,14 @@ class AnalyserAgent:
             List of routing result dicts with job_post_id, fit_score,
             eligibility_pass, route, and reasons_json.
         """
-        _BATCH_SIZE: int = 15
+        _BATCH_SIZE: int = 25
         batch_size = _BATCH_SIZE
         all_results: list[dict[str, Any]] = []
 
         for batch in _chunk(jobs, batch_size):
             batch_prompt = (
+                "SYSTEM: YOU ARE A JSON-ONLY RESPONSE ENGINE. DO NOT TALK. DO NOT EXPLAIN. "
+                "OUTPUT ONLY RAW JSON. IF YOU ADD CONVERSATIONAL TEXT, THE SYSTEM WILL CRASH.\n\n"
                 "You are a job fit scorer. Score each job for candidate fit.\n"
                 "Return ONLY a valid JSON array. One object per job, same order as input.\n"
                 'Format: [{"job_index": 1, "fit_score": 0.85, '
@@ -736,10 +750,10 @@ class AnalyserAgent:
                 )
 
             try:
-                response_text = await self._call_llm(messages=[
-                    {"role": "system", "content": "Return only valid JSON arrays. No markdown."},
-                    {"role": "user", "content": batch_prompt},
-                ])
+                response_text = await self._call_llm(
+                    prompt=batch_prompt,
+                    purpose="analyser_job_scoring_batch"
+                )
             except RuntimeError as exc:
                 self.logger.error(
                     "_run_batch_scoring: LLM exhausted for batch of %d jobs: %s — skipping batch",
@@ -866,44 +880,50 @@ class AnalyserAgent:
 
     _ANALYSER_FALLBACK_CHAIN: list[tuple[str, str]] = [
         (os.getenv("XAI_API_KEY", ""),
-         os.getenv("XAI_DEFAULT_MODEL", "grok-3-fast")),
+         os.getenv("XAI_DEFAULT_MODEL")),
         (os.getenv("SAMBANOVA_API_KEY", ""),
-         os.getenv("SAMBANOVA_MODEL", "Llama-3.1-70B-Instruct")),
+         os.getenv("SAMBANOVA_MODEL")),
         (os.getenv("CEREBRAS_API_KEY", ""),
-         os.getenv("CEREBRAS_MODEL", "llama-3.3-70b")),
+         os.getenv("CEREBRAS_MODEL")),
     ]
 
     async def _call_with_fallback(
         self,
         prompt: str,
         run_batch_id: str,
+        purpose: str = "analyser_fallback_call"
     ) -> str:
-        """Call LLM with explicit 3-provider fallback chain."""
-        import asyncio
+        """
+        Wrap the primary LLM call with a retry and fallback mechanism.
+        
+        This method is the designated entry point for direct LLM calls
+        from the analyser's `run` method, ensuring resilience.
+        """
         last_exc: Exception | None = None
-        for attempt, (api_key, model) in enumerate(self._ANALYSER_FALLBACK_CHAIN):
+        for attempt in range(3): # 3 attempts total
             try:
-                result = await self._call_llm(
-                    messages=[{"role": "user", "content": prompt}],
+                # Use the new _call_llm which has the fallback logic built-in
+                response = await self._call_llm(
+                    prompt=prompt,
+                    purpose=f"{purpose}_attempt_{attempt+1}",
                 )
-                if attempt > 0:
-                    self.logger.warning(
-                        "Analyser fell back to provider %d (%s) successfully",
-                        attempt + 1, model,
-                    )
-                return result
-            except Exception as exc:  # noqa: BLE001
+                return response
+            except Exception as exc:
                 last_exc = exc
                 wait = 2.0 ** attempt
                 self.logger.warning(
-                    "Analyser LLM attempt %d (%s) failed: %s — retrying in %.1fs",
-                    attempt + 1, model, exc, wait,
+                    "Analyser _call_with_fallback attempt %d failed: %s — retrying in %.1fs",
+                    attempt + 1, exc, wait,
                 )
                 await asyncio.sleep(wait)
-        raise RuntimeError(
-            f"All {len(self._ANALYSER_FALLBACK_CHAIN)} Analyser LLM providers failed. "
-            f"Last error: {last_exc}"
+        
+        self.logger.critical(
+            "Analyser _call_with_fallback failed after all attempts. Last error: %s",
+            last_exc
         )
+        raise RuntimeError(
+            "Analyser LLM call failed after all retries and fallbacks."
+        ) from last_exc
 
     # ------------------------------------------------------------------
     # Agent / task builders
@@ -947,9 +967,6 @@ class AnalyserAgent:
                 query_resume_match,
                 get_resume_context,
                 embed_job_description,
-                check_xai_run_cap,
-                record_llm_cost,
-                get_cost_summary,
             ],
             verbose=True,
             max_iter=20,
@@ -1114,48 +1131,17 @@ JOB LIST (JSON)
             # ----------------------------------------------------------
             # Steps 4 + 5: build and execute crew with fallback
             # ----------------------------------------------------------
-            agent: Agent = self._build_agent()
-            task: Task = self._build_task(agent, jobs)
-            crew = Crew(
-                agents=[agent],
-                tasks=[task],
-                process=Process.sequential,
-                verbose=True,
-            )
-
-            crew_output: Any = None
-
+            self.logger.info(f"Passing {len(jobs)} jobs to batch scoring engine...")
+            
             import asyncio
-            prompt = task.description
-            try:
-                import nest_asyncio
-                nest_asyncio.apply()
-                crew_output = asyncio.run(
-                    self._call_with_fallback(prompt, self.run_batch_id)
-                )
-            except Exception as fallback_exc:  # noqa: BLE001
-                self.logger.critical(
-                    "AnalyserAgent.run: fallback LLM also failed: %s", fallback_exc
-                )
-                from tools.agentops_tools import record_agent_error
-                getattr(record_agent_error, "run", record_agent_error)(
-                    agent_type="AnalyserAgent",
-                    error_message=str(fallback_exc),
-                    run_batch_id=self.run_batch_id,
-                    error_code="LLM_FALLBACK_FAILED",
-                )
-                return {
-                    "success": False,
-                    "error": "llm_fallback_exhausted",
-                    "detail": str(fallback_exc),
-                }
-
-            # ----------------------------------------------------------
-            # Step 6: parse routing manifest from crew output
-            # ----------------------------------------------------------
-            manifest_data: dict[str, Any] = self._parse_crew_output(crew_output)
-            results_raw: list[dict[str, Any]] = manifest_data.get("results", [])
-            budget_aborted: bool = bool(manifest_data.get("budget_aborted", False))
+            import nest_asyncio
+            nest_asyncio.apply()
+            
+            # Execute batch scoring directly without CrewAI overhead
+            results_raw: list[dict[str, Any]] = asyncio.run(
+                self._run_batch_scoring(jobs)
+            )
+            budget_aborted: bool = False
 
             self.logger.info(
                 "AnalyserAgent.run: crew returned %d scored results "
@@ -1341,30 +1327,11 @@ JOB LIST (JSON)
             self.logger.warning("_parse_crew_output: crew_output is None")
             return default
 
-        # Try .raw attribute (CrewOutput in newer crewai versions)
-        raw_str: str = ""
-        if hasattr(crew_output, "raw"):
-            raw_str = str(crew_output.raw or "")
-        elif isinstance(crew_output, str):
-            raw_str = crew_output
-        elif isinstance(crew_output, dict):
-            return crew_output
-        else:
-            raw_str = str(crew_output)
-
-        if not raw_str.strip():
-            self.logger.warning("_parse_crew_output: crew returned empty output")
-            return default
-
-        # Strip markdown code fences if present
-        stripped: str = raw_str.strip()
-        if stripped.startswith("```"):
-            lines = stripped.splitlines()
-            # Drop first and last fence lines
-            inner_lines = lines[1:] if len(lines) > 1 else lines
-            if inner_lines and inner_lines[-1].strip().startswith("```"):
-                inner_lines = inner_lines[:-1]
-            stripped = "\n".join(inner_lines).strip()
+        raw_str = str(crew_output.raw if hasattr(crew_output, "raw") else crew_output)
+        
+        # Robust Regex Extraction: Find the first JSON object or array
+        match = re.search(r'(\{.*\}|\[.*\])', raw_str, re.DOTALL)
+        stripped = match.group(1) if match else raw_str.strip()
 
         try:
             parsed: Any = json.loads(stripped)
