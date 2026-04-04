@@ -173,6 +173,8 @@ __all__ = ["app", "main"]
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 
+nim_semaphore = asyncio.Semaphore(1)
+
 # ═══════════════════════════════════════════════════════════════════════════
 # LOCAL IMPORTS (from existing rag_systems files)
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1420,32 +1422,34 @@ async def match_resume(
 ) -> JSONResponse:
     """Match the best resume against a job description."""
     try:
-        job_text = "\n\n".join(
-            part for part in [request.job_title, request.job_description, request.required_skills] if part
-        )
-        job_payload: Dict[str, Any] = {"job_text": job_text}
-        result = select_resume(job_payload)
-        candidates = result.get("candidates", [])
-        top_resume_id = result.get("top_resume_id", "")
-        top_score = float(result.get("top_score", 0.0))
-
-        match_reasoning = ""
-        talking_points = []
-
-        if candidates:
-            top = candidates[0]
-            match_reasoning = (
-                f"Selected {top_resume_id} with final_score={top.get('final_score', 0.0):.4f}, "
-                f"anchor_similarity={top.get('anchor_similarity', 0.0):.4f}, "
-                f"chunk_score={top.get('chunk_score', 0.0):.4f}, "
-                f"metadata_bonus={top.get('metadata_bonus', 0.0):.4f}"
+        async with nim_semaphore:
+            job_text = "\n\n".join(
+                part for part in [request.job_title, request.job_description, request.required_skills] if part
             )
-            talking_points = [
-                f"Anchor similarity: {top.get('anchor_similarity', 0.0):.4f}",
-                f"Chunk score: {top.get('chunk_score', 0.0):.4f}",
-                f"Metadata bonus: {top.get('metadata_bonus', 0.0):.4f}",
-                f"Recommended chunks: {len(top.get('recommended_chunks', []))}",
-            ]
+            job_payload: Dict[str, Any] = {"job_text": job_text}
+            result = select_resume(job_payload)
+            candidates = result.get("candidates", [])
+            top_resume_id = result.get("top_resume_id", "")
+            top_score = float(result.get("top_score", 0.0))
+    
+            match_reasoning = ""
+            talking_points = []
+    
+            if candidates:
+                top = candidates[0]
+                match_reasoning = (
+                    f"Selected {top_resume_id} with final_score={top.get('final_score', 0.0):.4f}, "
+                    f"anchor_similarity={top.get('anchor_similarity', 0.0):.4f}, "
+                    f"chunk_score={top.get('chunk_score', 0.0):.4f}, "
+                    f"metadata_bonus={top.get('metadata_bonus', 0.0):.4f}"
+                )
+                talking_points = [
+                    f"Anchor similarity: {top.get('anchor_similarity', 0.0):.4f}",
+                    f"Chunk score: {top.get('chunk_score', 0.0):.4f}",
+                    f"Metadata bonus: {top.get('metadata_bonus', 0.0):.4f}",
+                    f"Recommended chunks: {len(top.get('recommended_chunks', []))}",
+                ]
+            await asyncio.sleep(1.2) # Strict 60 RPM enforcement + 0.2s buffer
 
         return JSONResponse(content={
             "resume_suggested": top_resume_id,
@@ -1469,11 +1473,13 @@ async def autofill_context(
 ) -> JSONResponse:
     """Retrieve RAG context chunks for auto-filling application forms."""
     try:
-        result = get_rag_context(
-            job_payload={"job_text": request.job_description},
-            top_k_chunks=10,
-        )
-        chunks = result.get("context_chunks", [])
+        async with nim_semaphore:
+            result = get_rag_context(
+                job_payload={"job_text": request.job_description},
+                top_k_chunks=10,
+            )
+            chunks = result.get("context_chunks", [])
+            await asyncio.sleep(1.2) # Strict 60 RPM enforcement + 0.2s buffer
         return JSONResponse(content={
             "context_chunks": chunks,
             "resume_filename": request.resume_filename,
