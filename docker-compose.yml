@@ -307,8 +307,11 @@ services:
       - ./app/resumes:/app/resumes:ro
       - ./logs:/app/logs
       - ./config:/app/config:ro
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
     networks:
-      - ai_job_network
+      - ai_job_network 
     profiles: [ "batch" ]
     deploy:
       resources:
