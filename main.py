@@ -864,4 +864,11 @@ async def main(
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    sys.exit(main())
+    import argparse
+    import sys
+    
+    parser = argparse.ArgumentParser(description="AI Job Automation Agent")
+    parser.add_argument("--dry-run", action="store_true", help="Run without writing to external databases")
+    args = parser.parse_args()
+    
+    sys.exit(main(args))
