@@ -1,4 +1,5 @@
 from __future__ import annotations
+from http import client
 from agentops.sdk.decorators import operation
 
 import json
@@ -81,17 +82,26 @@ def query_resume_match(job_description: str, job_title: str, required_skills: st
         JSON string with keys: resume_suggested, similarity_score, fit_score,
         match_reasoning, talking_points.
     """
+    # Coerce and sanitize inputs to prevent 422 Unprocessable Entity
+    safe_desc = str(job_description or "N/A").strip()
+    if not safe_desc:
+        safe_desc = "N/A"
+        
+    safe_title = str(job_title or "").strip()
+    safe_skills = str(required_skills or "").strip()
+
     for attempt in range(3):
         try:
-            with httpx.Client(timeout=30.0) as client:
+            with httpx.Client() as client:
                 resp = client.post(
                     f"{RAG_SERVER_URL}/match",
                     headers={"X-API-Key": RAG_API_KEY, "Content-Type": "application/json"},
                     json={
-                        "job_description": job_description,
-                        "job_title": job_title,
-                        "required_skills": required_skills,
+                        "job_description": safe_desc,
+                        "job_title": safe_title,
+                        "required_skills": safe_skills,
                     },
+                    timeout=httpx.Timeout(300.0),
                 )
             if resp.status_code == 200:
                 data: Dict[str, Any] = resp.json()
@@ -137,11 +147,12 @@ def get_resume_context(resume_filename: str, job_description: str) -> str:
         Newline-separated ``[CHUNK N] ...`` string, or empty string on failure.
     """
     def _do_post():
-        with httpx.Client(timeout=30.0) as client:
+        with httpx.Client() as client:
             return client.post(
                 f"{RAG_SERVER_URL}/autofill",
                 headers={"X-API-Key": RAG_API_KEY, "Content-Type": "application/json"},
                 json={"resume_filename": resume_filename, "job_description": job_description},
+                timeout=httpx.Timeout(15.0),
             )
 
     try:
@@ -183,21 +194,29 @@ def embed_job_description(job_url: str, job_description: str) -> str:
         and error (str, only present on failure).
     """
     def _do_post():
-        with httpx.Client(timeout=30.0) as client:
-            return client.post(
-                f"{RAG_SERVER_URL}/match",
-                headers={"X-API-Key": RAG_API_KEY, "Content-Type": "application/json"},
-                json={
-                    "job_description": job_description,
-                    "job_title": "",
-                    "required_skills": "",
-                },
-            )
+        import httpx
+        
+        # Sanitize to prevent 422 Unprocessable Entity errors
+        safe_desc = str(job_description or "N/A").strip()
+        if not safe_desc:
+            safe_desc = "N/A"
+
+        return httpx.post(
+            f"{RAG_SERVER_URL}/match",
+            headers={"X-API-Key": RAG_API_KEY, "Content-Type": "application/json"},
+            json={
+                "job_description": safe_desc,
+                "job_title": "",
+                "required_skills": "",
+            },
+            timeout=httpx.Timeout(15.0)
+        )
 
     try:
         resp = _retry_call(_do_post)
         if resp.status_code == 200:
             return _safe_json_dumps({"embedded": True, "job_url": job_url})
+            
         logger.warning(
             "embed_job_description: RAG server returned HTTP %d", resp.status_code
         )

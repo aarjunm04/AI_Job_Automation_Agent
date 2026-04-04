@@ -78,6 +78,19 @@ def _log_to_db(
         event_type: Event type.
         message: Log message.
     """
+    import uuid
+    
+    # Sanitize run_batch_id for Postgres UUID strictness
+    valid_uuid = None
+    if run_batch_id and run_batch_id != "async_call":
+        try:
+            # Test if it's a valid UUID
+            uuid_obj = uuid.UUID(str(run_batch_id))
+            valid_uuid = str(uuid_obj)
+        except ValueError:
+            valid_uuid = None
+    run_batch_id = valid_uuid
+
     conn = None
     try:
         conn = _get_conn()

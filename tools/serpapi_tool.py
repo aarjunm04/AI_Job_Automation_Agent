@@ -17,6 +17,7 @@ from agentops.sdk.decorators import operation
 from serpapi import GoogleSearch
 from typing import List, Dict, Any, Optional
 import hashlib
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
