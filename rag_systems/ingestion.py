@@ -5,7 +5,7 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-from rag_systems.resume_engine import get_default_engine
+from resume_engine import get_default_engine
 
 __all__ = ["ingest_all_resumes", "ingest_single_resume"]
 

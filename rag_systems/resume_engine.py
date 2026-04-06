@@ -33,8 +33,8 @@ except ModuleNotFoundError:  # pragma: no cover
 import uuid
 
 # LOCAL MODULES
-from rag_systems.chromadb_store import ChromaStore, ChromaStoreConfig
-from rag_systems.rag_pipeline import (
+from chromadb_store import ChromaStore, ChromaStoreConfig
+from rag_pipeline import (
     RAGPipeline,
     EmbeddingService,
     chunk_text,
