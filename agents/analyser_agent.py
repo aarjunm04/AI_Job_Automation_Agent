@@ -19,6 +19,8 @@ Routing thresholds (from IDE_README.md SCORING AND ROUTING RULES):
     * fit_score >= 0.90   → force manual (high-stakes, no auto-apply)
 """
 
+# POST-AUDIT SURGICAL FIX — 2026-04-06 | S1:bootstrap S2:fetch S3:RAG S4:LLM S5:writeback S6:dedup | S7:skipped(agentops hold)
+
 from __future__ import annotations
 
 import asyncio
@@ -31,6 +33,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from itertools import islice
 from typing import Any, Optional
 
+import httpx
+import math
 import psycopg2
 import psycopg2.extras
 from crewai import Agent, Task, Crew, Process
@@ -47,6 +51,10 @@ from utils.db_utils import get_db_conn
 logger = logging.getLogger(__name__)
 
 __all__ = ["AnalyserAgent"]
+
+# --- S3: RAG rate-limit constant (1.1s per RAG server enforcement) ---
+RAG_CALL_DELAY: float = float(os.getenv("RAG_CALL_DELAY_SECONDS", "1.1"))
+MAX_RAG_RETRIES: int = 3
 
 # ---------------------------------------------------------------------------
 # Module-level helpers
@@ -172,6 +180,7 @@ class AnalyserAgent:
                         location
                     FROM jobs
                     WHERE run_batch_id = %s
+                      AND id NOT IN (SELECT job_post_id FROM job_scores)
                     ORDER BY created_at ASC
                     """,
                     (self.run_batch_id,),
@@ -289,6 +298,9 @@ class AnalyserAgent:
         accept ``None`` for a ``str``-typed ``resume_id`` field even though
         the underlying DB column is nullable.
 
+        S5: ON CONFLICT (job_post_id) DO UPDATE SET added for idempotency.
+        S5: Single connection + single commit for atomicity.
+
         Args:
             job_post_id: UUID of the job post being scored.
             resume_id: UUID of the matched resume, or ``None`` if the resume
@@ -304,13 +316,20 @@ class AnalyserAgent:
         for attempt in range(max_retries):
             conn: Optional[psycopg2.extensions.connection] = None
             try:
-                conn = get_db_conn()
+                conn = get_db_conn()  # S2.4: uses get_db_conn() from utils.db_utils
                 cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+                # S5.2: table name = job_scores (schema-verified), ON CONFLICT added
                 cursor.execute(
                     """
                     INSERT INTO job_scores
                         (job_post_id, resume_id, fit_score, eligibility_pass, reasons_json)
                     VALUES (%s, %s, %s, %s, %s)
+                    ON CONFLICT (job_post_id) DO UPDATE SET
+                        resume_id = EXCLUDED.resume_id,
+                        fit_score = EXCLUDED.fit_score,
+                        eligibility_pass = EXCLUDED.eligibility_pass,
+                        reasons_json = EXCLUDED.reasons_json,
+                        scored_at = NOW()
                     RETURNING id
                     """,
                     (
@@ -322,7 +341,7 @@ class AnalyserAgent:
                     ),
                 )
                 result = cursor.fetchone()
-                conn.commit()
+                conn.commit()  # S5.3: single commit
                 score_id = str(result["id"]) if result else None
                 self.logger.debug(
                     "_save_score_direct: saved job_score %s for job_post %s",
@@ -334,7 +353,7 @@ class AnalyserAgent:
             except Exception as exc:  # noqa: BLE001
                 if conn:
                     try:
-                        conn.rollback()
+                        conn.rollback()  # S5.3: rollback on error
                     except Exception:  # noqa: BLE001
                         pass
                 if attempt < max_retries - 1:
@@ -359,7 +378,7 @@ class AnalyserAgent:
             finally:
                 if conn:
                     try:
-                        conn.close()
+                        conn.close()  # S5.3: always close
                     except Exception:  # noqa: BLE001
                         pass
         return None
@@ -367,6 +386,9 @@ class AnalyserAgent:
     # ------------------------------------------------------------------
     # Internal: routing threshold logic
     # ------------------------------------------------------------------
+
+    # S6: Older _create_manual_application_record DELETED (had bad schema: auditlogs/job_id columns).
+    # Canonical version retained at bottom of file (L1602+).
 
     @staticmethod
     def _determine_route(fit_score: float, form_complexity: Optional[str] = None) -> str:
@@ -382,9 +404,9 @@ class AnalyserAgent:
         Returns:
             One of ``"skip"``, ``"manual"``, or ``"auto"``.
         """
-        if fit_score < 0.40:
+        if fit_score < 0.45:
             return "skip"
-        if fit_score < 0.50:
+        if fit_score < 0.60:
             return "manual"
         if fit_score >= 0.90:
             return "manual"  # Force-manual regardless of complexity
@@ -490,7 +512,7 @@ class AnalyserAgent:
             resume_id: Optional[str] = self._resolve_resume_id(resume_suggested)
 
             # Persist score row
-            self._save_score_direct(
+            score_id = self._save_score_direct(
                 job_post_id=job_post_id,
                 resume_id=resume_id,
                 fit_score=fit_score,
@@ -498,16 +520,21 @@ class AnalyserAgent:
                 reasons_json=reasons_json,
             )
 
+            # === SURGICAL HANDOFF: Ensure manual-routed jobs reach TrackerAgent via applications table ===
+            if route == "manual_queue":
+                self._create_manual_application_record(
+                    job_id=str(job.get("id", "")),
+                    run_id=str(self.run_batch_id),
+                    resume_used=resume_suggested,
+                    fit_score=float(fit_score),
+                    reason="analyser_manual_route"
+                )
+            # === END SURGICAL HANDOFF ===
+
             return {
-                "job_id": job.get("id"),
-                "resume_id": resume_id,
-                "rag_score": fit_score,
-                "form_complexity": "simple",
-                "route": route,
-                "raw_response": raw,
-                "error": "",
                 "job_post_id": job_post_id,
                 "fit_score": fit_score,
+                "route": route,
                 "resume_suggested": resume_suggested,
                 "eligibility_pass": eligibility_pass,
                 "reasons_json": reasons_json,
@@ -515,12 +542,8 @@ class AnalyserAgent:
 
         except Exception as exc:  # noqa: BLE001
             self.logger.error(
-                "_score_job: unhandled exception for job_post_id=%s: %s",
-                job_post_id,
-                exc,
-                exc_info=True,
+                "_score_job: unhandled exception for job %s: %s", job_post_id, exc
             )
-            fallback_result["error"] = str(exc)
             return fallback_result
 
     # ------------------------------------------------------------------
@@ -598,6 +621,7 @@ class AnalyserAgent:
         prompt: str,
         purpose: str = "analyser_job_scoring",
         max_tokens: int = 2048,
+        run_batch_id: Optional[str] = None,
     ) -> str:
         """Call the configured LLM provider chain with exponential backoff.
 
@@ -624,6 +648,7 @@ class AnalyserAgent:
                     prompt=prompt,
                     max_tokens=max_tokens,
                     purpose=purpose,
+                    run_batch_id=run_batch_id or self.run_batch_id,
                 )
                 if attempt > 0:
                     self.logger.info(
@@ -676,14 +701,19 @@ class AnalyserAgent:
             prompt = (
                 "SYSTEM: YOU ARE A JSON-ONLY RESPONSE ENGINE. DO NOT TALK. DO NOT EXPLAIN. "
                 "OUTPUT ONLY RAW JSON. IF YOU ADD CONVERSATIONAL TEXT, THE SYSTEM WILL CRASH.\n\n"
+                "CANDIDATE CONSTRAINTS (NON-NEGOTIABLE):\n"
+                "- Experience Level: Fresher (0.5 Years Total).\n"
+                "- Hard Exclusions: If job title contains 'Senior', 'Staff', 'Principal', 'Lead', 'Manager', "
+                "'Director', or 'VP', YOU MUST score it < 0.40 and set route to 'skip'.\n"
+                "- Reject jobs requiring 2+ years of experience immediately (score < 0.40).\n\n"
                 "You are a job fit scorer. Score this job for candidate fit.\n"
                 "Return ONLY a valid JSON object (no markdown, no explanation).\n"
                 'Format: {"job_index": 1, "fit_score": 0.85, '
-                '"route": "auto_apply", "reason": "strong Python/ML match"}\n\n'
+                '"route": "auto", "reason": "strong Python/ML match"}\n\n'
                 "Rules:\n"
                 "  fit_score: 0.0 to 1.0\n"
-                "  route: auto_apply (fit_score>=0.75), "
-                "manual_review (0.50-0.74), skip (<0.50)\n\n"
+                "  route: auto (fit_score>=0.75), "
+                "manual (0.50-0.74), skip (<0.50)\n\n"
                 f"Job to score:\n"
                 f"[{idx}] {job.get('title', 'N/A')} at {job.get('company', 'N/A')}\n"
                 f"Description: {str(job.get('description', ''))[:800]}\n"
@@ -691,7 +721,8 @@ class AnalyserAgent:
             try:
                 response_text = await self._call_llm(
                     prompt=prompt,
-                    purpose="analyser_job_scoring_individual"
+                    purpose="analyser_job_scoring_individual",
+                    run_batch_id=self.run_batch_id,
                 )
                 score = json.loads(response_text)
                 score["job_index"] = idx
@@ -733,14 +764,19 @@ class AnalyserAgent:
             batch_prompt = (
                 "SYSTEM: YOU ARE A JSON-ONLY RESPONSE ENGINE. DO NOT TALK. DO NOT EXPLAIN. "
                 "OUTPUT ONLY RAW JSON. IF YOU ADD CONVERSATIONAL TEXT, THE SYSTEM WILL CRASH.\n\n"
+                "CANDIDATE CONSTRAINTS (NON-NEGOTIABLE):\n"
+                "- Experience Level: Fresher (0.5 Years Total).\n"
+                "- Hard Exclusions: If job title contains 'Senior', 'Staff', 'Principal', 'Lead', 'Manager', "
+                "'Director', or 'VP', YOU MUST score it < 0.40 and set route to 'skip'.\n"
+                "- Reject jobs requiring 2+ years of experience immediately (score < 0.40).\n\n"
                 "You are a job fit scorer. Score each job for candidate fit.\n"
                 "Return ONLY a valid JSON array. One object per job, same order as input.\n"
                 'Format: [{"job_index": 1, "fit_score": 0.85, '
-                '"route": "auto_apply", "reason": "strong Python/ML match"}, ...]\n\n'
+                '"route": "auto", "reason": "strong Python/ML match"}, ...]\n\n'
                 "Rules:\n"
                 "  fit_score: 0.0 to 1.0\n"
-                "  route: auto_apply (fit_score>=0.75), "
-                "manual_review (0.50-0.74), skip (<0.50)\n\n"
+                "  route: auto (fit_score>=0.75), "
+                "manual (0.50-0.74), skip (<0.50)\n\n"
                 "Jobs to score:\n"
             )
             for idx, job in enumerate(batch, 1):
@@ -752,7 +788,8 @@ class AnalyserAgent:
             try:
                 response_text = await self._call_llm(
                     prompt=batch_prompt,
-                    purpose="analyser_job_scoring_batch"
+                    purpose="analyser_job_scoring_batch",
+                    run_batch_id=self.run_batch_id,
                 )
             except RuntimeError as exc:
                 self.logger.error(
@@ -787,33 +824,14 @@ class AnalyserAgent:
                 job_post_id = str(job.get("id", ""))
                 fit_score = float(result.get("fit_score", 0.0) or 0.0)
                 fit_score = max(0.0, min(1.0, fit_score))
-                eligibility_pass = fit_score >= 0.75
                 route = str(result.get("route", "skip") or "skip")
                 reason = str(result.get("reason", "") or "")
-
-                reasons_json: dict[str, Any] = {
-                    "route": route,
-                    "reason": reason,
-                }
-
-                resume_id: Optional[str] = self._resolve_resume_id(
-                    os.getenv("DEFAULT_RESUME", "Aarjun_Gen.pdf")
-                )
-
-                self._save_score_direct(
-                    job_post_id=job_post_id,
-                    resume_id=resume_id,
-                    fit_score=fit_score,
-                    eligibility_pass=eligibility_pass,
-                    reasons_json=reasons_json,
-                )
 
                 all_results.append({
                     "job_post_id": job_post_id,
                     "fit_score": fit_score,
-                    "eligibility_pass": eligibility_pass,
                     "route": route,
-                    "reasons_json": reasons_json,
+                    "reason": reason,
                 })
 
         return all_results
@@ -1100,6 +1118,21 @@ JOB LIST (JSON)
             )
 
             # ----------------------------------------------------------
+            # S4.4: Budget gate — check ONCE before the job loop
+            # ----------------------------------------------------------
+            _budget_check_raw: str = check_xai_run_cap(run_batch_id=self.run_batch_id)
+            try:
+                _budget_check: dict = json.loads(_budget_check_raw)
+            except (json.JSONDecodeError, TypeError, ValueError):
+                _budget_check = {"abort": False}
+            _budget_ok: bool = not bool(_budget_check.get("abort", False))
+            if not _budget_ok:
+                self.logger.warning(
+                    "xAI budget cap reached — all jobs routed manual_queue run_id=%s",
+                    self.run_batch_id,
+                )
+
+            # ----------------------------------------------------------
             # Step 2: fetch jobs
             # ----------------------------------------------------------
             jobs: list[dict[str, Any]] = self._get_jobs_for_run()
@@ -1131,7 +1164,7 @@ JOB LIST (JSON)
             # ----------------------------------------------------------
             # Steps 4 + 5: build and execute crew with fallback
             # ----------------------------------------------------------
-            self.logger.info(f"Passing {len(jobs)} jobs to batch scoring engine...")
+            self.logger.info("Passing %d jobs to batch scoring engine...", len(jobs))
             
             import asyncio
             import nest_asyncio
@@ -1144,13 +1177,13 @@ JOB LIST (JSON)
             budget_aborted: bool = False
 
             self.logger.info(
-                "AnalyserAgent.run: crew returned %d scored results "
+                "AnalyserAgent.run: LLM returned %d scored results "
                 "(budget_aborted=%s)",
                 len(results_raw),
                 budget_aborted,
             )
 
-            # Build index of crew results keyed by job_post_id for easy lookup
+            # Build index of LLM results keyed by job_post_id for easy lookup
             result_index: dict[str, dict[str, Any]] = {
                 str(r.get("job_post_id", "")): r for r in results_raw
             }
@@ -1165,43 +1198,155 @@ JOB LIST (JSON)
 
             for job in jobs:
                 job_post_id: str = str(job.get("id", ""))
-                crew_result: Optional[dict[str, Any]] = result_index.get(job_post_id)
+                llm_result: Optional[dict[str, Any]] = result_index.get(job_post_id)
 
-                if crew_result:
-                    fit_score: float = float(
-                        crew_result.get("fit_score", 0.0) or 0.0
-                    )
+                fit_score = 0.0
+                route = "skip"
+                reason = "scoring_failed"
+
+                # S4.4: Budget cap gate — bypass LLM if budget exceeded
+                if not _budget_ok:
+                    route, fit_score, reason = "manual_queue", 0.0, "budget_cap_reached"
+                elif llm_result:
+                    fit_score = float(llm_result.get("fit_score", 0.0))
                     fit_score = max(0.0, min(1.0, fit_score))
-                    route: str = str(crew_result.get("route", "skip") or "skip").lower()
-                    resume_suggested: str = str(
-                        crew_result.get("resume_suggested", "")
-                        or os.getenv("DEFAULT_RESUME", "Aarjun_Gen.pdf")
-                    )
+                    reason = str(llm_result.get("reason", ""))
                 else:
-                    # Job was not scored by crew (e.g. budget abort mid-batch)
-                    # Fall back to direct programmatic scoring
                     self.logger.debug(
-                        "AnalyserAgent.run: job %s missing from crew results — "
-                        "running _score_job fallback",
+                        "AnalyserAgent.run: job %s missing from LLM results",
                         job_post_id,
                     )
-                    fallback_scored: dict[str, Any] = self._score_job(job)
-                    fit_score = float(fallback_scored.get("fit_score", 0.0))
-                    route = str(fallback_scored.get("route", "skip"))
-                    resume_suggested = str(
-                        fallback_scored.get(
-                            "resume_suggested",
-                            os.getenv("DEFAULT_RESUME", "Aarjun_Gen.pdf"),
-                        )
-                    )
 
-                eligibility_pass: bool = fit_score >= 0.40
+                # S4.2: NaN/Inf guard on fit_score
+                try:
+                    fit_score = float(fit_score)
+                    if math.isnan(fit_score) or math.isinf(fit_score):
+                        fit_score = 0.0
+                except (ValueError, TypeError):
+                    fit_score = 0.0
+
+                # S4.3: Hard threshold block — overrides LLM route
+                if fit_score < 0.45:
+                    route = "skip"
+                elif fit_score < 0.60:
+                    route = "manual_queue"
+                elif fit_score >= 0.90:
+                    route = "manual_queue"
+                else:
+                    # 0.60–0.89: canonical _determine_route (handles complexity)
+                    route = self._determine_route(fit_score)
+
+                eligibility_pass = fit_score >= 0.45
+
+                default_resume = os.getenv("DEFAULT_RESUME", "Aarjun_Gen.pdf")
+                resume_suggested = default_resume
+                match_reasoning = reason
+                similarity_score = fit_score
+
+                # S3: Sequential RAG gate — strictly one job at a time, 1.1s rate limit enforced
+                if fit_score >= 0.50:
+                    try:
+                        self.logger.info(
+                            "RAG Gate: job_id=%s score=%.2f — calling RAG server",
+                            job_post_id, fit_score,
+                        )
+                        # S3 HARD LOCK: 1.1s delay BEFORE each RAG call
+                        # (placed here so it always fires even on retry exit)
+                        rag_url: str = os.getenv("RAG_SERVER_URL", "http://ai_rag_server:8090")
+                        rag_headers = {
+                            # S3.3: correct header key
+                            "X-API-Key": os.getenv("RAG_API_KEY", ""),
+                            "Content-Type": "application/json",
+                        }
+                        # S3.4: payload with session_id, correct field names, env-driven top_k
+                        rag_payload: dict[str, Any] = {
+                            "session_id": str(self.run_batch_id),
+                            "job_text": str(job.get("description") or job.get("title", "")),
+                            "query": str(job.get("title", "")),
+                            "top_k": int(os.getenv("RAG_TOP_K", "3")),
+                        }
+
+                        rag_result: Optional[dict[str, Any]] = None
+                        last_rag_error: Optional[str] = None
+
+                        for rag_attempt in range(MAX_RAG_RETRIES):
+                            try:
+                                # S3.5: httpx (replaces any requests usage)
+                                resp = httpx.post(
+                                    rag_url + "/rag/query",
+                                    headers=rag_headers,
+                                    json=rag_payload,
+                                    timeout=30.0,
+                                )
+                                resp.raise_for_status()
+                                rag_result = resp.json()
+                                break
+                            except httpx.TimeoutException as e:
+                                last_rag_error = f"timeout:{e}"
+                                self.logger.warning(
+                                    "RAG timeout job_id=%s attempt=%d/%d",
+                                    job_post_id, rag_attempt + 1, MAX_RAG_RETRIES,
+                                )
+                            except httpx.HTTPStatusError as e:
+                                last_rag_error = f"http_{e.response.status_code}"
+                                self.logger.warning(
+                                    "RAG HTTP error job_id=%s status=%d attempt=%d/%d",
+                                    job_post_id, e.response.status_code,
+                                    rag_attempt + 1, MAX_RAG_RETRIES,
+                                )
+                                if e.response.status_code == 429:
+                                    time.sleep(2.0 * (rag_attempt + 1))
+                            except httpx.ConnectError as e:
+                                last_rag_error = f"connect:{e}"
+                                self.logger.warning(
+                                    "RAG connect error job_id=%s attempt=%d/%d",
+                                    job_post_id, rag_attempt + 1, MAX_RAG_RETRIES,
+                                )
+                            except Exception as e:  # noqa: BLE001
+                                last_rag_error = f"unexpected:{e}"
+                                self.logger.error(
+                                    "RAG unexpected error job_id=%s error=%s",
+                                    job_post_id, e,
+                                )
+                            if rag_attempt < MAX_RAG_RETRIES - 1:
+                                time.sleep(1.1 * (2 ** rag_attempt))  # backoff: 1.1s → 2.2s
+
+                        # S3 HARD LOCK: 1.1s rate limit — ALWAYS fires, every job
+                        time.sleep(RAG_CALL_DELAY)
+
+                        if rag_result is None:
+                            self.logger.error(
+                                "RAG failed all retries job_id=%s last_error=%s using fallback",
+                                job_post_id, last_rag_error,
+                            )
+                            # fallback: keep existing fit_score, default resume
+                        else:
+                            # S3 /rag/query returns: success, session_id, chunks, metadata
+                            # resume_suggested comes from /match endpoint (used by _query_resume_match)
+                            # Use metadata if present, else fall back to _query_resume_match result
+                            rag_meta = rag_result.get("metadata") or {}
+                            rag_resume = (
+                                str(rag_meta.get("resume_suggested") or
+                                    rag_meta.get("top_resume_id") or
+                                    default_resume)
+                            )
+                            if rag_resume and rag_resume != default_resume:
+                                resume_suggested = rag_resume
+                            rag_score = float(rag_meta.get("similarity_score", fit_score) or fit_score)
+                            match_reasoning = str(rag_meta.get("match_reasoning") or reason)
+                            similarity_score = rag_score
+
+                    except Exception as e:  # noqa: BLE001
+                        self.logger.error("RAG pipeline failed for job %s: %s", job_post_id, e)
 
                 reasons_json: dict[str, Any] = {
                     "fit_score": fit_score,
                     "route": route,
                     "resume_suggested": resume_suggested,
-                    "source": "crew_output" if crew_result else "rag_direct_fallback",
+                    "reason": reason,
+                    "match_reasoning": match_reasoning,
+                    "similarity_score": similarity_score,
+                    "source": "llm_batch_then_rag",
                 }
 
                 resume_id: Optional[str] = self._resolve_resume_id(resume_suggested)
@@ -1214,9 +1359,17 @@ JOB LIST (JSON)
                     reasons_json=reasons_json,
                 )
 
+                # S6: manual_queue handoff — condition is route == "manual_queue" OR route == "manual"
+                if route in ("manual_queue", "manual"):
+                    self._create_manual_application_record(
+                        job_post_id=job_post_id,
+                        source_platform=str(job.get("source_platform", "unknown")),
+                        reason="analyser_manual_route",
+                    )
+
                 if route == "auto":
                     auto_count += 1
-                elif route == "manual":
+                elif route in ("manual", "manual_queue"):
                     manual_count += 1
                 else:
                     skip_count += 1
@@ -1452,3 +1605,157 @@ JOB LIST (JSON)
             last_exc,
         )
         return []
+
+    # ------------------------------------------------------------------
+    # Internal: manual application persistence (S6 canonical)
+    # ------------------------------------------------------------------
+
+    def _create_manual_application_record(
+        self,
+        job_post_id: str,
+        source_platform: str,
+        reason: str = "analyser_manual_route"
+    ) -> Optional[str]:
+        """
+        Create an application record for a manually routed job (S6 canonical).
+
+        Schema-verified against database/schema.sql.
+        applications columns: id, job_post_id, resume_id, user_id, mode, status, platform,
+                               submitted_at, error_code.
+        S5.4/S6: Uses correct column names. mode is required (CHECK: 'auto'|'manual').
+        Duplicate guard via SELECT before INSERT for idempotency (no unique index exists
+        on job_post_id+user_id in schema for ON CONFLICT).
+
+        Args:
+            job_post_id: UUID of the job post.
+            source_platform: The platform the job was sourced from (e.g., \"linkedin\").
+            reason: A code indicating why it was manually routed.
+
+        Returns:
+            UUID of the created application record, or None on failure.
+        """
+        max_retries = 3
+        last_exc: Optional[Exception] = None
+
+        for attempt in range(max_retries):
+            conn: Optional[psycopg2.extensions.connection] = None
+            try:
+                conn = get_db_conn()
+                cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+                # Duplicate guard — check before insert (no unique constraint in schema)
+                cursor.execute(
+                    "SELECT id FROM applications WHERE job_post_id = %s AND user_id = %s LIMIT 1",
+                    (job_post_id, self.user_id),
+                )
+                if cursor.fetchone():
+                    self.logger.debug(
+                        "_create_manual_application_record: record already exists for job=%s",
+                        job_post_id,
+                    )
+                    return None  # already exists, not an error
+
+                # S5.5: schema-verified column names: job_post_id, user_id, mode, status, platform, error_code
+                cursor.execute(
+                    """
+                    INSERT INTO applications
+                        (job_post_id, user_id, mode, status, platform, error_code)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    RETURNING id
+                    """,
+                    (
+                        job_post_id,
+                        self.user_id,
+                        "manual",          # mode CHECK: 'auto' | 'manual'
+                        "manual_queued",   # status CHECK: 'applied' | 'failed' | 'manual_queued'
+                        source_platform,   # platform column (not source_platform)
+                        reason,            # error_code column reused for routing reason
+                    ),
+                )
+                result = cursor.fetchone()
+                conn.commit()             # S5.3: single commit
+                app_id = str(result["id"]) if result else None
+                if app_id:
+                    self.logger.info(
+                        "_create_manual_application_record: created application %s for job %s",
+                        app_id,
+                        job_post_id,
+                    )
+                else:
+                    # Log to audit_logs on silent failure (schema-verified columns)
+                    try:
+                        audit_conn = get_db_conn()
+                        audit_cursor = audit_conn.cursor()
+                        audit_cursor.execute(
+                            """
+                            INSERT INTO audit_logs
+                                (run_batch_id, job_post_id, level, event_type, message)
+                            VALUES (%s, %s, %s, %s, %s)
+                            """,
+                            (
+                                self.run_batch_id,
+                                job_post_id,
+                                "WARNING",
+                                "manual_queue_persist_silent",
+                                f"INSERT returned no id for job_post_id={job_post_id}",
+                            ),
+                        )
+                        audit_conn.commit()
+                        audit_conn.close()
+                    except Exception:  # noqa: BLE001
+                        pass
+                return app_id
+            except Exception as exc:
+                last_exc = exc
+                if conn:
+                    try:
+                        conn.rollback()
+                    except Exception:  # noqa: BLE001
+                        pass
+                if attempt < max_retries - 1:
+                    sleep_s = 2 ** attempt
+                    self.logger.warning(
+                        "_create_manual_application_record attempt %d/%d failed for job %s: %s — retrying in %ds",
+                        attempt + 1,
+                        max_retries,
+                        job_post_id,
+                        exc,
+                        sleep_s,
+                    )
+                    time.sleep(sleep_s)
+                else:
+                    self.logger.error(
+                        "_create_manual_application_record failed after %d attempts for job %s: %s",
+                        max_retries,
+                        job_post_id,
+                        exc,
+                    )
+                    # S5.5: audit_logs schema-verified columns
+                    try:
+                        audit_conn = get_db_conn()
+                        audit_cursor = audit_conn.cursor()
+                        audit_cursor.execute(
+                            """
+                            INSERT INTO audit_logs
+                                (run_batch_id, job_post_id, level, event_type, message)
+                            VALUES (%s, %s, %s, %s, %s)
+                            """,
+                            (
+                                self.run_batch_id,
+                                job_post_id,
+                                "ERROR",
+                                "manual_queue_persist_failure",
+                                f"error={exc} reason={reason}",
+                            ),
+                        )
+                        audit_conn.commit()
+                        audit_conn.close()
+                    except Exception:  # noqa: BLE001
+                        pass
+            finally:
+                if conn:
+                    try:
+                        conn.close()
+                    except Exception:  # noqa: BLE001
+                        pass
+        return None

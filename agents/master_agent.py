@@ -727,23 +727,19 @@ class MasterAgent:
                     "success": False,
                 }
 
-            # Get routing manifest — jobs with route="auto"
-            analyser_result: Dict[str, Any] = self._run_state.get(
-                "analyser", {}
-            )
-            manifest: List[Dict[str, Any]] = analyser_result.get(
-                "routing_manifest", []
+            # Import ApplyAgent inline to avoid circular imports
+            from agents.apply_agent import ApplyAgent  # type: ignore[import-untyped]
+
+            # ApplyAgent loads its routing manifest from Postgres
+            # internally — no in-memory manifest passing.
+            apply_agent = ApplyAgent(
+                run_batch_id=self.run_batch_id,
+                user_id=self.user_id,
             )
 
-            # Filter to auto-route jobs only
-            auto_jobs: List[Dict[str, Any]] = [
-                j for j in manifest
-                if j.get("route") == "auto"
-            ]
-
-            if not auto_jobs:
+            if not apply_agent.routing_manifest:
                 self.logger.info(
-                    "Apply phase skipped — no auto-route jobs in manifest"
+                    "Apply phase skipped — no auto-route jobs in Postgres"
                 )
                 return {
                     "phase": "apply",
@@ -751,15 +747,6 @@ class MasterAgent:
                     "reason": "no_auto_route_jobs",
                     "success": True,
                 }
-
-            # Import ApplyAgent inline to avoid circular imports
-            from agents.apply_agent import ApplyAgent  # type: ignore[import-untyped]
-
-            apply_agent = ApplyAgent(
-                run_batch_id=self.run_batch_id,
-                user_id=self.user_id,
-                routing_manifest=auto_jobs,
-            )
             result: Dict[str, Any] = apply_agent.run()
 
             # Store result in run state

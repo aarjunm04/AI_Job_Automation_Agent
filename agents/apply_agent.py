@@ -76,16 +76,20 @@ __all__ = ["ApplyAgent"]
 class ApplyAgent:
     """CrewAI Apply Agent — autonomous job application executor.
 
-    Receives the routing manifest (auto-route jobs only) from the Master
-    Agent, runs safety checks on every job, executes Playwright-powered
-    form filling, captures proof-of-submission, re-routes failures to the
-    manual queue, and enforces the xAI cost cap mid-run.
+    Loads auto-route jobs directly from Postgres for the given
+    ``run_batch_id``, runs safety checks on every job, executes
+    Playwright-powered form filling, captures proof-of-submission,
+    re-routes failures to the manual queue, and enforces the xAI cost
+    cap mid-run.
+
+    All agent-to-agent state is passed via Postgres — no in-memory
+    manifest objects are accepted from callers.
 
     Attributes:
         run_batch_id: UUID of the current run batch.
         user_id: UUID of the candidate user.
-        routing_manifest: List of job dicts from the AnalyserAgent routing
-            manifest, pre-filtered to ``route == "auto"`` by the Master Agent.
+        routing_manifest: List of auto-route job dicts loaded from Postgres
+            (``jobs JOIN job_scores WHERE route = 'auto'``).
         llm_interface: Centralised LLM provider manager.
         llm: Primary CrewAI LLM (xAI grok-4-1-fast-reasoning).
         fallback_llm_1: First fallback LLM (SambaNova Llama-3.1-70B).
@@ -96,21 +100,19 @@ class ApplyAgent:
         self,
         run_batch_id: str,
         user_id: str,
-        routing_manifest: List[Dict[str, Any]],
     ) -> None:
         """Initialise the Apply Agent.
+
+        Loads the routing manifest (auto-route jobs) directly from
+        Postgres using ``run_batch_id``.  No in-memory manifest is
+        accepted — all state passes via the database.
 
         Args:
             run_batch_id: UUID of the current run batch.
             user_id: UUID of the candidate user.
-            routing_manifest: List of job dicts from
-                ``AnalyserAgent.get_routing_manifest()`` / the analyser
-                phase's ``routing_manifest`` output, pre-filtered to
-                auto-route jobs.
         """
         self.run_batch_id: str = run_batch_id
         self.user_id: str = user_id
-        self.routing_manifest: List[Dict[str, Any]] = routing_manifest
 
         self.llm_interface: LLMInterface = LLMInterface()
         self.llm = self.llm_interface.get_llm("APPLY_AGENT")
@@ -131,12 +133,106 @@ class ApplyAgent:
 
         self.logger: logging.Logger = logging.getLogger(self.__class__.__name__)
 
+        # Load routing manifest from Postgres (auto-route jobs only)
+        self.routing_manifest: List[Dict[str, Any]] = (
+            self._load_routing_manifest()
+        )
+
         self.logger.info(
             "ApplyAgent initialised — run_batch_id=%s user_id=%s jobs=%d",
             run_batch_id,
             user_id,
-            len(routing_manifest),
+            len(self.routing_manifest),
         )
+
+    # ------------------------------------------------------------------
+    # Internal: load routing manifest from Postgres
+    # ------------------------------------------------------------------
+
+    def _load_routing_manifest(self) -> List[Dict[str, Any]]:
+        """Load auto-route jobs from Postgres for the current run batch.
+
+        Queries ``jobs JOIN job_scores`` where the analyser assigned
+        ``route = 'auto'`` and the job passed eligibility.  Results are
+        ordered by ``fit_score DESC`` so the highest-confidence jobs are
+        processed first.
+
+        Returns:
+            List of job dicts ready for the apply pipeline.  Empty list
+            on query failure (fail-soft).
+        """
+        for attempt in range(1, 4):
+            conn: Optional[psycopg2.extensions.connection] = None
+            try:
+                conn = get_db_conn()
+                cursor = conn.cursor(
+                    cursor_factory=psycopg2.extras.RealDictCursor
+                )
+                cursor.execute(
+                    """
+                    SELECT
+                        jp.id,
+                        jp.title,
+                        jp.company,
+                        jp.url,
+                        jp.source_platform,
+                        js.fit_score,
+                        js.resume_id,
+                        js.eligibility_pass
+                    FROM jobs jp
+                    JOIN job_scores js ON js.job_post_id = jp.id
+                    WHERE jp.run_batch_id = %s
+                      AND js.eligibility_pass = TRUE
+                      AND jp.route = 'auto'
+                    ORDER BY js.fit_score DESC
+                    """,
+                    (self.run_batch_id,),
+                )
+                rows = cursor.fetchall()
+                manifest: List[Dict[str, Any]] = []
+                for row in rows:
+                    manifest.append(
+                        {
+                            "id": str(row["id"]),
+                            "job_post_id": str(row["id"]),
+                            "title": row["title"],
+                            "company": row["company"],
+                            "url": row["url"],
+                            "source_platform": row["source_platform"],
+                            "fit_score": float(row["fit_score"] or 0.0),
+                            "resume_suggested": str(row["resume_id"]) if row["resume_id"] else "",
+                            "eligibility_pass": bool(row["eligibility_pass"]),
+                            "route": "auto",
+                        }
+                    )
+                self.logger.info(
+                    "_load_routing_manifest: loaded %d auto-route jobs "
+                    "for batch %s",
+                    len(manifest),
+                    self.run_batch_id,
+                )
+                return manifest
+            except Exception as exc:  # noqa: BLE001
+                if attempt < 3:
+                    time.sleep(2 ** attempt)
+                    self.logger.warning(
+                        "_load_routing_manifest attempt %d/3 failed: %s "
+                        "— retrying",
+                        attempt,
+                        str(exc),
+                    )
+                else:
+                    self.logger.error(
+                        "_load_routing_manifest: failed after 3 attempts: %s",
+                        exc,
+                    )
+            finally:
+                if conn:
+                    try:
+                        conn.close()
+                    except Exception:  # noqa: BLE001
+                        pass
+        return []
 
     # ------------------------------------------------------------------
     # Internal: per-platform apply counts
