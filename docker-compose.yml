@@ -22,8 +22,8 @@ services:
     env_file:
       - ~/java.env
     environment:
-      POSTGRES_USER: ${LOCAL_POSTGRES_USER:-postgres}
-      POSTGRES_PASSWORD: ${LOCAL_POSTGRES_PASSWORD:-localdev123}
+      POSTGRES_USER: ${LOCAL_POSTGRES_USER}
+      POSTGRES_PASSWORD: ${LOCAL_POSTGRES_PASSWORD}
       POSTGRES_DB: ${LOCAL_POSTGRES_DB:-ai_job_db}
       POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
       PGDATA: /var/lib/postgresql/data/pgdata
@@ -111,7 +111,7 @@ services:
       SCRAPER_SERVICE_API_KEY: ${SCRAPER_SERVICE_API_KEY:-}
       LOG_LEVEL: ${LOG_LEVEL:-info}
       PYTHONPATH: /app
-      LOCAL_POSTGRES_URL: postgresql://${LOCAL_POSTGRES_USER:-postgres}:${LOCAL_POSTGRES_PASSWORD:-localdev123}@ai_postgres:5432/${LOCAL_POSTGRES_DB:-ai_job_db}
+      LOCAL_POSTGRES_URL: postgresql://${LOCAL_POSTGRES_USER}:${LOCAL_POSTGRES_PASSWORD}@ai_postgres:5432/${LOCAL_POSTGRES_DB:-ai_job_db}
       REDIS_URL: redis://ai_redis:6379/0
       SCRAPER_SERVICE_URL: http://ai_playwright_scraper:8001
     ports:
@@ -150,7 +150,7 @@ services:
     environment:
       LOG_LEVEL: ${LOG_LEVEL:-info}
       PYTHONPATH: /app
-      LOCAL_POSTGRES_URL: postgresql://${LOCAL_POSTGRES_USER:-postgres}:${LOCAL_POSTGRES_PASSWORD:-localdev123}@ai_postgres:5432/${LOCAL_POSTGRES_DB:-ai_job_db}
+      LOCAL_POSTGRES_URL: postgresql://${LOCAL_POSTGRES_USER}:${LOCAL_POSTGRES_PASSWORD}@ai_postgres:5432/${LOCAL_POSTGRES_DB:-ai_job_db}
       REDIS_URL: redis://ai_redis:6379/0
       APPLY_SERVICE_URL: http://ai_playwright_apply:8003
     ports:
@@ -236,7 +236,7 @@ services:
     environment:
       LOG_LEVEL: ${LOG_LEVEL:-info}
       PYTHONPATH: /app
-      LOCAL_POSTGRES_URL: postgresql://${LOCAL_POSTGRES_USER:-postgres}:${LOCAL_POSTGRES_PASSWORD:-localdev123}@ai_postgres:5432/${LOCAL_POSTGRES_DB:-ai_job_db}
+      LOCAL_POSTGRES_URL: postgresql://${LOCAL_POSTGRES_USER}:${LOCAL_POSTGRES_PASSWORD}@ai_postgres:5432/${LOCAL_POSTGRES_DB:-ai_job_db}
       REDIS_URL: redis://ai_redis:6379/0
       RAG_SERVER_URL: http://ai_rag_server:8090
       SCRAPER_SERVICE_URL: http://ai_playwright_scraper:8001
@@ -284,7 +284,7 @@ services:
       RESUME_DIR: /app/resumes
       DRY_RUN: ${DRY_RUN:-false}
       ACTIVE_DB: ${ACTIVE_DB:-local}
-      LOCAL_POSTGRES_URL: postgresql://${LOCAL_POSTGRES_USER:-postgres}:${LOCAL_POSTGRES_PASSWORD:-localdev123}@ai_postgres:5432/${LOCAL_POSTGRES_DB:-ai_job_db}
+      LOCAL_POSTGRES_URL: postgresql://${LOCAL_POSTGRES_USER}:${LOCAL_POSTGRES_PASSWORD}@ai_postgres:5432/${LOCAL_POSTGRES_DB:-ai_job_db}
       RAG_SERVER_URL: http://ai_rag_server:8090
       SCRAPER_SERVICE_URL: http://ai_playwright_scraper:8001
       APPLY_SERVICE_URL: http://ai_playwright_apply:8003
