@@ -130,7 +130,14 @@ class TrackerAgent:
         """
         self.run_batch_id: str = run_batch_id
         self.user_id: str = user_id
-        self.llm = LLMInterface().get_llm("TRACKER_AGENT")
+        try:
+            self.llm = LLMInterface().get_llm("TRACKER_AGENT")
+        except Exception as _llm_exc:
+            self.logger.error(
+                "TrackerAgent: LLM init failed — %s. "
+                "Tracker will attempt to run with degraded LLM.", _llm_exc
+            )
+            self.llm = None
         self.logger: logging.Logger = logging.getLogger(self.__class__.__name__)
 
     # ------------------------------------------------------------------
@@ -292,50 +299,14 @@ class TrackerAgent:
         Returns:
             Configured CrewAI Task instance ready to be added to a Crew.
         """
-        applied_json: str = json.dumps(applied_jobs, default=str)
-        queued_json: str = json.dumps(queued_jobs, default=str)
-
-        description = f"""
-You are closing out run batch {self.run_batch_id}.
-
-STEP 1 — Notion health check
-Call check_notion_connection(run_batch_id="{self.run_batch_id}").
-Parse the JSON result. If the "connected" key is False or absent, log a WARNING
-and skip ALL Notion calls below (steps 2 and 3). Do NOT raise an error.
-
-STEP 2 — Sync applied jobs to Notion Job Tracker
-For each job in the applied_jobs list below, call sync_application_to_job_tracker
-with: application_id, job_post_id, run_batch_id="{self.run_batch_id}", title,
-company, url (as job_url), platform, resume_used, and location.
-applied_jobs (JSON):
-{applied_json}
-
-STEP 3 — Push queued jobs to Notion Applications DB
-For each job in the queued_jobs list below, call sync_application_to_job_tracker
-with: job_post_id, run_batch_id="{self.run_batch_id}", title, company, url
-(as job_url), platform, fit_score, and resume_used (as resume_suggested),
-and location.
-queued_jobs (JSON):
-{queued_json}
-
-STEP 4 — Update Postgres run batch stats
-Call update_run_batch_stats with:
-  run_batch_id="{self.run_batch_id}"
-  jobs_discovered=<total jobs in applied_jobs + queued_jobs, or fetch from get_run_stats if available>
-  jobs_auto_applied=<count of applied_jobs>
-  jobs_queued=<count of queued_jobs>
-
-STEP 5 — Return structured result
-Return ONLY a valid JSON object with these exact keys:
-{{
-  "notion_synced_applied": <int: count of applied jobs successfully synced>,
-  "notion_synced_queued": <int: count of queued jobs successfully pushed>,
-  "agentops_recorded": true,
-  "session_closed": true,
-  "errors": []
-}}
-If some Notion syncs failed, include them in the "errors" list as strings.
-"""
+        description = (
+            f"Close out run batch {self.run_batch_id}. "
+            f"Applied count: {len(applied_jobs)}. "
+            f"Queued count: {len(queued_jobs)}. "
+            f"Sync all applied jobs to Notion Job Tracker. "
+            f"Push all queued jobs to Notion Applications DB. "
+            f"Update Postgres run batch stats and close the session."
+        )
 
         return Task(
             description=description,
@@ -414,6 +385,16 @@ If some Notion syncs failed, include them in the "errors" list as strings.
                 }
 
             # Step 4 — build crew and kick off
+            if self.llm is None:
+                self.logger.error(
+                    "TrackerAgent: cannot build crew — LLM unavailable. "
+                    "Returning early with success=False."
+                )
+                return {
+                    "success": False,
+                    "run_batch_id": self.run_batch_id,
+                    "error": "llm_init_failed",
+                }
             agent: Agent = self._build_agent()
             task: Task = self._build_task(agent, applied, queued)
             crew: Crew = Crew(
@@ -423,7 +404,36 @@ If some Notion syncs failed, include them in the "errors" list as strings.
                 verbose=True,
             )
 
-            raw_result: Any = crew.kickoff()
+            import re as _re
+            import time as _time
+            _MAX_RETRIES = 3
+            raw_result: Any = None
+            for _attempt in range(1, _MAX_RETRIES + 1):
+                try:
+                    raw_result = crew.kickoff()
+                    break
+                except Exception as _ke:
+                    _ke_str = str(_ke)
+                    _is_rl = (
+                        "RateLimitError" in type(_ke).__name__
+                        or "rate_limit" in _ke_str.lower()
+                        or "rate limit" in _ke_str.lower()
+                        or "429" in _ke_str
+                    )
+                    if _is_rl and _attempt < _MAX_RETRIES:
+                        _match = _re.search(r"try again in ([\d.]+)s", _ke_str)
+                        _wait = float(_match.group(1)) + 2.0 if _match else 32.0
+                        self.logger.warning(
+                            "TrackerAgent crew.kickoff() RateLimitError attempt "
+                            "%d/%d — sleeping %.1fs", _attempt, _MAX_RETRIES, _wait
+                        )
+                        _time.sleep(_wait)
+                    else:
+                        self.logger.error(
+                            "TrackerAgent crew.kickoff() failed attempt %d/%d: %s",
+                            _attempt, _MAX_RETRIES, _ke_str[:300]
+                        )
+                        raise
 
             # Step 5 — parse result
             result_text: str = ""
@@ -439,7 +449,14 @@ If some Notion syncs failed, include them in the "errors" list as strings.
                 if clean.startswith("```"):
                     import re
                     clean = re.sub(r"^```(?:json)?\s*|\s*```$", "", clean.strip())
-                parsed = json.loads(clean)
+                try:
+                    parsed = json.loads(clean)
+                except (json.JSONDecodeError, TypeError, ValueError) as _json_exc:
+                    self.logger.warning(
+                        "TrackerAgent: LLM output could not be parsed as JSON — %s. "
+                        "Proceeding with empty result.", _json_exc
+                    )
+                    parsed = {}
             except Exception as parse_exc:  # noqa: BLE001
                 raw_preview: str = result_text[:500]
                 self.logger.warning(
@@ -585,9 +602,21 @@ If some Notion syncs failed, include them in the "errors" list as strings.
 
             # Step 7: Post to Notion
             try:
-                asyncio.run(self._post_report_to_notion(report))
-            except Exception as notion_exc:
-                self.logger.warning("Failed to post report to Notion: %s", notion_exc)
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    import concurrent.futures as _cf
+                    with _cf.ThreadPoolExecutor(max_workers=1) as _pool:
+                        _future = _pool.submit(
+                            asyncio.run, self._post_report_to_notion(report)
+                        )
+                        _future.result(timeout=30)
+                else:
+                    loop.run_until_complete(self._post_report_to_notion(report))
+            except Exception as _notion_exc:
+                self.logger.warning(
+                    "TrackerAgent: Notion report post failed — %s. "
+                    "Continuing without Notion report.", _notion_exc
+                )
 
             # Step 8: End AgentOps session
             end_state = "Success" if report.success else "Fail"
@@ -605,10 +634,15 @@ If some Notion syncs failed, include them in the "errors" list as strings.
                 report.duration_minutes,
             )
 
-        except Exception as exc:
-            self.logger.error("Error generating report: %s", exc, exc_info=True)
-            report.success = False
-            report.error_summary = str(exc)
+        except Exception as _rpt_exc:
+            self.logger.error(
+                "TrackerAgent.generate_report: failed — %s",
+                _rpt_exc, exc_info=True
+            )
+            return {
+                "success": False,
+                "error": f"generate_report_failed: {str(_rpt_exc)[:200]}",
+            }
 
         return report
 
