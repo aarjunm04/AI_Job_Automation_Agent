@@ -192,7 +192,24 @@ class AnalyserAgent:
                     len(jobs),
                     self.run_batch_id,
                 )
-                return jobs
+                
+                # BUG-07: Deduplication on (company.lower().strip(), title.lower().strip())
+                seen = set()
+                deduped = []
+                dropped = 0
+                for job in jobs:
+                    company = str(job.get("company", "")).lower().strip()
+                    title = str(job.get("title", "")).lower().strip()
+                    key = (company, title)
+                    if key not in seen:
+                        seen.add(key)
+                        deduped.append(job)
+                    else:
+                        dropped += 1
+                        self.logger.info(f"Dedup: dropped duplicate job '{job.get('title')}' @ '{job.get('company')}'")
+                
+                self.logger.info(f"_get_jobs_for_run: {len(deduped)} unique jobs after dedup (dropped {dropped})")
+                return deduped
 
             except Exception as exc:  # noqa: BLE001
                 last_exc = exc
@@ -290,6 +307,7 @@ class AnalyserAgent:
         fit_score: float,
         eligibility_pass: bool,
         reasons_json: dict[str, Any],
+        conn: Optional[Any] = None,
     ) -> Optional[str]:
         """
         Write a job_scores row directly via psycopg2.
@@ -314,10 +332,15 @@ class AnalyserAgent:
         """
         max_retries = 3
         for attempt in range(max_retries):
-            conn: Optional[psycopg2.extensions.connection] = None
+            _conn: Optional[psycopg2.extensions.connection] = None
+            _is_local = False
             try:
-                conn = get_db_conn()  # S2.4: uses get_db_conn() from utils.db_utils
-                cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+                if conn is not None:
+                    _conn = conn
+                else:
+                    _conn = get_db_conn()  # S2.4: uses get_db_conn() from utils.db_utils
+                    _is_local = True
+                cursor = _conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
                 # S5.2: table name = job_scores (schema-verified), ON CONFLICT added
                 cursor.execute(
                     """
@@ -341,8 +364,13 @@ class AnalyserAgent:
                     ),
                 )
                 result = cursor.fetchone()
-                conn.commit()  # S5.3: single commit
+                if _is_local:
+                    _conn.commit()  # S5.3: single commit
                 score_id = str(result["id"]) if result else None
+                # BUG-05: Requirement: Log every successful INSERT to job_scores
+                if score_id:
+                    self.logger.info(f"job_scores saved: {job_post_id} score={fit_score}")
+
                 self.logger.debug(
                     "_save_score_direct: saved job_score %s for job_post %s",
                     score_id,
@@ -351,9 +379,9 @@ class AnalyserAgent:
                 return score_id
 
             except Exception as exc:  # noqa: BLE001
-                if conn:
+                if _is_local and _conn:
                     try:
-                        conn.rollback()  # S5.3: rollback on error
+                        _conn.rollback()  # S5.3: rollback on error
                     except Exception:  # noqa: BLE001
                         pass
                 if attempt < max_retries - 1:
@@ -376,9 +404,9 @@ class AnalyserAgent:
                         exc,
                     )
             finally:
-                if conn:
+                if _is_local and _conn:
                     try:
-                        conn.close()  # S5.3: always close
+                        _conn.close()  # S5.3: always close
                     except Exception:  # noqa: BLE001
                         pass
         return None
@@ -523,11 +551,10 @@ class AnalyserAgent:
             # === SURGICAL HANDOFF: Ensure manual-routed jobs reach TrackerAgent via applications table ===
             if route == "manual_queue":
                 self._create_manual_application_record(
-                    job_id=str(job.get("id", "")),
-                    run_id=str(self.run_batch_id),
-                    resume_used=resume_suggested,
-                    fit_score=float(fit_score),
-                    reason="analyser_manual_route"
+                    job_post_id=job_post_id,
+                    source_platform=str(job.get("source_platform", "unknown")),
+                    reason="analyser_manual_route",
+                    resume_suggested=resume_suggested,
                 )
             # === END SURGICAL HANDOFF ===
 
@@ -701,6 +728,16 @@ class AnalyserAgent:
             prompt = (
                 "SYSTEM: YOU ARE A JSON-ONLY RESPONSE ENGINE. DO NOT TALK. DO NOT EXPLAIN. "
                 "OUTPUT ONLY RAW JSON. IF YOU ADD CONVERSATIONAL TEXT, THE SYSTEM WILL CRASH.\n\n"
+                "HARD GATE — APPLY BEFORE ALL OTHER SCORING:\n"
+                "If the job title and full description do NOT explicitly mention at least one of:\n"
+                "[AI, Artificial Intelligence, Machine Learning, ML, Data Science, LLM, "
+                "NLP, Computer Vision, Automation, MLOps, Data Engineering, GenAI, "
+                "Deep Learning, Neural Network, Python in an AI/DS/ML context]\n"
+                "then fit_score MUST be set to 0.20 or below. No exceptions.\n"
+                "This applies regardless of company prestige, compensation, or other factors.\n"
+                "Manufacturing, hardware engineering, full-stack web, sales, GTM, telecom "
+                "infrastructure, audit, compliance, and program management roles that do not "
+                "mention the above keywords must score 0.20 or below.\n\n"
                 "CANDIDATE CONSTRAINTS (NON-NEGOTIABLE):\n"
                 "- Experience Level: Fresher (0.5 Years Total).\n"
                 "- Hard Exclusions: If job title contains 'Senior', 'Staff', 'Principal', 'Lead', 'Manager', "
@@ -712,8 +749,8 @@ class AnalyserAgent:
                 '"route": "auto", "reason": "strong Python/ML match"}\n\n'
                 "Rules:\n"
                 "  fit_score: 0.0 to 1.0\n"
-                "  route: auto (fit_score>=0.75), "
-                "manual (0.50-0.74), skip (<0.50)\n\n"
+                "  route: manual (fit_score>=0.90),auto (fit_score>=0.60), "
+                "manual (0.40-0.60), skip (<0.40)\n\n"
                 f"Job to score:\n"
                 f"[{idx}] {job.get('title', 'N/A')} at {job.get('company', 'N/A')}\n"
                 f"Description: {str(job.get('description', ''))[:800]}\n"
@@ -743,40 +780,110 @@ class AnalyserAgent:
         self,
         jobs: list[dict[str, Any]],
     ) -> list[dict[str, Any]]:
-        """Score jobs in batches of ANALYSER_BATCH_SIZE using _call_llm.
-
-        Sends ANALYSER_BATCH_SIZE jobs per LLM call. On JSON parse failure,
-        falls back to _score_jobs_individually for that batch. Results are
-        written to job_scores using the confirmed schema.
+        """Score a list of jobs in batches using _call_llm with the xAI
+        fallback chain. Injects candidate profile context from userprofile.json
+        into every batch prompt. Falls back to _score_jobs_individually on
+        JSON parse failure. Fail-soft on all errors.
 
         Args:
-            jobs: Full list of job dicts for the current run batch.
+            jobs: Full list of raw job dicts for the current run.
 
         Returns:
-            List of routing result dicts with job_post_id, fit_score,
-            eligibility_pass, route, and reasons_json.
+            List of dicts each containing job_post_id, fit_score, route,
+            and reason — ready for DB write.
         """
+        # ── Load candidate profile from ConfigLoader (fail-soft) ────────────
+        try:
+            from config.config_loader import config_loader as _cfg
+            profile: dict = _cfg.user or {}
+        except Exception as _e:
+            self.logger.warning(
+                "_run_batch_scoring: could not load user profile, "
+                "scoring will use safe defaults: %s", _e,
+            )
+            profile = {}
+
+        # ── Extract profile fields with safe defaults ────────────────────────
+        candidate_name:   str       = profile.get("personal", {}).get("name", "Candidate")
+        years_exp:        int       = int(profile.get("formanswers", {}).get("yearsofexperience", 0) or 0)
+        target_roles:     list[str] = profile.get("preferences", {}).get("targetroles", []) or []
+        work_type:        str       = profile.get("preferences", {}).get("worktype", "remote") or "remote"
+        blacklisted_cos:  list[str] = profile.get("preferences", {}).get("blacklistedcompanies", []) or []
+        salary_floor_usd: int       = int(profile.get("preferences", {}).get("salaryfloorusd", 0) or 0)
+        salary_floor_inr: int       = int(profile.get("preferences", {}).get("salaryfloorinr", 0) or 0)
+
+        # ── Derive seniority tier dynamically from YOE ───────────────────────
+        if years_exp == 0:
+            seniority_label    = "Entry-level / Fresher (0 YOE)"
+            hard_reject_titles = [
+                "Senior", "Staff", "Principal", "Lead", "Director",
+                "Manager", "Head of", "VP", "Vice President", "C-level",
+            ]
+            max_required_yoe = 1
+        elif years_exp <= 2:
+            seniority_label    = f"Junior ({years_exp} YOE)"
+            hard_reject_titles = [
+                "Staff", "Principal", "Director", "Manager",
+                "Head of", "VP", "Vice President", "C-level",
+            ]
+            max_required_yoe = 3
+        else:
+            seniority_label    = f"Mid-level ({years_exp} YOE)"
+            hard_reject_titles = ["Director", "VP", "Vice President", "C-level"]
+            max_required_yoe   = years_exp + 2
+
+        # ── Build candidate context block injected into every batch prompt ───
+        candidate_context: str = (
+            "CANDIDATE PROFILE — READ THIS BEFORE SCORING ANY JOB\n"
+            "======================================================\n"
+            f"Name            : {candidate_name}\n"
+            f"Seniority       : {seniority_label}\n"
+            "Target roles    : "
+            f"{', '.join(target_roles) if target_roles else 'Any AI/ML/Data role'}\n"
+            f"Preferred work  : {work_type}\n"
+            f"Salary floor    : ${salary_floor_usd:,} USD  /  "
+            f"₹{salary_floor_inr:,} INR (0 = no floor)\n\n"
+            "HARD REJECT — set fit_score ≤ 0.30 immediately, no exceptions:\n"
+            f"  • Job title contains any of: {', '.join(hard_reject_titles)}\n"
+            f"  • Description requires more than {max_required_yoe} years experience\n"
+            "  • Company is blacklisted: "
+            f"{', '.join(blacklisted_cos) if blacklisted_cos else 'none'}\n\n"
+            "SCORING BONUSES:\n"
+            "  • +0.05 if position is remote and preferred work type is remote\n"
+            "  • +0.10 if job title directly matches one of the target roles\n\n"
+            "SCORING CALIBRATION:\n"
+            "  • 0.60+ means candidate is realistically eligible to apply NOW\n"
+            "  • Do NOT inflate score on skills alone if seniority is a blocker\n"
+        )
+
+        # ── Batch loop ───────────────────────────────────────────────────────
         _BATCH_SIZE: int = 25
-        batch_size = _BATCH_SIZE
         all_results: list[dict[str, Any]] = []
 
-        for batch in _chunk(jobs, batch_size):
-            batch_prompt = (
-                "SYSTEM: YOU ARE A JSON-ONLY RESPONSE ENGINE. DO NOT TALK. DO NOT EXPLAIN. "
-                "OUTPUT ONLY RAW JSON. IF YOU ADD CONVERSATIONAL TEXT, THE SYSTEM WILL CRASH.\n\n"
-                "CANDIDATE CONSTRAINTS (NON-NEGOTIABLE):\n"
-                "- Experience Level: Fresher (0.5 Years Total).\n"
-                "- Hard Exclusions: If job title contains 'Senior', 'Staff', 'Principal', 'Lead', 'Manager', "
-                "'Director', or 'VP', YOU MUST score it < 0.40 and set route to 'skip'.\n"
-                "- Reject jobs requiring 2+ years of experience immediately (score < 0.40).\n\n"
-                "You are a job fit scorer. Score each job for candidate fit.\n"
-                "Return ONLY a valid JSON array. One object per job, same order as input.\n"
+        for batch in _chunk(jobs, _BATCH_SIZE):
+            batch_prompt: str = (
+                "SYSTEM: YOU ARE A JSON-ONLY RESPONSE ENGINE. DO NOT TALK. "
+                "DO NOT EXPLAIN. OUTPUT ONLY RAW JSON. "
+                "IF YOU ADD CONVERSATIONAL TEXT, THE SYSTEM WILL CRASH.\n\n"
+                f"{candidate_context}\n"
+                "HARD GATE — APPLY BEFORE ALL OTHER SCORING:\n"
+                "If the job title and description do NOT explicitly mention at least one of:\n"
+                "[AI, Artificial Intelligence, Machine Learning, ML, Data Science, LLM, "
+                "NLP, Computer Vision, Automation, MLOps, Data Engineering, GenAI, "
+                "Deep Learning, Neural Network, Python in an AI/DS/ML context]\n"
+                "then fit_score MUST be set to 0.20 or below. No exceptions.\n"
+                "Manufacturing, hardware, full-stack web, sales, GTM, telecom, "
+                "audit, compliance, and program management roles without the above "
+                "keywords must score 0.20 or below.\n\n"
+                "Score each job for candidate fit. "
+                "Return ONLY a valid JSON array, one object per job, same order as input.\n"
                 'Format: [{"job_index": 1, "fit_score": 0.85, '
                 '"route": "auto", "reason": "strong Python/ML match"}, ...]\n\n'
-                "Rules:\n"
-                "  fit_score: 0.0 to 1.0\n"
-                "  route: auto (fit_score>=0.75), "
-                "manual (0.50-0.74), skip (<0.50)\n\n"
+                "Routing rules:\n"
+                "  fit_score >= 0.90  → route = manual_queue  (too senior, always review)\n"
+                "  fit_score >= 0.60  → route = auto\n"
+                "  fit_score >= 0.45  → route = manual_queue\n"
+                "  fit_score <  0.45  → route = skip\n\n"
                 "Jobs to score:\n"
             )
             for idx, job in enumerate(batch, 1):
@@ -785,54 +892,113 @@ class AnalyserAgent:
                     f"Description: {str(job.get('description', ''))[:800]}\n---\n"
                 )
 
+            # ── LLM call with fallback chain ─────────────────────────────────
             try:
-                response_text = await self._call_llm(
+                response_text: str = await self._call_llm(
                     prompt=batch_prompt,
                     purpose="analyser_job_scoring_batch",
                     run_batch_id=self.run_batch_id,
                 )
             except RuntimeError as exc:
                 self.logger.error(
-                    "_run_batch_scoring: LLM exhausted for batch of %d jobs: %s — skipping batch",
-                    len(batch),
-                    exc,
+                    "_run_batch_scoring: LLM chain exhausted for batch "
+                    "of %d jobs — skipping batch: %s",
+                    len(batch), exc,
                 )
                 continue
 
+            # ── JSON parse with per-job fallback ─────────────────────────────
             try:
                 scores = json.loads(response_text)
                 if not isinstance(scores, list):
-                    raise ValueError("Response is not a JSON array")
+                    raise ValueError("LLM response is not a JSON array")
             except (json.JSONDecodeError, ValueError) as exc:
                 self.logger.warning(
-                    "Batch JSON parse failed (%s). Falling back to per-job scoring.", exc
+                    "_run_batch_scoring: batch JSON parse failed (%s) "
+                    "— falling back to per-job scoring",
+                    exc,
                 )
                 scores = await self._score_jobs_individually(batch)
+
+            # ── Map results back to jobs ──────────────────────────────────────
+            _VALID_ROUTES: frozenset[str] = frozenset({"auto", "manual_queue", "skip"})
+            batch_scored_ids: set[str] = set()
 
             for result in scores:
                 if not isinstance(result, dict):
                     continue
-                raw_idx = result.get("job_index", 1)
+
                 try:
-                    job_idx = int(raw_idx) - 1
+                    job_idx: int = int(result.get("job_index", -1)) - 1
                 except (TypeError, ValueError):
-                    job_idx = 0
+                    job_idx = -1
+
                 if job_idx < 0 or job_idx >= len(batch):
-                    job_idx = 0
+                    self.logger.warning(
+                        "_run_batch_scoring: invalid job_index=%s in LLM "
+                        "result — skipping entry",
+                        result.get("job_index", "MISSING"),
+                    )
+                    continue
 
-                job = batch[job_idx]
+                job         = batch[job_idx]
                 job_post_id = str(job.get("id", ""))
-                fit_score = float(result.get("fit_score", 0.0) or 0.0)
-                fit_score = max(0.0, min(1.0, fit_score))
-                route = str(result.get("route", "skip") or "skip")
-                reason = str(result.get("reason", "") or "")
+                fit_score   = max(0.0, min(1.0, float(result.get("fit_score", 0.0) or 0.0)))
+                route       = str(result.get("route", "skip") or "skip").strip()
 
+                # ── Route validator ──────────────────────────────────────────
+                if route == "manual":
+                    self.logger.info(
+                        "_run_batch_scoring: normalised 'manual' → "
+                        "'manual_queue' for job %s", job_post_id,
+                    )
+                    route = "manual_queue"
+                elif route not in _VALID_ROUTES:
+                    self.logger.warning(
+                        "_run_batch_scoring: unknown route '%s' → 'skip' "
+                        "for job %s", route, job_post_id,
+                    )
+                    route = "skip"
+
+                # Hard floor — only catches extreme contradictions
+                if fit_score < 0.30 and route == "auto":
+                    self.logger.warning(
+                        "_run_batch_scoring: score=%.2f too low for auto "
+                        "→ manual_queue for job %s", fit_score, job_post_id,
+                    )
+                    route = "manual_queue"
+                if fit_score >= 0.85 and route == "skip":
+                    self.logger.warning(
+                        "_run_batch_scoring: score=%.2f too high to skip "
+                        "→ manual_queue for job %s", fit_score, job_post_id,
+                    )
+                    route = "manual_queue"
+                # ── End route validator ──────────────────────────────────────
+
+                reason = str(result.get("reason", "") or "")
                 all_results.append({
                     "job_post_id": job_post_id,
-                    "fit_score": fit_score,
-                    "route": route,
-                    "reason": reason,
+                    "fit_score":   fit_score,
+                    "route":       route,
+                    "reason":      reason,
                 })
+                batch_scored_ids.add(job_post_id)
+
+            # ── Fail-soft for jobs LLM did not return a result for ───────────
+            for unmapped in batch:
+                unmapped_id = str(unmapped.get("id") or unmapped.get("job_post_id", ""))
+                if unmapped_id not in batch_scored_ids:
+                    self.logger.warning(
+                        "_run_batch_scoring: job_id=%s got no LLM score "
+                        "— defaulting to manual_queue",
+                        unmapped_id,
+                    )
+                    all_results.append({
+                        "job_post_id": unmapped_id,
+                        "fit_score":   0.0,
+                        "route":       "manual_queue",
+                        "reason":      "unbatch_no_llm_result",
+                    })
 
         return all_results
 
@@ -1226,9 +1392,9 @@ JOB LIST (JSON)
                     fit_score = 0.0
 
                 # S4.3: Hard threshold block — overrides LLM route
-                if fit_score < 0.45:
+                if fit_score < 0.40:
                     route = "skip"
-                elif fit_score < 0.60:
+                elif fit_score < 0.50:
                     route = "manual_queue"
                 elif fit_score >= 0.90:
                     route = "manual_queue"
@@ -1236,7 +1402,7 @@ JOB LIST (JSON)
                     # 0.60–0.89: canonical _determine_route (handles complexity)
                     route = self._determine_route(fit_score)
 
-                eligibility_pass = fit_score >= 0.45
+                eligibility_pass = fit_score >= 0.40
 
                 default_resume = os.getenv("DEFAULT_RESUME", "Aarjun_Gen.pdf")
                 resume_suggested = default_resume
@@ -1255,7 +1421,7 @@ JOB LIST (JSON)
                         rag_url: str = os.getenv("RAG_SERVER_URL", "http://ai_rag_server:8090")
                         rag_headers = {
                             # S3.3: correct header key
-                            "X-API-Key": os.getenv("RAG_API_KEY", ""),
+                            "X-RAG-API-Key": os.getenv("RAG_API_KEY", ""),
                             "Content-Type": "application/json",
                         }
                         # S3.4: payload with session_id, correct field names, env-driven top_k
@@ -1349,44 +1515,87 @@ JOB LIST (JSON)
                     "source": "llm_batch_then_rag",
                 }
 
+                manifest_entry: dict[str, Any] = {
+                    "job_post_id": job_post_id,
+                    "title": job.get("title", ""),
+                    "company": job.get("company", ""),
+                    "url": job.get("url", ""),
+                    "source_platform": job.get("source_platform", ""),
+                    "fit_score": fit_score,
+                    "route": route,
+                    "resume_suggested": resume_suggested,
+                    "eligibility_pass": eligibility_pass,
+                }
+
                 resume_id: Optional[str] = self._resolve_resume_id(resume_suggested)
 
-                self._save_score_direct(
-                    job_post_id=job_post_id,
-                    resume_id=resume_id,
-                    fit_score=fit_score,
-                    eligibility_pass=eligibility_pass,
-                    reasons_json=reasons_json,
-                )
+                auto_app_written: Optional[str] = None
 
-                # S6: manual_queue handoff — condition is route == "manual_queue" OR route == "manual"
-                if route in ("manual_queue", "manual"):
-                    self._create_manual_application_record(
+                _shared_conn = None
+                try:
+                    _shared_conn = get_db_conn()
+                    _shared_conn.autocommit = False
+
+                    score_ok = self._save_score_direct(
                         job_post_id=job_post_id,
-                        source_platform=str(job.get("source_platform", "unknown")),
-                        reason="analyser_manual_route",
+                        resume_id=resume_id,
+                        fit_score=fit_score,
+                        eligibility_pass=eligibility_pass,
+                        reasons_json=reasons_json,
+                        conn=_shared_conn
                     )
 
+                    # S6: manual_queue handoff — condition is route == "manual_queue" OR route == "manual"
+                    if route in ("manual_queue", "manual"):
+                        self._create_manual_application_record(
+                            job_post_id=job_post_id,
+                            source_platform=str(job.get("source_platform", "unknown")),
+                            reason="analyser_manual_route",
+                            resume_suggested=str(manifest_entry.get("resume_suggested", "") or ""),
+                            conn=_shared_conn
+                        )
+
+                    # BUG-03: auto-route handoff — write queued auto applications for ApplyAgent
+                    if route == "auto":
+                        job_payload = dict(job)
+                        job_payload["job_post_id"] = job_post_id
+                        auto_app_written = self._create_auto_application_record(
+                            job=job_payload,
+                            fit_score=float(manifest_entry.get("fit_score", 0.0) or 0.0),
+                            resume_suggested=str(manifest_entry.get("resume_suggested", "") or ""),
+                            run_batch_id=self.run_batch_id,
+                        )
+                        if auto_app_written:
+                            auto_count += 1
+
+                    _shared_conn.commit()
+                    self.logger.debug("Atomic write committed — job_post_id=%s", job_post_id)
+                except Exception as _atomic_exc:
+                    if _shared_conn:
+                        try:
+                            _shared_conn.rollback()
+                        except Exception:
+                            pass
+                    self.logger.error(
+                        "Atomic write failed — job_post_id=%s error=%s — job NOT persisted",
+                        job_post_id, _atomic_exc
+                    )
+                finally:
+                    if _shared_conn:
+                        try:
+                            _shared_conn.close()
+                        except Exception:
+                            pass
+
                 if route == "auto":
-                    auto_count += 1
+                    # auto_count is incremented only when an auto application record is written
+                    pass
                 elif route in ("manual", "manual_queue"):
                     manual_count += 1
                 else:
                     skip_count += 1
 
-                routing_manifest.append(
-                    {
-                        "job_post_id": job_post_id,
-                        "title": job.get("title", ""),
-                        "company": job.get("company", ""),
-                        "url": job.get("url", ""),
-                        "source_platform": job.get("source_platform", ""),
-                        "fit_score": fit_score,
-                        "route": route,
-                        "resume_suggested": resume_suggested,
-                        "eligibility_pass": eligibility_pass,
-                    }
-                )
+                routing_manifest.append(manifest_entry)
 
             total_scored: int = len(jobs)
 
@@ -1610,11 +1819,110 @@ JOB LIST (JSON)
     # Internal: manual application persistence (S6 canonical)
     # ------------------------------------------------------------------
 
+    def _create_auto_application_record(
+        self,
+        job: dict,
+        fit_score: float,
+        resume_suggested: str = "",
+        run_batch_id: Optional[str] = None,
+    ) -> Optional[str]:
+        """Create an application record for an auto-routed job.
+
+        BUG-03: Auto-route jobs must be persisted to the applications table so
+        the Apply Agent can discover work to process.
+
+        Writes status='auto_queued' and persists resume_used from
+        resume_suggested (empty string is allowed).
+        """
+        import uuid
+        from datetime import datetime, timezone
+
+        job_post_id = str(job.get("job_post_id") or job.get("id") or "")
+        application_id = str(uuid.uuid4())
+        createdat = datetime.now(timezone.utc).isoformat()
+        run_id = str(run_batch_id or self.run_batch_id)
+
+        conn: Optional[psycopg2.extensions.connection] = None
+        try:
+            conn = get_db_conn()
+            cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+            # Duplicate guard — check before insert
+            cursor.execute(
+                "SELECT id FROM applications WHERE job_post_id = %s AND user_id = %s LIMIT 1",
+                (job_post_id, self.user_id),
+            )
+            if cursor.fetchone():
+                self.logger.debug(
+                    "_create_auto_application_record: record already exists for job=%s",
+                    job_post_id,
+                )
+                return None
+
+            cursor.execute(
+                """
+                INSERT INTO applications
+                    (id, job_post_id, user_id, run_batch_id, status,
+                     resume_used, fit_score, createdat, applied_at, source)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING id
+                """,
+                (
+                    application_id,
+                    job_post_id,
+                    self.user_id,
+                    run_id,
+                    "auto_queued",
+                    resume_suggested,
+                    float(fit_score or 0.0),
+                    createdat,
+                    None,
+                    "analyser_auto_route",
+                ),
+            )
+            row = cursor.fetchone()
+            conn.commit()
+
+            if row:
+                self.logger.info(
+                    "_create_auto_application_record: created auto record %s for job %s",
+                    application_id,
+                    job_post_id,
+                )
+                return str(application_id)
+
+            self.logger.warning(
+                "_create_auto_application_record: INSERT returned no id for job %s",
+                job_post_id,
+            )
+            return None
+
+        except Exception as exc:  # noqa: BLE001
+            if conn:
+                try:
+                    conn.rollback()
+                except Exception:  # noqa: BLE001
+                    pass
+            self.logger.error(
+                "_create_auto_application_record: failed for job %s — %s",
+                job_post_id or "unknown",
+                exc,
+            )
+            return None
+        finally:
+            if conn:
+                try:
+                    conn.close()
+                except Exception:  # noqa: BLE001
+                    pass
+
     def _create_manual_application_record(
         self,
         job_post_id: str,
         source_platform: str,
-        reason: str = "analyser_manual_route"
+        reason: str = "analyser_manual_route",
+        resume_suggested: str = "",
+        conn: Optional[Any] = None,
     ) -> Optional[str]:
         """
         Create an application record for a manually routed job (S6 canonical).
@@ -1638,10 +1946,15 @@ JOB LIST (JSON)
         last_exc: Optional[Exception] = None
 
         for attempt in range(max_retries):
-            conn: Optional[psycopg2.extensions.connection] = None
+            _conn: Optional[psycopg2.extensions.connection] = None
+            _is_local = False
             try:
-                conn = get_db_conn()
-                cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+                if conn is not None:
+                    _conn = conn
+                else:
+                    _conn = get_db_conn()
+                    _is_local = True
+                cursor = _conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
                 # Duplicate guard — check before insert (no unique constraint in schema)
                 cursor.execute(
@@ -1655,12 +1968,12 @@ JOB LIST (JSON)
                     )
                     return None  # already exists, not an error
 
-                # S5.5: schema-verified column names: job_post_id, user_id, mode, status, platform, error_code
+                # Persist routing context for downstream agents.
                 cursor.execute(
                     """
                     INSERT INTO applications
-                        (job_post_id, user_id, mode, status, platform, error_code)
-                    VALUES (%s, %s, %s, %s, %s, %s)
+                        (job_post_id, user_id, mode, status, platform, resume_used, error_code)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
                     RETURNING id
                     """,
                     (
@@ -1669,11 +1982,13 @@ JOB LIST (JSON)
                         "manual",          # mode CHECK: 'auto' | 'manual'
                         "manual_queued",   # status CHECK: 'applied' | 'failed' | 'manual_queued'
                         source_platform,   # platform column (not source_platform)
+                        resume_suggested,  # BUG-06: write resume_used from RAG resume_suggested
                         reason,            # error_code column reused for routing reason
                     ),
                 )
                 result = cursor.fetchone()
-                conn.commit()             # S5.3: single commit
+                if _is_local:
+                    _conn.commit()             # S5.3: single commit
                 app_id = str(result["id"]) if result else None
                 if app_id:
                     self.logger.info(
@@ -1707,9 +2022,9 @@ JOB LIST (JSON)
                 return app_id
             except Exception as exc:
                 last_exc = exc
-                if conn:
+                if _is_local and _conn:
                     try:
-                        conn.rollback()
+                        _conn.rollback()
                     except Exception:  # noqa: BLE001
                         pass
                 if attempt < max_retries - 1:
@@ -1753,9 +2068,9 @@ JOB LIST (JSON)
                     except Exception:  # noqa: BLE001
                         pass
             finally:
-                if conn:
+                if _is_local and _conn:
                     try:
-                        conn.close()
+                        _conn.close()
                     except Exception:  # noqa: BLE001
                         pass
         return None
