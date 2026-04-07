@@ -79,7 +79,8 @@ CREATE TABLE IF NOT EXISTS job_scores (
     fit_score FLOAT NOT NULL DEFAULT 0.0,
     eligibility_pass BOOLEAN DEFAULT FALSE,
     reasons_json JSONB DEFAULT '{}',
-    scored_at TIMESTAMPTZ DEFAULT NOW()
+    scored_at TIMESTAMPTZ DEFAULT NOW(),
+    CONSTRAINT job_scores_job_post_id_unique UNIQUE (job_post_id)
 );
 
 -- =============================================================================
