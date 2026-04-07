@@ -128,7 +128,7 @@ def query_resume_match(job_description: str, job_title: str, required_skills: st
 
     # All retries exhausted — return RAG server unreachable
     logger.error("query_resume_match: RAG server unreachable after 3 attempts")
-    return json.dumps({"error": "RAG server unreachable", "score": 0.0, "resume_id": None})
+    return json.dumps({"error": "RAG server unreachable", "score": 0.0, "resume_suggested": None})
 
 
 @tool
