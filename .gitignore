@@ -397,6 +397,7 @@ logs/
 
 #system shell script 
 push_secrets.sh
+valid.sh
 repo_structure.txt
 requirements-dev.txt
 
@@ -405,6 +406,9 @@ IDE_LOGS.md
 IDE_README.md
 IDE_STANDARDS.md 
 output.md
+grepoutput.md
+repo_structure.md
+site_audit.md
 
 #mcp session data and mcp json
 .serena
@@ -420,3 +424,6 @@ scripts
 
 #backups from shell scripts
 .patch_backup_20260327_172637
+
+#db query shell script
+database/db_cli.sh
