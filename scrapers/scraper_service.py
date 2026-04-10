@@ -173,6 +173,8 @@ class ProxyManager:
                 self.proxies.append(node)
                 logger.info("Loaded proxy from %s", key)
             except Exception as e:
+                if isinstance(e, (KeyboardInterrupt, SystemExit)):
+                    raise
                 logger.warning("Failed to parse proxy %s: %s", key, e)
 
         if not self.proxies:
