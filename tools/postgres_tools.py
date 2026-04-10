@@ -42,6 +42,7 @@ __all__ = [
     "get_platform_config",
     "get_run_stats",
     "get_recent_applications",
+    "get_pending_manual_queue_db",
     "_upsert_job_post",
     "_log_event",
     "_get_platform_config",
@@ -922,28 +923,58 @@ def get_recent_applications(limit: int = 20) -> str:
 
 
 @tool
-def get_pending_manual_queue(limit: int = 50) -> str:
+def get_pending_manual_queue_db(run_batch_id: str) -> str:
+    """Fetch all manual-queue applications from Postgres for a given run batch.
+
+    Queries ``applications JOIN jobs`` where ``applications.status = 'manual_queued'``
+    and ``jobs.run_batch_id`` matches. Returns full job metadata ready for Notion sync.
+
+    Args:
+        run_batch_id: UUID of the run batch to query.
+
+    Returns:
+        JSON string with array of application + job objects ordered by fit_score DESC.
     """
-    Retrieve applications marked as manual_queued.
-    """
-    @_with_retry(max_retries=3)
-    def _execute() -> str:
-        conn = None
-        try:
-            conn = _get_conn()
-            cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-            cursor.execute("SELECT * FROM applications WHERE status = 'manual_queued' ORDER BY submitted_at ASC LIMIT %s", (limit,))
-            return json.dumps([dict(row) for row in cursor.fetchall()], default=str)
-        except Exception as e:
-            logger.error(f"Failed to get pending manual queue: {e}")
-            return json.dumps({"error": "get_pending_manual_queue_failed", "detail": str(e)})
-        finally:
-            if conn:
-                conn.close()
     try:
-        return _execute()
-    except Exception as e:
-        return json.dumps({"error": "get_pending_manual_queue_failed", "detail": str(e)})
+        import psycopg2.extras
+        from utils.db_utils import get_db_conn
+        conn = get_db_conn()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute(
+            """
+	            SELECT
+	                a.id              AS application_id,
+	                a.status,
+	                a.applied_at,
+	                j.id              AS job_id,
+	                j.title,
+                j.company,
+                j.job_url,
+                j.source_platform AS platform,
+                j.location,
+                j.job_type,
+                j.salary_range,
+                js.fit_score,
+                js.best_resume_id
+            FROM applications a
+            JOIN jobs j           ON j.id = a.job_post_id
+            LEFT JOIN job_scores js ON js.job_post_id = j.id
+            WHERE a.status = 'manual_queued'
+              AND j.run_batch_id = %s
+            ORDER BY js.fit_score DESC NULLS LAST
+            """,
+            (run_batch_id,),
+        )
+        rows = [dict(r) for r in cur.fetchall()]
+        conn.close()
+        logger.info(
+            "get_pending_manual_queue_db: found %d rows for batch %s",
+            len(rows), run_batch_id,
+        )
+        return json.dumps(rows, default=str)
+    except Exception as exc:
+        logger.error("get_pending_manual_queue_db: failed: %s", exc)
+        return json.dumps([])
 
 
 
@@ -964,4 +995,4 @@ _get_queued_jobs = get_queued_jobs.func if hasattr(get_queued_jobs, 'func') else
 _get_platform_config = get_platform_config.func if hasattr(get_platform_config, 'func') else get_platform_config
 _get_run_stats = get_run_stats.func if hasattr(get_run_stats, 'func') else get_run_stats
 _get_recent_applications = get_recent_applications.func if hasattr(get_recent_applications, 'func') else get_recent_applications
-_get_pending_manual_queue = get_pending_manual_queue.func if hasattr(get_pending_manual_queue, 'func') else get_pending_manual_queue
+_get_pending_manual_queue = get_pending_manual_queue_db.func if hasattr(get_pending_manual_queue_db, 'func') else get_pending_manual_queue_db

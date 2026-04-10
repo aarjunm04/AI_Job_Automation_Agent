@@ -19,6 +19,7 @@ from agentops.sdk.decorators import agent, operation
 
 from integrations.notion import NotionClient
 from tools.postgres_tools import log_event
+_log_event = log_event.func if hasattr(log_event, "func") else log_event
 
 # Module-level logger
 logger = logging.getLogger(__name__)
@@ -150,7 +151,7 @@ def sync_application_to_job_tracker(
         notion_page_id = response.get("id", "")
 
         # Log success event
-        log_event(
+        _log_event(
             run_batch_id=run_batch_id,
             level="INFO",
             event_type="notion_synced",
@@ -171,7 +172,7 @@ def sync_application_to_job_tracker(
         logger.error(f"Failed to sync application to Job Tracker: {e}")
 
         # Log error event
-        log_event(
+        _log_event(
             run_batch_id=run_batch_id,
             level="ERROR",
             event_type="notion_sync_failed",
@@ -270,7 +271,7 @@ def queue_job_to_applications_db(
         notion_page_id = response.get("id", "")
 
         # Log success event
-        log_event(
+        _log_event(
             run_batch_id=run_batch_id,
             level="INFO",
             event_type="notion_queued",
@@ -295,7 +296,7 @@ def queue_job_to_applications_db(
         logger.error(f"Failed to queue job to Applications DB: {e}")
 
         # Log error event
-        log_event(
+        _log_event(
             run_batch_id=run_batch_id,
             level="ERROR",
             event_type="notion_queue_failed",
@@ -343,7 +344,7 @@ def update_notion_page_status(
             return None
 
         # Log success event
-        log_event(
+        _log_event(
             run_batch_id=run_batch_id,
             level="INFO",
             event_type="notion_status_updated",
@@ -360,7 +361,7 @@ def update_notion_page_status(
         logger.error(f"Failed to update Notion page status: {e}")
 
         # Log error event
-        log_event(
+        _log_event(
             run_batch_id=run_batch_id,
             level="ERROR",
             event_type="notion_status_update_failed",
@@ -445,7 +446,7 @@ def get_pending_manual_queue(run_batch_id: str) -> str:
         logger.error(f"Failed to get pending manual queue: {e}")
 
         # Log error event
-        log_event(
+        _log_event(
             run_batch_id=run_batch_id,
             level="ERROR",
             event_type="notion_query_failed",
@@ -475,7 +476,7 @@ def check_notion_connection(run_batch_id: str) -> str:
 
         # Log event based on connection status
         if health["connected"]:
-            log_event(
+            _log_event(
                 run_batch_id=run_batch_id,
                 level="INFO",
                 event_type="notion_health_check",
@@ -483,7 +484,7 @@ def check_notion_connection(run_batch_id: str) -> str:
             )
             logger.info(f"Notion health check passed: {health['bot_name']}")
         else:
-            log_event(
+            _log_event(
                 run_batch_id=run_batch_id,
                 level="ERROR",
                 event_type="notion_health_check_failed",
@@ -497,7 +498,7 @@ def check_notion_connection(run_batch_id: str) -> str:
         logger.error(f"Notion health check exception: {e}")
 
         # Log error event
-        log_event(
+        _log_event(
             run_batch_id=run_batch_id,
             level="ERROR",
             event_type="notion_health_check_error",
