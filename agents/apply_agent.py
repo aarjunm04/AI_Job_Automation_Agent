@@ -73,6 +73,7 @@ __all__ = ["ApplyAgent"]
 # ---------------------------------------------------------------------------
 
 
+@agent
 class ApplyAgent:
     """CrewAI Apply Agent — autonomous job application executor.
 
@@ -157,6 +158,10 @@ class ApplyAgent:
         ordered by ``fit_score DESC`` so the highest-confidence jobs are
         processed first.
 
+        Every job dict is guaranteed to have a non-empty ``resume_suggested``
+        value — falling back to ``DEFAULT_RESUME_PATH`` env var or the first
+        entry in ``config/resume_config.json`` when the DB column is null.
+
         Returns:
             List of job dicts ready for the apply pipeline.  Empty list
             on query failure (fail-soft).
@@ -180,17 +185,28 @@ class ApplyAgent:
                         js.resume_id,
                         js.eligibility_pass
                     FROM jobs jp
-                    JOIN job_scores js ON js.job_post_id = jp.id
-                    WHERE jp.run_batch_id = %s
-                      AND js.eligibility_pass = TRUE
-                      AND jp.route = 'auto'
-                    ORDER BY js.fit_score DESC
-                    """,
-                    (self.run_batch_id,),
-                )
+	                    JOIN job_scores js ON js.job_post_id = jp.id
+	                    WHERE jp.run_batch_id = %s
+	                      AND js.eligibility_pass = TRUE
+	                      AND js.fit_score >= 0.60
+	                    ORDER BY js.fit_score DESC
+	                    """,
+	                    (self.run_batch_id,),
+	                )
                 rows = cursor.fetchall()
                 manifest: List[Dict[str, Any]] = []
                 for row in rows:
+                    # BUG-FIX 3B: resolve resume_suggested — never leave empty
+                    resume_suggested: str = (
+                        row.get("resume_id")
+                        or row.get("resume_suggested")
+                        or ""
+                    )
+                    if not resume_suggested:
+                        resume_suggested = (
+                            os.getenv("DEFAULT_RESUME_PATH", "")
+                            or self._get_default_resume_path()
+                        )
                     manifest.append(
                         {
                             "id": str(row["id"]),
@@ -200,7 +216,7 @@ class ApplyAgent:
                             "url": row["url"],
                             "source_platform": row["source_platform"],
                             "fit_score": float(row["fit_score"] or 0.0),
-                            "resume_suggested": str(row["resume_id"]) if row["resume_id"] else "",
+                            "resume_suggested": resume_suggested,
                             "eligibility_pass": bool(row["eligibility_pass"]),
                             "route": "auto",
                         }
@@ -233,6 +249,34 @@ class ApplyAgent:
                     except Exception:  # noqa: BLE001
                         pass
         return []
+
+    # ------------------------------------------------------------------
+    # Internal: default resume path resolver (Bug 3B helper)
+    # ------------------------------------------------------------------
+
+    def _get_default_resume_path(self) -> str:
+        """Return the first available resume file path from config or env.
+
+        Reads ``config/resume_config.json`` for a ``resumes`` list and
+        returns the ``file_path`` of the first entry.  Falls back to the
+        ``DEFAULT_RESUME_PATH`` env var, then a hard-coded sentinel.
+
+        Returns:
+            Non-empty resume file path string, or the sentinel value
+            ``'resumes/Aarjun_AIAutomation.pdf'`` if nothing is configured.
+        """
+        try:
+            cfg_path = os.path.join(
+                os.path.dirname(__file__), "..", "config", "resume_config.json"
+            )
+            with open(cfg_path, "r", encoding="utf-8") as fh:
+                cfg = json.load(fh)
+            resumes: List[Dict[str, Any]] = cfg.get("resumes", [])
+            if resumes:
+                return str(resumes[0].get("file_path", ""))
+        except Exception:  # noqa: BLE001
+            pass
+        return os.getenv("DEFAULT_RESUME_PATH", "resumes/Aarjun_AIAutomation.pdf")
 
     # ------------------------------------------------------------------
     # Internal: per-platform apply counts
@@ -323,6 +367,7 @@ class ApplyAgent:
         mode: str,
         error_code: Optional[str] = None,
         resume_id: Optional[str] = None,
+        user_id: Optional[str] = None,
     ) -> str:
         """Write application record atomically. Returns application UUID.
 
@@ -335,10 +380,23 @@ class ApplyAgent:
             mode: Application mode (auto, manual).
             error_code: Optional error code for failed/queued applications.
             resume_id: Optional UUID of the resume used.
+            user_id: UUID of the candidate user.  Resolved from ``self.user_id``
+                when not explicitly supplied.  Never defaults to a literal string.
 
         Returns:
             Application UUID string, or empty string on conflict/failure.
         """
+        # BUG-FIX 2B: resolve user_id from self; reject any literal placeholder
+        resolved_user_id: str = user_id or self.user_id
+        if not resolved_user_id or resolved_user_id == "default_user":
+            self.logger.error(
+                "_write_application: invalid user_id '%s' — aborting write "
+                "for job %s",
+                resolved_user_id,
+                job.get("job_post_id", job.get("id", "")),
+            )
+            return ""
+
         conn = get_db_conn()
         try:
             with conn:
@@ -353,7 +411,7 @@ class ApplyAgent:
                         (
                             job.get("id", job.get("job_post_id", "")),
                             resume_id,
-                            "default_user",
+                            resolved_user_id,
                             mode,
                             status,
                             self._detect_ats(job.get("url", "")),
@@ -376,6 +434,12 @@ class ApplyAgent:
                                 error_code,
                             ),
                         )
+            self.logger.info(
+                "_write_application: wrote job %s status=%s user=%s",
+                job.get("job_post_id", job.get("id", "")),
+                status,
+                resolved_user_id,
+            )
             return application_id
         except Exception as exc:
             self.logger.error(
@@ -527,11 +591,13 @@ class ApplyAgent:
                     "[DRY_RUN] Would apply to %s at %s — skipping browser",
                     job.get("title"), job.get("company"),
                 )
+                # BUG-FIX 2C: always pass user_id=self.user_id explicitly
                 self._write_application(
                     job=job,
                     status="applied",
                     mode="auto",
                     error_code="dry_run",
+                    user_id=self.user_id,
                 )
                 self._applied_count += 1
                 return {"status": "applied", "job_id": job.get("id")}
@@ -543,11 +609,13 @@ class ApplyAgent:
                     "Unknown ATS for %s — routing to manual_queued",
                     job_url,
                 )
+                # BUG-FIX 2C: always pass user_id=self.user_id explicitly
                 self._write_application(
                     job=job,
                     status="manual_queued",
                     mode="manual",
                     error_code="unknown_ats",
+                    user_id=self.user_id,
                 )
                 self._rerouted_count += 1
                 return {
@@ -1047,13 +1115,16 @@ class ApplyAgent:
             )
             manifest_json = "[]"
 
-        dry_run_flag: bool = run_config.dry_run
+        # BUG-FIX 3A: use self.dry_run (not run_config.dry_run) so the task
+        # prompt always reflects the value the runner injected via env var.
+        self.dry_run: bool = os.getenv("DRY_RUN", "false").lower() == "true"
         xai_cap: float = budget_config.xai_cost_cap_per_run
 
         description: str = f"""
 You are applying to {len(self.routing_manifest)} auto-routed jobs for the current run batch.
 run_batch_id: {self.run_batch_id}
-dry_run: {dry_run_flag}
+user_id: {self.user_id}
+dry_run: {str(self.dry_run).lower()}
 
 APPLICATION INSTRUCTIONS
 ========================
@@ -1062,11 +1133,16 @@ APPLICATION INSTRUCTIONS
    before launching any Playwright session:
    - Check xAI budget via check_xai_run_cap
    - Verify platform rate limits
-   - Confirm resume file exists
+   - Confirm resume_suggested path is present (every job in this manifest
+     is guaranteed to have a non-empty resume_suggested field)
    - Validate job URL
 
-2. If DRY_RUN={dry_run_flag}: log each job as "dry_run_skip", count as
-   applied for reporting purposes, and NEVER open a browser.
+2. DRY_RUN MODE: If dry_run is true — for each job, call fill_standard_form
+   with dry_run=True. The tool will simulate the apply without opening a real
+   browser session and return a simulated result. You MUST still call
+   fill_standard_form for EVERY job in the manifest. Reporting a Final Answer
+   without having called fill_standard_form for each job is a critical
+   protocol violation that will cause a pipeline failure.
 
 3. Detect the ATS platform for each job via detect_ats_platform before
    submitting — adapt your approach per platform.
@@ -1075,7 +1151,8 @@ APPLICATION INSTRUCTIONS
    manual queue IMMEDIATELY — do not waste credits.
 
 5. Call fill_standard_form for each auto-route job ONE AT A TIME — NEVER
-   run parallel applications.
+   run parallel applications. Always pass user_id={self.user_id} and
+   the job's resume_suggested value as resume_filename.
 
 6. After EVERY 5 applications, call check_xai_run_cap with
    run_batch_id={self.run_batch_id}. If the response contains
@@ -1116,69 +1193,72 @@ ROUTING MANIFEST (JSON)
     # ------------------------------------------------------------------
 
     def _parse_crew_output(self, crew_output: Any) -> Dict[str, Any]:
-        """Extract the application results dict from a CrewAI ``CrewOutput``.
+        """Extract JSON summary from CrewAI output, handling Observation:/Thought: envelope.
 
-        Handles ``CrewOutput`` (with ``.raw``), plain string, and dict.
+        CrewAI wraps the LLM's Final Answer in::
+
+            Observation: {json}\n\nThought: I now know the final answer
+
+        This method strips that envelope before attempting JSON parsing so that
+        the pipeline never silently returns all-zero counts.
 
         Args:
-            crew_output: Raw return value of ``Crew.kickoff()``.
+            crew_output: Raw return value of ``Crew.kickoff()`` — may be a
+                ``CrewOutput`` object (with ``.raw``), a plain string, or a dict.
 
         Returns:
-            Parsed result dict.  Returns a safe default if parsing fails.
+            Parsed result dict merged over a safe default.  Never raises.
         """
-        default: Dict[str, Any] = {
+        import re  # already in stdlib; local import keeps top-level clean
+
+        _default: Dict[str, Any] = {
             "total_attempted": 0,
             "applied": 0,
             "failed": 0,
-            "rerouted_to_manual": 0,
-            "budget_aborted": False,
+            "manual_queued": 0,
         }
 
-        if crew_output is None:
-            self.logger.warning("_parse_crew_output: crew_output is None")
-            return default
-
-        raw_str: str = ""
-        if hasattr(crew_output, "raw"):
-            raw_str = str(crew_output.raw or "")
-        elif isinstance(crew_output, str):
-            raw_str = crew_output
-        elif isinstance(crew_output, dict):
-            return crew_output
-        else:
-            raw_str = str(crew_output)
-
-        if not raw_str.strip():
-            self.logger.warning(
-                "_parse_crew_output: crew returned empty output"
-            )
-            return default
-
-        # Strip markdown code fences if present
-        stripped: str = raw_str.strip()
-        if stripped.startswith("```"):
-            lines: List[str] = stripped.splitlines()
-            inner_lines: List[str] = lines[1:] if len(lines) > 1 else lines
-            if inner_lines and inner_lines[-1].strip().startswith("```"):
-                inner_lines = inner_lines[:-1]
-            stripped = "\n".join(inner_lines).strip()
-
         try:
-            parsed: Any = json.loads(stripped)
-            if isinstance(parsed, dict):
-                return parsed
-            self.logger.warning(
-                "_parse_crew_output: parsed JSON is not a dict (type=%s)",
-                type(parsed).__name__,
+            raw: str = (
+                crew_output.raw
+                if hasattr(crew_output, "raw")
+                else str(crew_output)
             )
-            return default
-        except (json.JSONDecodeError, ValueError) as exc:
-            self.logger.warning(
-                "_parse_crew_output: JSON decode failed: %s — snippet: %.200s",
-                exc,
-                raw_str,
+            if not raw or not raw.strip():
+                self.logger.warning(
+                    "_parse_crew_output: crew returned empty output"
+                )
+                return _default
+
+            # Strip leading "Final Output\n", "Observation: " and any preamble
+            # before the opening brace of the JSON object.
+            clean: str = re.sub(
+                r"^.*?(?=\{)", "", raw.strip(), count=1, flags=re.DOTALL
             )
-            return default
+            # Strip trailing Thought block
+            clean = re.sub(
+                r"\n\nThought:.*$", "", clean, flags=re.DOTALL
+            ).strip()
+            # Extract first complete JSON object
+            match = re.search(r"\{.*\}", clean, flags=re.DOTALL)
+            if not match:
+                raise ValueError(
+                    f"No JSON object found in crew output: {raw[:200]!r}"
+                )
+            parsed: Any = json.loads(match.group())
+            if not isinstance(parsed, dict):
+                raise ValueError(
+                    f"Parsed JSON is not a dict (type={type(parsed).__name__})"
+                )
+            logger.info(
+                "_parse_crew_output: parsed crew summary — %s", parsed
+            )
+            return {**_default, **parsed}
+        except Exception as exc:  # noqa: BLE001
+            self.logger.warning(
+                "_parse_crew_output: JSON decode failed: %s — using zeros", exc
+            )
+            return _default
 
     # ------------------------------------------------------------------
     # Internal: reconcile safety net
@@ -1428,7 +1508,7 @@ ROUTING MANIFEST (JSON)
                     crew_output = None
 
             # ----------------------------------------------------------
-            # Step 7: parse crew result (informational only)
+            # Step 7: parse crew result + invariant mismatch guard
             # ----------------------------------------------------------
             if crew_output is not None:
                 crew_parsed: Dict[str, Any] = self._parse_crew_output(
@@ -1442,6 +1522,27 @@ ROUTING MANIFEST (JSON)
                         if k != "platform_breakdown"
                     },
                 )
+
+                # POST-FIX VALIDATION GUARD — detect LLM self-reporting without
+                # having called fill_standard_form (Bug 3 hallucination pattern).
+                expected_total: int = len(self.routing_manifest)
+                actual_total: int = (
+                    crew_parsed.get("applied", 0)
+                    + crew_parsed.get("failed", 0)
+                    + crew_parsed.get("manual_queued", 0)
+                )
+                if actual_total != expected_total:
+                    self.logger.warning(
+                        "ApplyAgent.run: crew summary total mismatch — "
+                        "expected %d got %d "
+                        "(applied=%d failed=%d queued=%d) — "
+                        "entering Python fallback loop",
+                        expected_total,
+                        actual_total,
+                        crew_parsed.get("applied", 0),
+                        crew_parsed.get("failed", 0),
+                        crew_parsed.get("manual_queued", 0),
+                    )
 
             # ----------------------------------------------------------
             # Step 8: process jobs with concurrent platform dispatch

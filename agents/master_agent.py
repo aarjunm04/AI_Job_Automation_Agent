@@ -657,7 +657,7 @@ class MasterAgent:
         """
         from config.config_loader import config_loader
         veto_threshold: float = float(
-            config_loader.get_budget_settings().get("xai_cost_cap_per_run_usd", 0.38)
+            config_loader.get_budget_settings().get("xai_cost_cap_per_run_usd", float(os.getenv("XAI_COST_CAP_PER_RUN", "0.38")))
         )
         try:
             cost_raw: str = get_cost_summary(run_batch_id=self.run_batch_id)

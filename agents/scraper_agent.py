@@ -16,7 +16,7 @@ from typing import Dict, Any, List, Optional
 import httpx
 from crewai import Agent, Task, Crew, Process
 import agentops
-from agentops.sdk.decorators import agent, operation
+from agentops.sdk.decorators import agent, operation, track_agent
 
 from integrations.llm_interface import LLMInterface
 from tools.scraper_tools import (
@@ -81,6 +81,7 @@ def _load_platform_config() -> Dict[str, Any]:
 
 
 @agent
+@track_agent(name="ScraperAgent")
 class ScraperAgent:
     """
     CrewAI Scraper Agent for job discovery.
@@ -324,6 +325,8 @@ IMPORTANT:
                 run_batch_id=self.run_batch_id,
             )
         except Exception as e:
+            if isinstance(e, (KeyboardInterrupt, SystemExit)):
+                raise
             self.logger.error(f"Fallback JobSpy failed: {e}")
 
         try:
@@ -400,7 +403,7 @@ IMPORTANT:
         """
         try:
             # Log run start
-            log_event.run(
+            log_event(
                 run_batch_id=self.run_batch_id,
                 level="INFO",
                 event_type="scraper_run_start",
@@ -431,7 +434,7 @@ IMPORTANT:
                     f"Budget cap hit ({abort_reason}). "
                     "Bypassing LLM orchestration and using fallback scrape sequence."
                 )
-                log_event.run(
+                log_event(
                     run_batch_id=self.run_batch_id,
                     level="WARNING",
                     event_type="scraper_budget_cap",
@@ -460,7 +463,7 @@ IMPORTANT:
                         f"LLM execution failed: {llm_e}. "
                         "Bypassing LLM orchestration and using fallback scrape sequence."
                     )
-                    log_event.run(
+                    log_event(
                         run_batch_id=self.run_batch_id,
                         level="WARNING",
                         event_type="scraper_llm_failure",
@@ -499,7 +502,7 @@ IMPORTANT:
             )
 
             # Log completion
-            log_event.run(
+            log_event(
                 run_batch_id=self.run_batch_id,
                 level="INFO",
                 event_type="scraper_run_complete",
@@ -520,7 +523,7 @@ IMPORTANT:
             self.logger.error(f"Scraper run failed with exception: {e}", exc_info=True)
 
             # Log critical error
-            log_event.run(
+            log_event(
                 run_batch_id=self.run_batch_id,
                 level="ERROR",
                 event_type="scraper_phase_exception",

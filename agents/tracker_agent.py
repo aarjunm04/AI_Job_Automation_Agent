@@ -36,7 +36,6 @@ from integrations.notion import NotionClient, FinalReport
 from tools.agentops_tools import record_agent_error, _record_agent_error
 from tools.notion_tools import (
     check_notion_connection,
-    get_pending_manual_queue,
     sync_application_to_job_tracker,
 )
 from tools.postgres_tools import (
@@ -44,6 +43,7 @@ from tools.postgres_tools import (
     log_event,
     _log_event,
     update_run_batch_stats,
+    get_pending_manual_queue_db,
 )
 from utils.db_utils import get_db_conn
 
@@ -139,6 +139,20 @@ class TrackerAgent:
             )
             self.llm = None
         self.logger: logging.Logger = logging.getLogger(self.__class__.__name__)
+        
+        # --- CrewAI-wrapped tools (require .func alias) ---
+        self.sync_application_to_job_tracker = sync_application_to_job_tracker
+        self.sync_application_to_job_tracker_ = getattr(self.sync_application_to_job_tracker, "func", self.sync_application_to_job_tracker)
+        
+        self.check_notion_connection = check_notion_connection
+        self.check_notion_connection_ = getattr(self.check_notion_connection, "func", self.check_notion_connection)
+        
+        self.update_run_batch_stats = update_run_batch_stats
+        self.update_run_batch_stats_ = getattr(self.update_run_batch_stats, "func", self.update_run_batch_stats)
+        
+        # --- Standard methods (regular functions, no .func) ---
+        self.record_run_summary = _record_run_summary
+        self.end_agentops_session = _end_agentops_session
 
     # ------------------------------------------------------------------
     # Internal DB helpers
@@ -274,7 +288,7 @@ class TrackerAgent:
             tools=[
                 sync_application_to_job_tracker,
                 check_notion_connection,
-                get_pending_manual_queue,
+                get_pending_manual_queue_db,
                 log_event,
                 update_run_batch_stats,
             ],
@@ -372,8 +386,8 @@ class TrackerAgent:
                 self.logger.info(
                     "run: nothing to sync for run_batch_id=%s", self.run_batch_id
                 )
-                summary_ok: bool = _record_run_summary(self.run_batch_id)
-                session_ok: bool = _end_agentops_session("Success")
+                summary_ok: bool = self.record_run_summary(self.run_batch_id)
+                session_ok: bool = self.end_agentops_session("Success")
                 return {
                     "success": True,
                     "reason": "nothing_to_sync",
@@ -494,8 +508,8 @@ class TrackerAgent:
 
             # Step 7 — AgentOps bookkeeping
             end_state: str = "Success" if not agent_errors else "Fail"
-            summary_recorded: bool = _record_run_summary(self.run_batch_id)
-            session_closed: bool = _end_agentops_session(end_state)
+            summary_recorded: bool = self.record_run_summary(self.run_batch_id)
+            session_closed: bool = self.end_agentops_session(end_state)
 
             return {
                 "success": True,
@@ -523,7 +537,7 @@ class TrackerAgent:
                 pass
 
             # Best-effort session close
-            _end_agentops_session("Fail")
+            self.end_agentops_session("Fail")
 
             return {
                 "success": False,
@@ -620,8 +634,8 @@ class TrackerAgent:
 
             # Step 8: End AgentOps session
             end_state = "Success" if report.success else "Fail"
-            _record_run_summary(self.run_batch_id)
-            _end_agentops_session(end_state)
+            self.record_run_summary(self.run_batch_id)
+            self.end_agentops_session(end_state)
 
             # Step 9: Log final summary
             self.logger.info(
