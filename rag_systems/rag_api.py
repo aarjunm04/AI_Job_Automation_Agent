@@ -88,7 +88,11 @@ def get_rag_context(job_payload: Dict[str, Any], top_k_chunks: int = 10) -> Dict
     engine = _engine()
     rag: RAGPipeline = engine.rag
 
-    job_text = job_payload.get("job_text", "")
+    job_text = job_payload.get("job_description", job_payload.get("job_text", ""))
+    
+    if not job_text or not job_text.strip():
+        raise ValueError("RAG query received empty job description — check upstream payload key.")
+
     return rag.build_grounding_context(job_text, top_k_chunks=top_k_chunks)
 
 

@@ -12,8 +12,8 @@ Handles:
 - Serving MCP-facing APIs (through rag_api.py)
 
 This file assumes:
-- chromadb_store.ChromaStore (v1.x PersistentClient)
-- rag_pipeline.RAGPipeline + GeminiEmbedder
+- rag_systems.chromadb_store.ChromaStore (v1.x PersistentClient)
+- rag_systems.rag_pipeline.RAGPipeline + GeminiEmbedder
 """
 
 from __future__ import annotations
@@ -33,8 +33,8 @@ except ModuleNotFoundError:  # pragma: no cover
 import uuid
 
 # LOCAL MODULES
-from chromadb_store import ChromaStore, ChromaStoreConfig
-from rag_pipeline import (
+from rag_systems.chromadb_store import ChromaStore, ChromaStoreConfig
+from rag_systems.rag_pipeline import (
     RAGPipeline,
     EmbeddingService,
     chunk_text,

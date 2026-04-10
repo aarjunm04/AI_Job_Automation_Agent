@@ -94,7 +94,18 @@ class GeminiEmbedder(EmbeddingProvider):
     Supports 768, 1536, or 3072 dimensions with MRL
     """
     api_key: str = field(default_factory=lambda: os.getenv("GEMINI_API_KEY", ""))
-    model: str = field(default_factory=lambda: "text-embedding-004")
+    base_url: str = field(
+        default_factory=lambda: os.getenv(
+            "GOOGLE_GEMINI_BASE_URL",
+            "https://generativelanguage.googleapis.com/v1"
+        )
+    )
+    model: str = field(
+        default_factory=lambda: os.getenv(
+            "GOOGLE_GEMINI_EMBEDDING_MODEL",
+            "models/text-embedding-005"
+        )
+    )
     output_dimensionality: int = 768  # Match NVIDIA NIM dimension for consistent vector space
     task_type: str = "RETRIEVAL_DOCUMENT"  # For resume indexing
     timeout_seconds: float = 30
@@ -116,13 +127,10 @@ class GeminiEmbedder(EmbeddingProvider):
             raise RuntimeError("httpx is not installed in the active Python environment")
 
         model_name = self.model
-        if model_name and not model_name.startswith("models/"):
-            model_name = f"models/{model_name}"
+        if model_name and model_name.startswith("models/"):
+            model_name = model_name.replace("models/", "", 1)
 
-        url = (
-            f"https://generativelanguage.googleapis.com/v1beta/"
-            f"{model_name}:embedContent?key={self.api_key}"
-        )
+        url = f"{self.base_url}/models/{model_name}:embedContent?key={self.api_key}"
 
         payload = {
             "model": model_name,
@@ -212,10 +220,14 @@ class NVIDIANIMEmbedder(EmbeddingProvider):
     """
 
     base_url: str = field(
-        default_factory=lambda: os.getenv("NVIDIA_NIM_RAG_BASE_URL", "https://integrate.api.nvidia.com/v1")
+        default_factory=lambda: os.getenv("NVIDIA_NIM_RAG_BASE_URL")
     )
-    api_key: str = field(default_factory=lambda: os.getenv("NVIDIA_NIM_API_KEY", ""))
-    model: str = "nvidia/nv-embedqa-e5-v5"
+    api_key: str = field(default_factory=lambda: os.getenv("NVIDIA_NIM_API_KEY_RAG"))
+    model: str = field(
+        default_factory=lambda: os.getenv(
+            "NVIDIA_NIM_EMBEDDING_MODEL"
+        )
+    )
     dimensions: int = 1024
     timeout_seconds: float = 30.0
 
@@ -224,7 +236,7 @@ class NVIDIANIMEmbedder(EmbeddingProvider):
         Generate embeddings using NVIDIA NIM OpenAI-compatible embeddings API.
         """
         if not self.api_key:
-            raise RuntimeError("Missing NVIDIA_NIM_API_KEY in environment variables")
+            raise RuntimeError("Missing NVIDIA_NIM_API_KEY_RAG in environment variables")
 
         if httpx is None:
             raise RuntimeError("httpx is not installed in the active Python environment")
@@ -236,7 +248,7 @@ class NVIDIANIMEmbedder(EmbeddingProvider):
         }
         payload: Dict[str, Any] = {
             "model": self.model,
-            "input": text,
+            "input": [text],
             "encoding_format": "float",
             "input_type": input_type,
             "truncate": "END",

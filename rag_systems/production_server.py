@@ -238,8 +238,8 @@ class ServerConfig:
     PORT: int = 8090
     RELOAD: bool = False
     WORKERS: int = 1
-    CHROMADB_HOST: str = os.getenv("CHROMADB_HOST", "ai_chromadb")
-    CHROMADB_PORT: int = int(os.getenv("CHROMADB_PORT", "8000"))
+    CHROMADB_HOST: str = os.getenv("CHROMADB_HOST")
+    CHROMADB_PORT: int = int(os.getenv("CHROMADB_PORT"))
     CHROMA_COLLECTION: str = os.getenv("CHROMA_COLLECTION", "resumes")
 
     # API Key (single server-wide key)
@@ -291,7 +291,7 @@ class ServerConfig:
 class RAGRequest(BaseModel):
     """Request model for RAG endpoints"""
     session_id: str = Field(..., min_length=1, max_length=128, description="Session identifier")
-    job_text: Optional[str] = Field("", description="Job description text")
+    job_description: Optional[str] = Field("", description="Job description text")
     query: Optional[str] = Field(None, description="Query text for RAG")
     top_k: int = Field(5, ge=1, le=20, description="Number of results to return")
     
@@ -306,7 +306,7 @@ class RAGQueryRequest(BaseModel):
     """Request model for /rag/query endpoint"""
     session_id: str = Field(..., min_length=1, max_length=128, description="Unique session identifier")
     query: Optional[str] = Field(None, description="User query or job description")
-    job_text: Optional[str] = Field(None, description="Alternative to query field")
+    job_description: Optional[str] = Field(None, description="Alternative to query field")
     filters: Optional[Dict[str, Any]] = Field(default=None, description="Optional filters for resume selection")
     top_k: Optional[int] = Field(default=10, ge=1, le=100, description="Number of chunks to retrieve")
     include_metadata: Optional[bool] = Field(default=True, description="Include metadata in response")
@@ -320,15 +320,15 @@ class RAGQueryRequest(BaseModel):
         return v.strip()
     
     @model_validator(mode='after')
-    def validate_query_or_job_text(self):
-        """Validate that either query or job_text is provided"""
-        # Use job_text if query is empty
-        if not self.query and self.job_text:
-            self.query = self.job_text
+    def validate_query_or_job_description(self):
+        """Validate that either query or job_description is provided"""
+        # Use job_description if query is empty
+        if not self.query and self.job_description:
+            self.query = self.job_description
         
         # Validate that we have at least one
         if not self.query or len(self.query.strip()) < 10:
-            raise ValueError("query or job_text must be at least 10 characters")
+            raise ValueError("query or job_description must be at least 10 characters")
         
         self.query = self.query.strip()
         return self
@@ -362,15 +362,15 @@ class RAGQueryResponse(BaseModel):
 
 class ResumeSelectionRequest(BaseModel):
     """Request model for /resumes/select endpoint"""
-    job_text: str = Field(..., min_length=10, description="Job description text")
+    job_description: str = Field(..., min_length=10, description="Job description text")
     top_k_anchors: Optional[int] = Field(default=7, ge=1, le=20)
     top_k_chunks: Optional[int] = Field(default=3, ge=1, le=10)
     
-    @field_validator('job_text')
-    def validate_job_text(cls, v):
+    @field_validator('job_description')
+    def validate_job_description(cls, v):
         cleaned = v.strip()
         if len(cleaned) < 10:
-            raise ValueError("job_text must be at least 10 characters")
+            raise ValueError("job_description must be at least 10 characters")
         return cleaned
 
 
@@ -1088,17 +1088,17 @@ def rag_query_context(
         # Get or create session
         session = session_manager.get_or_create(request.session_id)
         
-        # Validate input - get query from either query or job_text field
-        query_text = request.query or request.job_text
+        # Validate input - get query from either job_description or query field (priority: job_description)
+        query_text = request.job_description or request.query
         
         if not query_text or not query_text.strip():
             raise HTTPException(
                 status_code=400,
-                detail="Either 'query' or 'job_text' must be provided and cannot be empty"
+                detail="Either 'job_description' or 'query' must be provided and non-empty"
             )
         
         # Build job_payload for get_rag_context
-        job_payload = {"job_text": query_text.strip()}
+        job_payload = {"job_description": query_text.strip()}
         
         # Call get_rag_context (NOT select_resume!)
         result = get_rag_context(
@@ -1149,15 +1149,15 @@ def rag_select_resume(
 ) -> dict:
     """Select best resume for job description using RAG."""
     try:
-        # Validate job_text
-        if not request.job_text or not request.job_text.strip():
+        # Validate job_description
+        if not request.job_description or not request.job_description.strip():
             raise HTTPException(
                 status_code=400,
-                detail="job_text is required and cannot be empty"
+                detail="job_description is required and cannot be empty"
             )
         
         result = select_resume(
-            job_description=request.job_text,
+            job_description=request.job_description,
             session_id=request.session_id,
             top_k=request.top_k
         )
@@ -1222,7 +1222,7 @@ async def select_best_resume(
     
     try:
         job_payload = {
-            "job_text": request.job_text
+            "job_description": request.job_description
         }
         
         # Use circuit breaker
@@ -1449,7 +1449,7 @@ async def match_resume(
                     f"Metadata bonus: {top.get('metadata_bonus', 0.0):.4f}",
                     f"Recommended chunks: {len(top.get('recommended_chunks', []))}",
                 ]
-            await asyncio.sleep(1.2) # Strict 60 RPM enforcement + 0.2s buffer
+            await asyncio.sleep(1.6) # Strict 60 RPM enforcement + 0.2s buffer
 
         return JSONResponse(content={
             "resume_suggested": top_resume_id,
@@ -1479,7 +1479,7 @@ async def autofill_context(
                 top_k_chunks=10,
             )
             chunks = result.get("context_chunks", [])
-            await asyncio.sleep(1.2) # Strict 60 RPM enforcement + 0.2s buffer
+            await asyncio.sleep(1.6) # Strict 60 RPM enforcement + 0.2s buffer
         return JSONResponse(content={
             "context_chunks": chunks,
             "resume_filename": request.resume_filename,
