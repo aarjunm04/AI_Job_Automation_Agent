@@ -114,7 +114,7 @@ _DB_URL: Optional[str] = (
 # TOOL 1 — ATS platform detection (Playwright + ATSDetector)
 # ---------------------------------------------------------------------------
 @tool
-def detect_ats_platform(job_url: str, run_batch_id: str) -> str:
+def detect_ats_platform(job_url: str, run_batch_id: str, dry_run: bool = False) -> str:
     """Detect the ATS platform powering a job application page.
 
     Launches a minimal headless Playwright session (no proxy), navigates to
@@ -125,12 +125,28 @@ def detect_ats_platform(job_url: str, run_batch_id: str) -> str:
     Args:
         job_url: Full URL of the job application page.
         run_batch_id: UUID of the current run batch (for logging context).
+        dry_run: If True, skip browser launch and return a mock ATS profile.
 
     Returns:
         JSON string of ``ATSProfile.to_dict()`` merged with
         ``{"job_url": job_url}``.  On any failure returns
         ``{"ats_type": "unknown", "confidence": 0.0, "job_url": ..., "error": ...}``.
     """
+    if dry_run or os.getenv("DRY_RUN", "false").lower() == "true":
+        logger.info(
+            "detect_ats_platform: dry_run=True — skipping browser, "
+            "returning mock profile for job_url=%s",
+            job_url,
+        )
+        return json.dumps(
+            {
+                "ats_type": "linkedin_easy_apply",
+                "detection_method": "dry_run_mock",
+                "confidence": 1.0,
+                "job_url": job_url,
+                "dry_run": True,
+            }
+        )
 
     async def _detect_inner(url: str) -> dict[str, Any]:
         """Run ATSDetector inside a minimal Playwright session.
