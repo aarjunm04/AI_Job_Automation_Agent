@@ -80,7 +80,6 @@ def _load_platform_config() -> Dict[str, Any]:
     return _platform_config
 
 
-@agent
 @track_agent(name="ScraperAgent")
 class ScraperAgent:
     """

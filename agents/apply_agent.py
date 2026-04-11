@@ -26,8 +26,11 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from typing import Optional as Opt
 
-from crewai import Agent, Task, Crew, Process
+from pydantic import BaseModel, Field
+
+from crewai import Agent, Task, Crew, Process, LLM
 import agentops
 from agentops.sdk.decorators import agent, operation
 import psycopg2
@@ -68,12 +71,39 @@ logger = logging.getLogger(__name__)
 __all__ = ["ApplyAgent"]
 
 
+class SingleJobApplyResult(BaseModel):
+    """Pydantic output schema enforced by CrewAI for a single-job application.
+
+    Setting output_pydantic=SingleJobApplyResult on the CrewAI Task forces the
+    LLM to return a schema-validated object. Any free-text or hallucinated
+    Final Answer that does not parse against this schema is rejected by CrewAI
+    and triggers a retry, eliminating the main hallucination vector.
+    """
+
+    job_post_id: str = Field(..., description="UUID of the job post applied to")
+    status: str = Field(
+        ...,
+        description=(
+            "One of: applied, failed, manual_queued, dry_run_skip, captcha_blocked"
+        ),
+    )
+    resume_used: str = Field(..., description="Filename of resume submitted")
+    error_code: Opt[str] = Field(
+        None, description="Error code string if status=failed, else null"
+    )
+    platform: str = Field(
+        ..., description="ATS platform detected by detect_ats_platform"
+    )
+    applied: bool = Field(
+        ..., description="True only if fill_standard_form returned applied=True"
+    )
+
+
 # ---------------------------------------------------------------------------
 # ApplyAgent
 # ---------------------------------------------------------------------------
 
 
-@agent
 class ApplyAgent:
     """CrewAI Apply Agent — autonomous job application executor.
 
@@ -123,6 +153,27 @@ class ApplyAgent:
         self.fallback_llm_2 = self.llm_interface.get_fallback_llm(
             "APPLY_AGENT", level=2
         )
+        if self.fallback_llm_2 is None:
+            _groq_model: str = os.getenv("GROQ_MODEL", "")
+            _groq_key: str = os.getenv("GROQ_API_KEY", "")
+            if _groq_model and _groq_key:
+                self.fallback_llm_2 = LLM(
+                    model=f"groq/{_groq_model}",
+                    api_key=_groq_key,
+                    temperature=float(
+                        os.getenv("APPLY_LLM_TEMPERATURE", "0.1")
+                    ),
+                )
+                logger.info(
+                    "ApplyAgent.__init__: fallback_2 wired via Groq — %s",
+                    _groq_model,
+                )
+            else:
+                logger.warning(
+                    "ApplyAgent.__init__: fallback_2 unavailable — "
+                    "GROQ_MODEL or GROQ_API_KEY not set. "
+                    "Only 1 LLM fallback active for this run."
+                )
         self._current_llm = self.llm
         self._fallback_level: int = 0
 
@@ -131,6 +182,7 @@ class ApplyAgent:
         self._failed_count: int = 0
         self._rerouted_count: int = 0
         self._budget_aborted: bool = False
+        self._consecutive_failures: int = 0
 
         self.logger: logging.Logger = logging.getLogger(self.__class__.__name__)
 
@@ -283,11 +335,18 @@ class ApplyAgent:
     # ------------------------------------------------------------------
 
     def _platform_apply_counts(self) -> Dict[str, int]:
-        """Query Postgres for per-platform application counts in this run.
+        """Compute per-platform application counts from Postgres for this run.
+
+        Queries the ``applications`` table joined with ``jobs`` to count
+        the number of successfully applied applications grouped by
+        ``source_platform`` for the current ``run_batch_id``.
+        Used by ``_pre_apply_safety_check`` to enforce per-platform
+        rate limits (``max_per_run``).
 
         Returns:
-            Dict mapping ``source_platform`` → count of ``status='applied'``
-            applications for the current ``run_batch_id``.
+            Dict mapping platform name (``str``) to count of
+            ``status='applied'`` applications (``int``).  Returns an
+            empty dict on query failure (fail-soft).
         """
         for attempt in range(1, 4):
             conn: Optional[psycopg2.extensions.connection] = None
@@ -1054,13 +1113,31 @@ class ApplyAgent:
     # Agent / Task builders
     # ------------------------------------------------------------------
 
-    def _build_agent(self) -> Agent:
+    def _build_agent(
+        self,
+        llm_override: Any = None,
+        max_iter_override: Optional[int] = None,
+    ) -> Agent:
         """Build the CrewAI Agent instance for the apply pass.
 
+        Args:
+            llm_override: If provided, use this LLM instead of
+                ``self._current_llm``.  Used by ``_apply_one_job_via_crew``
+                to iterate through the fallback chain.
+            max_iter_override: If provided, use this instead of the
+                default ``max_iter=25``.  Single-job micro-crews use 6.
+
         Returns:
-            Configured ``Agent`` using the currently active LLM
-            (may be primary or a fallback after ``_switch_to_fallback``).
+            Configured ``Agent`` using the selected LLM.
         """
+        selected_llm = llm_override if llm_override is not None else self._current_llm
+        selected_max_iter = max_iter_override if max_iter_override is not None else 25
+
+        _apply_temp: float = float(os.getenv("APPLY_LLM_TEMPERATURE", "0.1"))
+        _active_llm = llm_override if llm_override is not None else self.llm
+        if hasattr(_active_llm, "temperature"):
+            _active_llm.temperature = _apply_temp
+
         return Agent(
             role="Senior Autonomous Job Application Specialist",
             goal=(
@@ -1078,7 +1155,7 @@ class ApplyAgent:
                 "application as a real opportunity and never submit incomplete "
                 "or low-quality applications."
             ),
-            llm=self._current_llm,
+            llm=_active_llm,
             tools=[
                 detect_ats_platform,
                 fill_standard_form,
@@ -1087,7 +1164,7 @@ class ApplyAgent:
                 update_application_status,
             ],
             verbose=True,
-            max_iter=25,
+            max_iter=selected_max_iter,
             memory=False,
             max_rpm=3,
         )
@@ -1188,75 +1265,258 @@ ROUTING MANIFEST (JSON)
             agent=agent,
         )
 
+    def _build_single_job_task(self, job: Dict[str, Any]) -> str:
+        """Build a hallucination-resistant task description scoped to one job.
+
+        Unlike _build_task() which addresses the full manifest, this method
+        generates a task string for a single job. Concrete argument names and
+        values are injected directly into the prompt to prevent the LLM from
+        guessing fill_standard_form parameter names (the primary prompt failure
+        mode observed in live runs).
+
+        Args:
+            job: A single job dict from self.routing_manifest with keys:
+                 job_post_id, title, company, url, source_platform,
+                 resume_suggested.
+
+        Returns:
+            Task description string ready for CrewAI Task(description=...).
+        """
+        dry_run_str: str = str(getattr(self, "dry_run", False)).lower()
+        per_run_cap: float = float(os.getenv("XAI_COST_CAP_PER_RUN", "0.38"))
+
+        return (
+            f"SESSION CONTEXT\n"
+            f"  run_batch_id : {self.run_batch_id}\n"
+            f"  user_id      : {self.user_id}\n"
+            f"  dry_run      : {dry_run_str}\n"
+            f"\n"
+            f"JOB TO APPLY TO\n"
+            f"  job_post_id  : {job['job_post_id']}\n"
+            f"  title        : {job['title']}\n"
+            f"  company      : {job['company']}\n"
+            f"  url          : {job['url']}\n"
+            f"  platform     : {job['source_platform']}\n"
+            f"  resume       : {job['resume_suggested']}\n"
+            f"\n"
+            f"INSTRUCTIONS — follow in exact order, do not skip any step:\n"
+            f"\n"
+            f"1. Call detect_ats_platform with:\n"
+            f"     job_url=\"{job['url']}\"\n"
+            f"     run_batch_id=\"{self.run_batch_id}\"\n"
+            f"   Save the returned ats_type value for use in step 2.\n"
+            f"\n"
+            f"2. Call fill_standard_form with EXACTLY these arguments — no others:\n"
+            f"     job_url=\"{job['url']}\"\n"
+            f"     job_post_id=\"{job['job_post_id']}\"\n"
+            f"     resume_filename=\"{job['resume_suggested']}\"\n"
+            f"     run_batch_id=\"{self.run_batch_id}\"\n"
+            f"     user_id=\"{self.user_id}\"\n"
+            f"     ats_platform=<ats_type returned in step 1>\n"
+            f"     dry_run={dry_run_str}\n"
+            f"   THIS CALL IS MANDATORY. Writing Final Answer without calling\n"
+            f"   fill_standard_form first is a protocol violation. Your output\n"
+            f"   will be discarded and the job will be marked failed.\n"
+            f"\n"
+            f"3. Call get_apply_summary with:\n"
+            f"     run_batch_id=\"{self.run_batch_id}\"\n"
+            f"   Use its output to populate your Final Answer.\n"
+            f"\n"
+            f"4. Write Final Answer as a JSON object with EXACTLY these keys:\n"
+            f"   {{\n"
+            f"     \"job_post_id\": \"{job['job_post_id']}\",\n"
+            f"     \"status\": \"<applied|failed|manual_queued|dry_run_skip|captcha_blocked>\",\n"
+            f"     \"resume_used\": \"{job['resume_suggested']}\",\n"
+            f"     \"error_code\": \"<error string or null>\",\n"
+            f"     \"platform\": \"<ats_type from step 1>\",\n"
+            f"     \"applied\": <true|false>\n"
+            f"   }}\n"
+            f"   Do NOT add extra keys. Do NOT wrap in Observation:.\n"
+            f"   Output ONLY the JSON object.\n"
+            f"\n"
+            f"HARD CONSTRAINTS:\n"
+            f"  - You have exactly ONE job. There is no loop.\n"
+            f"  - Call each tool exactly ONCE in the order listed above.\n"
+            f"  - Budget hard cap for this run: ${per_run_cap:.2f}\n"
+            f"  - If fill_standard_form returns captcha_blocked set status=captcha_blocked.\n"
+            f"  - If fill_standard_form returns re_route=manual set status=manual_queued.\n"
+        )
+
+    def _apply_one_job_via_crew(self, job: Dict[str, Any]) -> Dict[str, Any]:
+        """Apply to a single job using a scoped micro-crew.
+
+        Instantiates a fresh CrewAI Agent and Task scoped to exactly one job.
+        Uses max_iter=6 which is sufficient for the 4-step single-job task with
+        two buffer iterations. Falls back through the full LLM chain on
+        exception. If all LLMs fail, falls back to the direct Python path via
+        _apply_single_job(). Never raises — always returns a result dict.
+
+        Args:
+            job: A single job dict from self.routing_manifest.
+
+        Returns:
+            Dict with keys: job_post_id, status, resume_used, error_code,
+            platform, applied.
+        """
+        _default: Dict[str, Any] = {
+            "job_post_id": job.get("job_post_id", ""),
+            "status": "failed",
+            "resume_used": job.get("resume_suggested", ""),
+            "error_code": "CREW_INIT_FAILED",
+            "platform": "unknown",
+            "applied": False,
+        }
+
+        llm_chain: List[Any] = [
+            lm for lm in [
+                self.llm,
+                self.fallback_llm_1,
+                getattr(self, "fallback_llm_2", None),
+            ]
+            if lm is not None
+        ]
+
+        last_exc: Optional[Exception] = None
+
+        for attempt, llm_instance in enumerate(llm_chain, start=1):
+            try:
+                logger.info(
+                    "_apply_one_job_via_crew: attempt %d/%d — job_post_id=%s company=%s",
+                    attempt,
+                    len(llm_chain),
+                    job.get("job_post_id"),
+                    job.get("company"),
+                )
+                agent = self._build_agent(
+                    llm_override=llm_instance,
+                    max_iter_override=6,
+                )
+                task = Task(
+                    description=self._build_single_job_task(job),
+                    agent=agent,
+                    output_pydantic=SingleJobApplyResult,
+                    expected_output="JSON object matching SingleJobApplyResult schema",
+                )
+                crew = Crew(
+                    agents=[agent],
+                    tasks=[task],
+                    verbose=os.getenv("LOG_LEVEL", "INFO").upper() == "DEBUG",
+                    process=Process.sequential,
+                )
+                crew_output = crew.kickoff()
+                result = self._parse_crew_output(crew_output)
+                logger.info(
+                    "_apply_one_job_via_crew: attempt %d success — status=%s job=%s",
+                    attempt,
+                    result.get("status"),
+                    job.get("job_post_id"),
+                )
+                return result
+
+            except Exception as exc:
+                last_exc = exc
+                logger.warning(
+                    "_apply_one_job_via_crew: attempt %d failed — job=%s error=%s",
+                    attempt,
+                    job.get("job_post_id"),
+                    exc,
+                )
+                continue
+
+        # All LLMs exhausted — fall back to direct Python path
+        logger.error(
+            "_apply_one_job_via_crew: all %d LLMs failed for job=%s — "
+            "falling back to _apply_single_job(). Last error: %s",
+            len(llm_chain),
+            job.get("job_post_id"),
+            last_exc,
+        )
+        try:
+            return self._apply_single_job(job)
+        except Exception as final_exc:
+            logger.error(
+                "_apply_one_job_via_crew: _apply_single_job also failed for job=%s: %s",
+                job.get("job_post_id"),
+                final_exc,
+            )
+            return {**_default, "error_code": f"ALL_PATHS_FAILED:{final_exc!s}"}
+
     # ------------------------------------------------------------------
     # Internal: crew output parser
     # ------------------------------------------------------------------
 
     def _parse_crew_output(self, crew_output: Any) -> Dict[str, Any]:
-        """Extract JSON summary from CrewAI output, handling Observation:/Thought: envelope.
+        """Parse single-job crew output. Handles CrewAI Pydantic and raw JSON.
 
-        CrewAI wraps the LLM's Final Answer in::
-
-            Observation: {json}\n\nThought: I now know the final answer
-
-        This method strips that envelope before attempting JSON parsing so that
-        the pipeline never silently returns all-zero counts.
+        When output_pydantic=SingleJobApplyResult is set on the Task, CrewAI
+        populates crew_output.pydantic with a validated model instance. This
+        method checks for that first before falling back to regex JSON extraction.
 
         Args:
-            crew_output: Raw return value of ``Crew.kickoff()`` — may be a
-                ``CrewOutput`` object (with ``.raw``), a plain string, or a dict.
+            crew_output: Raw return value from crew.kickoff().
 
         Returns:
-            Parsed result dict merged over a safe default.  Never raises.
+            Dict with keys: job_post_id, status, resume_used, error_code,
+            platform, applied. Returns a safe default dict on any parse error.
         """
-        import re  # already in stdlib; local import keeps top-level clean
+        import re
 
         _default: Dict[str, Any] = {
-            "total_attempted": 0,
-            "applied": 0,
-            "failed": 0,
-            "manual_queued": 0,
+            "job_post_id": "",
+            "status": "failed",
+            "resume_used": "",
+            "error_code": "PARSE_FAILED",
+            "platform": "unknown",
+            "applied": False,
         }
 
         try:
+            # Case 1: CrewAI returned a validated Pydantic object (preferred path)
+            if hasattr(crew_output, "pydantic") and crew_output.pydantic is not None:
+                return crew_output.pydantic.model_dump()
+
+            # Case 2: Raw string — strip CrewAI envelope, extract JSON
             raw: str = (
                 crew_output.raw
                 if hasattr(crew_output, "raw")
                 else str(crew_output)
             )
-            if not raw or not raw.strip():
-                self.logger.warning(
-                    "_parse_crew_output: crew returned empty output"
-                )
-                return _default
-
-            # Strip leading "Final Output\n", "Observation: " and any preamble
-            # before the opening brace of the JSON object.
+            # Strip any preamble before the first opening brace
             clean: str = re.sub(
-                r"^.*?(?=\{)", "", raw.strip(), count=1, flags=re.DOTALL
+                r"^.*?(?=\{)", "", raw.strip(), flags=re.DOTALL
             )
-            # Strip trailing Thought block
+            # Strip trailing Thought: or Observation: blocks
             clean = re.sub(
-                r"\n\nThought:.*$", "", clean, flags=re.DOTALL
+                r"\n\n(Thought|Observation):.*$", "", clean, flags=re.DOTALL
             ).strip()
-            # Extract first complete JSON object
+
             match = re.search(r"\{.*\}", clean, flags=re.DOTALL)
             if not match:
                 raise ValueError(
-                    f"No JSON object found in crew output: {raw[:200]!r}"
+                    f"No JSON object found in crew output: {raw[:400]!r}"
                 )
-            parsed: Any = json.loads(match.group())
-            if not isinstance(parsed, dict):
-                raise ValueError(
-                    f"Parsed JSON is not a dict (type={type(parsed).__name__})"
+
+            parsed: Dict[str, Any] = json.loads(match.group())
+
+            # Warn on missing required keys and merge defaults
+            required: set = {
+                "job_post_id", "status", "resume_used", "platform", "applied"
+            }
+            missing: set = required - parsed.keys()
+            if missing:
+                logger.warning(
+                    "_parse_crew_output: missing keys %s — merging safe defaults",
+                    missing,
                 )
-            logger.info(
-                "_parse_crew_output: parsed crew summary — %s", parsed
-            )
-            return {**_default, **parsed}
-        except Exception as exc:  # noqa: BLE001
-            self.logger.warning(
-                "_parse_crew_output: JSON decode failed: %s — using zeros", exc
+                return {**_default, **parsed}
+
+            return parsed
+
+        except Exception as exc:
+            logger.warning(
+                "_parse_crew_output: failed to parse crew output: %s — "
+                "returning safe default",
+                exc,
             )
             return _default
 
@@ -1431,198 +1691,88 @@ ROUTING MANIFEST (JSON)
             # ----------------------------------------------------------
             # Steps 5+6: build crew and execute with fallback
             # ----------------------------------------------------------
-            agent: Agent = self._build_agent()
-            task: Task = self._build_task(agent)
-            crew = Crew(
-                agents=[agent],
-                tasks=[task],
-                process=Process.sequential,
-                verbose=True,
-            )
+            # ── Python-owns-loop: one micro-crew per job ──────────────────────
+            per_job_results: List[Dict[str, Any]] = []
+            jobs_remaining: List[Dict[str, Any]] = list(self.routing_manifest)
 
-            crew_output: Any = None
+            for idx, job in enumerate(jobs_remaining):
 
-            # First attempt
-            try:
-                self.logger.info(
-                    "ApplyAgent.run: executing crew (primary LLM)…"
-                )
-                crew_output = crew.kickoff()
-            except Exception as primary_exc:  # noqa: BLE001
-                failed_model: str = getattr(
-                    self._current_llm, "model", "primary"
-                )
-                self.logger.error(
-                    "ApplyAgent.run: primary LLM failed (%s): %s",
-                    failed_model,
-                    primary_exc,
-                )
-                switched: bool = self._switch_to_fallback(failed_model)
-
-                if switched:
-                    # Rebuild with new LLM and retry once
-                    agent = self._build_agent()
-                    task = self._build_task(agent)
-                    retry_crew = Crew(
-                        agents=[agent],
-                        tasks=[task],
-                        process=Process.sequential,
-                        verbose=True,
-                    )
+                # Budget check every 5 jobs (uses existing check_xai_run_cap import)
+                if idx % 5 == 0:
                     try:
-                        fallback_model: str = getattr(
-                            self._current_llm,
-                            "model",
-                            f"fallback_{self._fallback_level}",
-                        )
-                        self.logger.info(
-                            "ApplyAgent.run: retrying crew with fallback "
-                            "LLM %s",
-                            fallback_model,
-                        )
-                        crew_output = retry_crew.kickoff()
-                    except Exception as fallback_exc:  # noqa: BLE001
-                        self.logger.critical(
-                            "ApplyAgent.run: fallback LLM also failed: %s",
-                            fallback_exc,
-                        )
-                        _record_agent_error(
-                            agent_type="ApplyAgent",
-                            error_message=str(fallback_exc),
-                            run_batch_id=self.run_batch_id,
-                            error_code="LLM_FALLBACK_FAILED",
-                        )
-                        # Fall through to programmatic execution
-                        crew_output = None
-                else:
-                    self.logger.critical(
-                        "ApplyAgent.run: no fallback available — "
-                        "proceeding with programmatic execution"
-                    )
-                    _record_agent_error(
-                        agent_type="ApplyAgent",
-                        error_message=str(primary_exc),
-                        run_batch_id=self.run_batch_id,
-                        error_code="LLM_ALL_PROVIDERS_FAILED",
-                    )
-                    crew_output = None
-
-            # ----------------------------------------------------------
-            # Step 7: parse crew result + invariant mismatch guard
-            # ----------------------------------------------------------
-            if crew_output is not None:
-                crew_parsed: Dict[str, Any] = self._parse_crew_output(
-                    crew_output
-                )
-                self.logger.info(
-                    "ApplyAgent.run: crew output parsed — %s",
-                    {
-                        k: v
-                        for k, v in crew_parsed.items()
-                        if k != "platform_breakdown"
-                    },
-                )
-
-                # POST-FIX VALIDATION GUARD — detect LLM self-reporting without
-                # having called fill_standard_form (Bug 3 hallucination pattern).
-                expected_total: int = len(self.routing_manifest)
-                actual_total: int = (
-                    crew_parsed.get("applied", 0)
-                    + crew_parsed.get("failed", 0)
-                    + crew_parsed.get("manual_queued", 0)
-                )
-                if actual_total != expected_total:
-                    self.logger.warning(
-                        "ApplyAgent.run: crew summary total mismatch — "
-                        "expected %d got %d "
-                        "(applied=%d failed=%d queued=%d) — "
-                        "entering Python fallback loop",
-                        expected_total,
-                        actual_total,
-                        crew_parsed.get("applied", 0),
-                        crew_parsed.get("failed", 0),
-                        crew_parsed.get("manual_queued", 0),
-                    )
-
-            # ----------------------------------------------------------
-            # Step 8: process jobs with concurrent platform dispatch
-            # ----------------------------------------------------------
-            concurrent_dispatch: bool = False
-            use_concurrent = concurrent_dispatch
-
-            if use_concurrent and len(self.routing_manifest) > 1:
-                self.logger.info(
-                    "ApplyAgent.run: using concurrent per-platform dispatch"
-                )
-                per_job_results = self._dispatch_concurrent(
-                    max_platform_workers=int(
-                        os.getenv("MAX_PLAYWRIGHT_SESSIONS", "3")
-                    )
-                )
-            else:
-                per_job_results: List[Dict[str, Any]] = []
-                for idx, job in enumerate(self.routing_manifest, start=1):
-                    # Budget abort check every 5 jobs
-                    if self._budget_aborted:
-                        self.logger.warning(
-                            "ApplyAgent.run: budget aborted — re-routing "
-                            "remaining %d jobs",
-                            len(self.routing_manifest) - idx + 1,
-                        )
-                        remaining_jobs: List[Dict[str, Any]] = (
-                            self.routing_manifest[idx - 1:]
-                        )
-                        for rjob in remaining_jobs:
-                            rjid: str = str(
-                                rjob.get("job_post_id", rjob.get("id", ""))
+                        cap_result = check_xai_run_cap(run_batch_id=self.run_batch_id)
+                        if isinstance(cap_result, str):
+                            cap_result = json.loads(cap_result)
+                        if cap_result.get("abort"):
+                            logger.warning(
+                                "ApplyAgent.run: run-cap reached at job %d/%d — "
+                                "aborting loop, re-routing remaining %d jobs to manual",
+                                idx + 1,
+                                len(jobs_remaining),
+                                len(jobs_remaining) - idx,
                             )
-                            self._reroute_to_manual(
-                                rjob,
-                                reason="budget_cap_hit_mid_run",
-                                job_post_id=rjid,
-                            )
-                        break
-
-                    # Periodic budget check every 5 jobs
-                    if idx > 1 and idx % 5 == 1:
-                        try:
-                            cap_raw: str = check_xai_run_cap(
-                                run_batch_id=self.run_batch_id
-                            )
-                            cap_check: Dict[str, Any] = json.loads(cap_raw)
-                            if cap_check.get("abort", False):
-                                self._budget_aborted = True
-                                self.logger.critical(
-                                    "ApplyAgent.run: xAI budget cap hit after "
-                                    "%d applications — aborting",
-                                    idx - 1,
+                            self._budget_aborted = True
+                            for remaining_job in jobs_remaining[idx:]:
+                                self._reroute_to_manual(
+                                    remaining_job,
+                                    reason="BUDGET_ABORT",
+                                    job_post_id=str(
+                                        remaining_job.get("job_post_id",
+                                                          remaining_job.get("id", ""))
+                                    ),
                                 )
-                                # Re-route this job and all remaining
-                                remaining = self.routing_manifest[idx - 1:]
-                                for rjob in remaining:
-                                    rjid = str(
-                                        rjob.get("job_post_id", rjob.get("id", ""))
-                                    )
-                                    self._reroute_to_manual(
-                                        rjob,
-                                        reason="xai_cap_hit_mid_run",
-                                        job_post_id=rjid,
-                                    )
-                                break
-                        except Exception as cap_exc:  # noqa: BLE001
-                            self.logger.warning(
-                                "ApplyAgent.run: periodic budget check failed "
-                                "(proceeding): %s",
-                                cap_exc,
-                            )
+                            break
+                    except Exception as cap_exc:
+                        logger.warning(
+                            "ApplyAgent.run: budget cap check failed at job %d: %s",
+                            idx + 1,
+                            cap_exc,
+                        )
 
-                    # Apply single job (fail-soft)
-                    job_result: Dict[str, Any] = self._apply_single_job(job)
-                    per_job_results.append(job_result)
+                result = self._apply_one_job_via_crew(job)
+                per_job_results.append(result)
 
-                    # Rate limiting between applications
-                    apply_delay_ms = int(os.getenv("APPLY_DELAY_MS", "3000"))
-                    time.sleep(apply_delay_ms / 1000)
+                # Update run counters
+                status: str = result.get("status", "failed")
+                if status == "applied":
+                    self._applied_count += 1
+                elif status == "manual_queued":
+                    self._rerouted_count += 1
+                else:
+                    self._failed_count += 1
+
+                # Circuit breaker — abort if N consecutive failures detected
+                _cb_threshold: int = int(
+                    os.getenv("APPLY_CIRCUIT_BREAKER_N", "5")
+                )
+                if status in ("failed", "captcha_blocked"):
+                    self._consecutive_failures += 1
+                else:
+                    self._consecutive_failures = 0
+
+                if self._consecutive_failures >= _cb_threshold:
+                    logger.error(
+                        "ApplyAgent.run: circuit breaker triggered — %d consecutive "
+                        "failures — aborting, re-routing %d remaining jobs to manual",
+                        self._consecutive_failures,
+                        len(jobs_remaining) - (idx + 1),
+                    )
+                    for remaining_job in jobs_remaining[idx + 1 :]:
+                        self._reroute_to_manual(
+                            remaining_job,
+                            reason="CIRCUIT_BREAKER",
+                            job_post_id=str(
+                                remaining_job.get("job_post_id",
+                                                  remaining_job.get("id", ""))
+                            ),
+                        )
+                    break
+
+                # Inter-job sleep — spaces xAI calls below 3 RPM ceiling
+                delay_ms: int = int(os.getenv("APPLY_DELAY_MS", "3000"))
+                time.sleep(delay_ms / 1000.0)
+
+            # ── end loop ──────────────────────────────────────────────────────
 
             # ----------------------------------------------------------
             # Step 9: reconcile — safety net

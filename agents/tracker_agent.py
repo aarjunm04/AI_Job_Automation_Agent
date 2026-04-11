@@ -7,7 +7,6 @@ Its responsibilities are:
 2. Push all manually queued jobs to the Notion Applications database.
 3. Record the AgentOps run summary.
 4. Close the run session in Postgres with accurate final counts.
-5. Generate and post the FinalReport to Notion.
 
 All external-service failures (Notion, AgentOps) are swallowed and logged;
 the agent must never crash the pipeline regardless of third-party availability.
@@ -32,7 +31,7 @@ from crewai import Agent, Task, Crew, Process
 
 from config.settings import db_config
 from integrations.llm_interface import LLMInterface
-from integrations.notion import NotionClient, FinalReport
+
 from tools.agentops_tools import record_agent_error, _record_agent_error
 from tools.notion_tools import (
     check_notion_connection,
@@ -53,7 +52,7 @@ from utils.db_utils import get_db_conn
 logger = logging.getLogger(__name__)
 logger.setLevel(os.getenv("LOG_LEVEL", "INFO"))
 
-__all__ = ["TrackerAgent", "FinalReport"]
+__all__: list[str] = ["TrackerAgent"]
 
 
 # ---------------------------------------------------------------------------
@@ -117,7 +116,9 @@ class TrackerAgent:
     Attributes:
         run_batch_id: UUID of the current pipeline run batch.
         user_id: UUID of the candidate user.
+        llminterface: Centralised LLM provider manager.
         llm: Primary CrewAI LLM object (Groq llama-3.3-70b-versatile).
+        fallback_llm: Fallback CrewAI LLM object (Cerebras).
         logger: Instance-level Python logger.
     """
 
@@ -128,17 +129,21 @@ class TrackerAgent:
             run_batch_id: UUID of the current run batch in Postgres.
             user_id: UUID of the candidate (users table).
         """
+        self.logger: logging.Logger = logging.getLogger(self.__class__.__name__)
         self.run_batch_id: str = run_batch_id
         self.user_id: str = user_id
+        
+        self.llminterface: LLMInterface = LLMInterface()
         try:
-            self.llm = LLMInterface().get_llm("TRACKER_AGENT")
+            self.llm = self.llminterface.get_llm("TRACKER_AGENT")
+            self.fallback_llm = self.llminterface.get_fallback_llm("TRACKER_AGENT")
         except Exception as _llm_exc:
             self.logger.error(
                 "TrackerAgent: LLM init failed — %s. "
                 "Tracker will attempt to run with degraded LLM.", _llm_exc
             )
             self.llm = None
-        self.logger: logging.Logger = logging.getLogger(self.__class__.__name__)
+            self.fallback_llm = None
         
         # --- CrewAI-wrapped tools (require .func alias) ---
         self.sync_application_to_job_tracker = sync_application_to_job_tracker
@@ -201,46 +206,38 @@ class TrackerAgent:
         """
 
         last_exc: Optional[Exception] = None
-        for attempt in range(3):
-            conn = None
-            try:
-                conn = get_db_conn()
-                conn.autocommit = False
-                cursor = conn.cursor(
-                    cursor_factory=psycopg2.extras.RealDictCursor
-                )
-                cursor.execute(sql, (self.run_batch_id, status))
-                rows = cursor.fetchall()
-                conn.close()
-                result: list[dict[str, Any]] = [dict(row) for row in rows]
-                self.logger.info(
-                    "_query_applications: status=%s found=%d", status, len(result)
-                )
-                return result
-            except Exception as exc:  # noqa: BLE001
-                last_exc = exc
-                if conn:
-                    try:
-                        conn.rollback()
-                        conn.close()
-                    except Exception:  # noqa: BLE001
-                        pass
-                if attempt < 2:
-                    sleep_s = 2 ** attempt
-                    self.logger.warning(
-                        "_query_applications: attempt %d failed, retrying in %ds — %s",
-                        attempt + 1,
-                        sleep_s,
-                        exc,
-                    )
-                    time.sleep(sleep_s)
-
-        self.logger.error(
-            "_query_applications: all retries exhausted status=%s — %s",
-            status,
-            last_exc,
-        )
-        return []
+        conn = None
+        try:
+            conn = get_db_conn()
+            conn.autocommit = False
+            cursor = conn.cursor(
+                cursor_factory=psycopg2.extras.RealDictCursor
+            )
+            cursor.execute(sql, (self.run_batch_id, status))
+            rows = cursor.fetchall()
+            result: list[dict[str, Any]] = [dict(row) for row in rows]
+            self.logger.info(
+                "_query_applications: status=%s found=%d", status, len(result)
+            )
+            return result
+        except Exception as exc:  # noqa: BLE001
+            self.logger.error(
+                "_query_applications: DB error status=%s — %s",
+                status,
+                exc,
+            )
+            if conn:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+            return []
+        finally:
+            if conn:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
 
     def _get_applied_jobs(self) -> list[dict[str, Any]]:
         """Fetch applied jobs not yet synced to Notion Job Tracker.
@@ -273,23 +270,18 @@ class TrackerAgent:
         return Agent(
             role="Run Session Tracker and Reporting Specialist",
             goal=(
-                "Sync every applied job to Notion Job Tracker, push every manually "
-                "queued job to Notion Applications DB, record the complete run summary "
-                "to AgentOps, and cleanly close the run session — ensuring zero data "
-                "loss even if external services are partially unavailable."
+                "Update Postgres run batch stats, record the complete run summary to "
+                "AgentOps, and cleanly close the run session — ensuring zero data loss "
+                "even if external services are partially unavailable."
             ),
             backstory=(
                 "You are meticulous about closing the loop on every pipeline run. "
-                "You ensure every job application is accounted for in Notion, every "
-                "metric is recorded in AgentOps, and every run session is properly "
-                "closed in Postgres with accurate counts."
+                "You ensure every metric is recorded in AgentOps and every run session "
+                "is properly closed in Postgres with accurate counts."
             ),
             llm=self.llm,
+            function_calling_llm=self.fallback_llm,
             tools=[
-                sync_application_to_job_tracker,
-                check_notion_connection,
-                get_pending_manual_queue_db,
-                log_event,
                 update_run_batch_stats,
             ],
             verbose=True,
@@ -317,17 +309,16 @@ class TrackerAgent:
             f"Close out run batch {self.run_batch_id}. "
             f"Applied count: {len(applied_jobs)}. "
             f"Queued count: {len(queued_jobs)}. "
-            f"Sync all applied jobs to Notion Job Tracker. "
-            f"Push all queued jobs to Notion Applications DB. "
-            f"Update Postgres run batch stats and close the session."
+            f"Notion sync has already been completed in Python; do NOT sync Notion. "
+            f"Update Postgres run batch stats and close the session. "
+            f"Record the run summary to AgentOps and end the AgentOps session."
         )
 
         return Task(
             description=description,
             agent=agent,
             expected_output=(
-                "JSON: {notion_synced_applied: int, notion_synced_queued: int, "
-                "agentops_recorded: bool, session_closed: bool, errors: list}"
+                "JSON: {agentops_recorded: bool, session_closed: bool, errors: list}"
             ),
         )
 
@@ -397,6 +388,56 @@ class TrackerAgent:
                     "agentops_recorded": summary_ok,
                     "session_closed": session_ok,
                 }
+
+            # Step 3b — Direct Python Notion sync (do NOT delegate to LLM)
+            notion_applied = 0
+            notion_queued  = 0
+            for job in applied:
+                try:
+                    self.sync_application_to_job_tracker_(
+                        application_id=str(job.get("application_id", "")),
+                        job_post_id=str(job.get("job_post_id", "")),
+                        run_batch_id=self.run_batch_id,
+                        title=str(job.get("title", "")),
+                        company=str(job.get("company", "")),
+                        job_url=str(job.get("url", "")),
+                        platform=str(job.get("platform", "")),
+                        resume_used=str(job.get("resume_used", "")),
+                        ctc="",
+                        notes="",
+                        location=str(job.get("location", "")),
+                        job_type="full-time",
+                    )
+                    notion_applied += 1
+                except Exception as _sync_exc:
+                    self.logger.warning("run: notion sync failed for job %s — %s",
+                                        job.get("job_post_id"), _sync_exc)
+
+            for job in queued:
+                try:
+                    self.sync_application_to_job_tracker_(
+                        application_id=str(job.get("application_id", "")),
+                        job_post_id=str(job.get("job_post_id", "")),
+                        run_batch_id=self.run_batch_id,
+                        title=str(job.get("title", "")),
+                        company=str(job.get("company", "")),
+                        job_url=str(job.get("url", "")),
+                        platform=str(job.get("platform", "")),
+                        resume_used=str(job.get("resume_used", "")),
+                        ctc="",
+                        notes="manual_queue",
+                        location=str(job.get("location", "")),
+                        job_type="full-time",
+                    )
+                    notion_queued += 1
+                except Exception as _sync_exc:
+                    self.logger.warning("run: notion sync failed for queued job %s — %s",
+                                        job.get("job_post_id"), _sync_exc)
+
+            self.logger.info(
+                "run: notion sync complete — applied=%d queued=%d",
+                notion_applied, notion_queued,
+            )
 
             # Step 4 — build crew and kick off
             if self.llm is None:
@@ -479,12 +520,6 @@ class TrackerAgent:
                     raw_preview,
                 )
 
-            notion_synced_applied: int = int(
-                parsed.get("notion_synced_applied", len(applied))
-            )
-            notion_synced_queued: int = int(
-                parsed.get("notion_synced_queued", len(queued))
-            )
             agent_errors: list[str] = parsed.get("errors", [])
 
             # Step 6 — log completion
@@ -495,8 +530,8 @@ class TrackerAgent:
                     event_type="tracker_run_complete",
                     message=(
                         f"Tracker sync complete — "
-                        f"notion_synced_applied={notion_synced_applied} "
-                        f"notion_synced_queued={notion_synced_queued} "
+                        f"notion_synced_applied={notion_applied} "
+                        f"notion_synced_queued={notion_queued} "
                         f"errors={len(agent_errors)}"
                     ),
                 )
@@ -514,8 +549,8 @@ class TrackerAgent:
             return {
                 "success": True,
                 "run_batch_id": self.run_batch_id,
-                "notion_synced_applied": notion_synced_applied,
-                "notion_synced_queued": notion_synced_queued,
+                "notion_synced_applied": notion_applied,
+                "notion_synced_queued": notion_queued,
                 "agentops_recorded": summary_recorded,
                 "session_closed": session_closed,
             }
@@ -549,119 +584,9 @@ class TrackerAgent:
     # Report generation
     # ------------------------------------------------------------------
 
-    @operation
-    def generate_report(self, apply_result: Optional[dict[str, Any]] = None) -> FinalReport:
-        """Generate the final pipeline report with all statistics.
-
-        Reads from run_sessions, applications, queued_jobs, and audit_logs
-        to compile a complete run summary. Posts to Notion and ends AgentOps.
-
-        Args:
-            apply_result: Optional result dict from ApplyAgent.run().
-
-        Returns:
-            FinalReport dataclass with all run statistics.
-        """
-        self.logger.info("Generating final report for run_batch_id=%s", self.run_batch_id)
-
-        # Initialize report with defaults
-        report = FinalReport(
-            run_batch_id=self.run_batch_id,
-            run_date=datetime.now(timezone.utc).strftime("%Y-%m-%d"),
-            jobs_discovered=0,
-            jobs_scored=0,
-            jobs_auto_applied=0,
-            jobs_manual_queued=0,
-            jobs_failed=0,
-            total_cost_usd=0.0,
-            duration_minutes=0.0,
-            success=True,
-            error_summary=None,
-            top_applied_jobs=None,
-        )
-
-        try:
-            # Step 1: Get run session stats from Postgres
-            run_stats = self._get_run_session_stats()
-            if run_stats:
-                report.jobs_discovered = run_stats.get("jobs_discovered", 0)
-                report.jobs_auto_applied = run_stats.get("jobs_auto_applied", 0)
-                report.jobs_manual_queued = run_stats.get("jobs_queued", 0)
-                report.duration_minutes = run_stats.get("duration_minutes", 0.0)
-
-            # Step 2: Get application counts by status
-            app_stats = self._get_application_stats()
-            if app_stats:
-                report.jobs_auto_applied = app_stats.get("applied", report.jobs_auto_applied)
-                report.jobs_failed = app_stats.get("failed", 0)
-                report.jobs_manual_queued = app_stats.get("manual_queued", report.jobs_manual_queued)
-
-            # Step 3: Calculate total cost from budget tools
-            report.total_cost_usd = self._get_total_cost()
-
-            # Step 4: Get top applied jobs
-            report.top_applied_jobs = self._get_top_applied_jobs(limit=10)
-
-            # Step 5: Check for errors in audit_logs
-            errors = self._get_error_summary()
-            if errors:
-                report.error_summary = errors
-                report.success = report.jobs_failed == 0
-
-            # Step 6: Calculate success rate
-            total_attempts = report.jobs_auto_applied + report.jobs_failed
-            if total_attempts > 0:
-                success_rate = report.jobs_auto_applied / total_attempts
-                self.logger.info("Success rate: %.1f%%", success_rate * 100)
-
-            # Step 7: Post to Notion
-            try:
-                loop = asyncio.get_event_loop()
-                if loop.is_running():
-                    import concurrent.futures as _cf
-                    with _cf.ThreadPoolExecutor(max_workers=1) as _pool:
-                        _future = _pool.submit(
-                            asyncio.run, self._post_report_to_notion(report)
-                        )
-                        _future.result(timeout=30)
-                else:
-                    loop.run_until_complete(self._post_report_to_notion(report))
-            except Exception as _notion_exc:
-                self.logger.warning(
-                    "TrackerAgent: Notion report post failed — %s. "
-                    "Continuing without Notion report.", _notion_exc
-                )
-
-            # Step 8: End AgentOps session
-            end_state = "Success" if report.success else "Fail"
-            self.record_run_summary(self.run_batch_id)
-            self.end_agentops_session(end_state)
-
-            # Step 9: Log final summary
-            self.logger.info(
-                "FINAL REPORT: discovered=%d applied=%d queued=%d failed=%d cost=$%.4f duration=%.1fmin",
-                report.jobs_discovered,
-                report.jobs_auto_applied,
-                report.jobs_manual_queued,
-                report.jobs_failed,
-                report.total_cost_usd,
-                report.duration_minutes,
-            )
-
-        except Exception as _rpt_exc:
-            self.logger.error(
-                "TrackerAgent.generate_report: failed — %s",
-                _rpt_exc, exc_info=True
-            )
-            return {
-                "success": False,
-                "error": f"generate_report_failed: {str(_rpt_exc)[:200]}",
-            }
-
-        return report
-
     def _get_run_session_stats(self) -> Optional[dict[str, Any]]:
         """Query run_sessions table for this run's stats."""
+        conn = None
         try:
             conn = get_db_conn()
             cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
@@ -677,14 +602,17 @@ class TrackerAgent:
             """, (self.run_batch_id,))
             
             row = cursor.fetchone()
-            conn.close()
             return dict(row) if row else None
         except Exception as exc:
             self.logger.warning("Failed to get run session stats: %s", exc)
             return None
+        finally:
+            if conn:
+                conn.close()
 
     def _get_application_stats(self) -> dict[str, int]:
         """Query applications table grouped by status."""
+        conn = None
         try:
             conn = get_db_conn()
             cursor = conn.cursor()
@@ -698,7 +626,6 @@ class TrackerAgent:
             """, (self.run_batch_id,))
             
             results = cursor.fetchall()
-            conn.close()
             
             stats = {}
             for status, count in results:
@@ -707,6 +634,9 @@ class TrackerAgent:
         except Exception as exc:
             self.logger.warning("Failed to get application stats: %s", exc)
             return {}
+        finally:
+            if conn:
+                conn.close()
 
     def _get_total_cost(self) -> float:
         """Get total cost from budget_tools."""
@@ -722,6 +652,7 @@ class TrackerAgent:
 
     def _get_top_applied_jobs(self, limit: int = 10) -> List[dict[str, Any]]:
         """Get top applied jobs ordered by fit_score."""
+        conn = None
         try:
             conn = get_db_conn()
             cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
@@ -743,14 +674,17 @@ class TrackerAgent:
             """, (self.run_batch_id, limit))
             
             rows = cursor.fetchall()
-            conn.close()
             return [dict(row) for row in rows]
         except Exception as exc:
             self.logger.warning("Failed to get top applied jobs: %s", exc)
             return []
+        finally:
+            if conn:
+                conn.close()
 
     def _get_error_summary(self) -> Optional[str]:
         """Get error summary from audit_logs."""
+        conn = None
         try:
             conn = get_db_conn()
             cursor = conn.cursor()
@@ -765,7 +699,6 @@ class TrackerAgent:
             """, (self.run_batch_id,))
             
             rows = cursor.fetchall()
-            conn.close()
             
             if not rows:
                 return None
@@ -775,13 +708,7 @@ class TrackerAgent:
         except Exception as exc:
             self.logger.warning("Failed to get error summary: %s", exc)
             return None
+        finally:
+            if conn:
+                conn.close()
 
-    async def _post_report_to_notion(self, report: FinalReport) -> None:
-        """Post the final report to Notion."""
-        try:
-            client = NotionClient()
-            await client.post_run_report(report)
-            self.logger.info("Successfully posted report to Notion")
-        except Exception as exc:
-            self.logger.warning("Failed to post to Notion: %s", exc)
-            raise

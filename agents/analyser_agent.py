@@ -39,11 +39,11 @@ import psycopg2
 import psycopg2.extras
 from crewai import Agent, Task, Crew, Process
 import agentops
-from agentops.sdk.decorators import agent, operation, track_agent, tool
+from agentops.sdk.decorators import agent, operation, tool
 
 from integrations.llm_interface import LLMInterface
 from tools.rag_tools import query_resume_match, _query_resume_match, get_resume_context, embed_job_description
-from tools.postgres_tools import log_event, save_job_score, get_run_stats, get_platform_config
+from tools.postgres_tools import _log_event, save_job_score, get_run_stats, get_platform_config
 from tools.budget_tools import check_xai_run_cap, record_llm_cost, get_cost_summary
 from tools.agentops_tools import record_agent_error, record_fallback_event
 from utils.db_utils import get_db_conn
@@ -108,7 +108,6 @@ def _provider_from_model(model: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-@track_agent(name="AnalyserAgent")
 class AnalyserAgent:
     """
     CrewAI Analyser Agent — eligibility filter, RAG resume matching, routing.
@@ -1309,7 +1308,7 @@ JOB LIST (JSON)
             # ----------------------------------------------------------
             # Step 1: log start
             # ----------------------------------------------------------
-            log_event(
+            _log_event(
                 run_batch_id=self.run_batch_id,
                 level="INFO",
                 event_type="analyser_run_start",
@@ -1347,7 +1346,7 @@ JOB LIST (JSON)
                     "AnalyserAgent.run: no jobs found for batch %s — returning early",
                     self.run_batch_id,
                 )
-                log_event(
+                _log_event(
                     run_batch_id=self.run_batch_id,
                     level="INFO",
                     event_type="analyser_run_complete",
@@ -1692,7 +1691,7 @@ JOB LIST (JSON)
                 f"budget_aborted={budget_aborted}"
             )
             self.logger.info("AnalyserAgent.run: %s", summary_msg)
-            log_event(
+            _log_event(
                 run_batch_id=self.run_batch_id,
                 level="INFO",
                 event_type="analyser_run_complete",
