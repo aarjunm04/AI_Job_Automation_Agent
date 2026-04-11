@@ -35,6 +35,7 @@ from integrations.llm_interface import LLMInterface
 from tools.agentops_tools import record_agent_error, _record_agent_error
 from tools.notion_tools import (
     check_notion_connection,
+    queue_job_to_applications_db,
     sync_application_to_job_tracker,
 )
 from tools.postgres_tools import (
@@ -154,6 +155,12 @@ class TrackerAgent:
         
         self.update_run_batch_stats = update_run_batch_stats
         self.update_run_batch_stats_ = getattr(self.update_run_batch_stats, "func", self.update_run_batch_stats)
+
+        self.queue_job_to_applications_db = queue_job_to_applications_db
+        self.queue_job_to_applications_db_ = getattr(
+            self.queue_job_to_applications_db, "func",
+            self.queue_job_to_applications_db
+        )
         
         # --- Standard methods (regular functions, no .func) ---
         self.record_run_summary = _record_run_summary
@@ -406,7 +413,7 @@ class TrackerAgent:
                         ctc="",
                         notes="",
                         location=str(job.get("location", "")),
-                        job_type="full-time",
+                        job_type=str(job.get("job_type", "full-time")),
                     )
                     notion_applied += 1
                 except Exception as _sync_exc:
@@ -415,24 +422,25 @@ class TrackerAgent:
 
             for job in queued:
                 try:
-                    self.sync_application_to_job_tracker_(
-                        application_id=str(job.get("application_id", "")),
+                    self.queue_job_to_applications_db_(
                         job_post_id=str(job.get("job_post_id", "")),
                         run_batch_id=self.run_batch_id,
                         title=str(job.get("title", "")),
                         company=str(job.get("company", "")),
                         job_url=str(job.get("url", "")),
                         platform=str(job.get("platform", "")),
-                        resume_used=str(job.get("resume_used", "")),
-                        ctc="",
-                        notes="manual_queue",
+                        fit_score=float(job.get("fit_score", 0.0)),
+                        resume_suggested=str(job.get("resume_used", "")),
+                        job_type=str(job.get("job_type", "full-time")),
                         location=str(job.get("location", "")),
-                        job_type="full-time",
+                        notes="",
                     )
                     notion_queued += 1
                 except Exception as _sync_exc:
-                    self.logger.warning("run: notion sync failed for queued job %s — %s",
-                                        job.get("job_post_id"), _sync_exc)
+                    self.logger.warning(
+                        "run: applications_db sync failed for job %s — %s",
+                        job.get("job_post_id"), _sync_exc
+                    )
 
             self.logger.info(
                 "run: notion sync complete — applied=%d queued=%d",
@@ -711,4 +719,3 @@ class TrackerAgent:
         finally:
             if conn:
                 conn.close()
-

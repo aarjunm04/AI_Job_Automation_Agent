@@ -115,7 +115,7 @@ def sync_application_to_job_tracker(
 
         # Determine applied_via based on context (default to Auto for now)
         # TODO: Pass mode parameter to distinguish Auto vs Manual
-        applied_via = "Auto"
+        applied_via = "Auto-Apply"
 
         # Create page in Job Tracker DB
         try:
