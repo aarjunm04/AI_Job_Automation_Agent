@@ -40,7 +40,7 @@ import psycopg2
 import psycopg2.extras
 from crewai import Agent, Task, Crew, Process
 import agentops
-from agentops.sdk.decorators import agent, operation, tool
+from agentops import agent, operation, tool
 
 from integrations.llm_interface import LLMInterface
 from tools.rag_tools import query_resume_match, _query_resume_match, get_resume_context, embed_job_description

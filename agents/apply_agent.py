@@ -32,11 +32,12 @@ from pydantic import BaseModel, Field
 
 from crewai import Agent, Task, Crew, Process, LLM
 import agentops
-from agentops.sdk.decorators import agent, operation
+from agentops import agent, operation
 import psycopg2
 import psycopg2.extras
 
 from config.settings import db_config, run_config, budget_config
+from config.config_loader import config_loader as _cfg
 from integrations.llm_interface import LLMInterface
 from tools.apply_tools import (
     detect_ats_platform,
@@ -187,6 +188,13 @@ class ApplyAgent:
 
         self.logger: logging.Logger = logging.getLogger(self.__class__.__name__)
 
+        # Load all runtime config from JSON — single read at init, never repeated
+        self._run_cfg: dict = _cfg.get_run_config()
+        self._apply_cfg: dict = _cfg.get_apply_settings()
+        self._score_cfg: dict = _cfg.get_scoring_thresholds()
+        self._budget_cfg: dict = _cfg.get_budget_settings()
+        self._job_filters: dict = _cfg.get_job_filters()
+
         # Load routing manifest from Postgres (auto-route jobs only)
         self.routing_manifest: List[Dict[str, Any]] = (
             self._load_routing_manifest()
@@ -219,7 +227,7 @@ class ApplyAgent:
             List of job dicts ready for the apply pipeline.  Empty list
             on query failure (fail-soft).
         """
-        for attempt in range(1, 4):
+        for attempt in range(1, self._run_cfg.get("max_retries", 3) + 1):
             conn: Optional[psycopg2.extensions.connection] = None
             try:
                 conn = get_db_conn()
@@ -241,10 +249,15 @@ class ApplyAgent:
 	                    JOIN job_scores js ON js.job_post_id = jp.id
 	                    WHERE jp.pipeline_run_id = %s
 	                      AND js.eligibility_pass = TRUE
-	                      AND js.fit_score >= 0.60
+	                      AND js.fit_score >= %s
 	                    ORDER BY js.fit_score DESC
+	                    LIMIT %s
 	                    """,
-	                    (self.pipeline_run_id,),
+	                    (
+	                        self.pipeline_run_id,
+	                        self._score_cfg.get("fit_score_auto_min", 0.6),
+	                        self._run_cfg.get("max_auto_apply_per_run", 20),
+	                    ),
 	                )
                 rows = cursor.fetchall()
                 manifest: List[Dict[str, Any]] = []
@@ -282,17 +295,20 @@ class ApplyAgent:
                 )
                 return manifest
             except Exception as exc:  # noqa: BLE001
-                if attempt < 3:
-                    time.sleep(2 ** attempt)
+                max_retries = self._run_cfg.get("max_retries", 3)
+                if attempt < max_retries:
+                    time.sleep(min(2 ** attempt, self._run_cfg.get("max_retry_backoff_seconds", 30)))
                     self.logger.warning(
-                        "_load_routing_manifest attempt %d/3 failed: %s "
+                        "_load_routing_manifest attempt %d/%d failed: %s "
                         "— retrying",
                         attempt,
+                        max_retries,
                         str(exc),
                     )
                 else:
                     self.logger.error(
-                        "_load_routing_manifest: failed after 3 attempts: %s",
+                        "_load_routing_manifest: failed after %d attempts: %s",
+                        max_retries,
                         exc,
                     )
             finally:
@@ -349,7 +365,8 @@ class ApplyAgent:
             ``status='applied'`` applications (``int``).  Returns an
             empty dict on query failure (fail-soft).
         """
-        for attempt in range(1, 4):
+        max_retries: int = self._run_cfg.get("max_retries", 3)
+        for attempt in range(1, max_retries + 1):
             conn: Optional[psycopg2.extensions.connection] = None
             try:
                 conn = get_db_conn()
@@ -373,11 +390,11 @@ class ApplyAgent:
                     for row in rows
                 }
             except Exception as exc:  # noqa: BLE001
-                if attempt < 3:
-                    time.sleep(2 ** attempt)
+                if attempt < max_retries:
+                    time.sleep(min(2 ** attempt, self._run_cfg.get("max_retry_backoff_seconds", 30)))
                     self.logger.warning(
-                        "_platform_apply_counts attempt %d/3 failed: %s — retrying",
-                        attempt, str(exc),
+                        "_platform_apply_counts attempt %d/%d failed: %s — retrying",
+                        attempt, max_retries, str(exc),
                     )
                 else:
                     self.logger.warning(
@@ -516,6 +533,46 @@ class ApplyAgent:
             conn.close()
 
     # ------------------------------------------------------------------
+
+    def _count_tool_calls(self, result: Any) -> dict[str, int]:
+        """Count actual tool invocations from CrewAI task output.
+
+        Returns mapping of tool_name -> call_count.
+        """
+        counts: dict[str, int] = {}
+        try:
+            # CrewAI stores tool usage in result.tasks_output
+            for task_out in getattr(result, "tasks_output", []):
+                for tool_call in getattr(task_out, "tool_calls", []):
+                    name: str = getattr(tool_call, "name", "") or ""
+                    if name:
+                        counts[name] = counts.get(name, 0) + 1
+        except Exception as exc:
+            self.logger.warning("_count_tool_calls: parse failed — %s", exc)
+        return counts
+
+
+    def _kickoff_with_timeout(
+        self, crew: Any, timeout_seconds: int = 300
+    ) -> Any:
+        """Run crew.kickoff() with a hard wall-clock timeout.
+
+        Raises TimeoutError if the crew does not complete in time.
+        """
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+            future = ex.submit(crew.kickoff)
+            try:
+                return future.result(timeout=float(timeout_seconds))
+            except concurrent.futures.TimeoutError:
+                self.logger.error(
+                    "_kickoff_with_timeout: crew timed out after %ds — "
+                    "aborting job", timeout_seconds
+                )
+                raise TimeoutError(
+                    f"crew.kickoff() exceeded {timeout_seconds}s limit"
+                )
+
     # Internal: pre-apply safety check
     # ------------------------------------------------------------------
 
@@ -649,7 +706,10 @@ class ApplyAgent:
 
         try:
             # ── STEP 1 — DRY_RUN guard (ALWAYS FIRST) ────────────────
-            dry_run = os.getenv("DRY_RUN", "false").lower() == "true"
+            dry_run: bool = (
+                os.getenv("DRY_RUN", "").lower() in ("true", "1", "yes")
+                or self._apply_cfg.get("dry_run", False)
+            )
             if dry_run:
                 self.logger.info(
                     "[DRY_RUN] Would apply to %s at %s — skipping browser",
@@ -749,6 +809,7 @@ class ApplyAgent:
                 self._applied_count += 1
                 _log_event(
                     pipeline_run_id=self.pipeline_run_id,
+                    agent="apply_agent",
                     level="INFO",
                     event_type="dry_run_skip",
                     message=(
@@ -767,6 +828,7 @@ class ApplyAgent:
                 self._applied_count += 1
                 _log_event(
                     pipeline_run_id=self.pipeline_run_id,
+                    agent="apply_agent",
                     level="INFO",
                     event_type="job_applied",
                     message=(
@@ -792,6 +854,7 @@ class ApplyAgent:
                 self._failed_count += 1
                 _log_event(
                     pipeline_run_id=self.pipeline_run_id,
+                    agent="apply_agent",
                     level="ERROR",
                     event_type="job_apply_failed",
                     message=(
@@ -896,6 +959,7 @@ class ApplyAgent:
 
             _log_event(
                 pipeline_run_id=self.pipeline_run_id,
+                    agent="apply_agent",
                 level="WARNING",
                 event_type="job_rerouted_to_manual",
                 message=(
@@ -1197,9 +1261,12 @@ class ApplyAgent:
             )
             manifest_json = "[]"
 
-        # BUG-FIX 3A: use self.dry_run (not run_config.dry_run) so the task
-        # prompt always reflects the value the runner injected via env var.
-        self.dry_run: bool = os.getenv("DRY_RUN", "false").lower() == "true"
+        # BUG-FIX 3A: use dynamic eval for dry_run
+        dry_run_eval: bool = (
+            os.getenv("DRY_RUN", "").lower() in ("true", "1", "yes")
+            or self._apply_cfg.get("dry_run", False)
+        )
+        self.dry_run: bool = dry_run_eval
         xai_cap: float = budget_config.xai_cost_cap_per_run
 
         description: str = f"""
@@ -1287,7 +1354,11 @@ ROUTING MANIFEST (JSON)
         Returns:
             Task description string ready for CrewAI Task(description=...).
         """
-        dry_run_str: str = str(getattr(self, "dry_run", False)).lower()
+        dry_run_eval: bool = (
+            os.getenv("DRY_RUN", "").lower() in ("true", "1", "yes")
+            or self._apply_cfg.get("dry_run", False)
+        )
+        dry_run_str: str = str(dry_run_eval).lower()
         per_run_cap: float = float(os.getenv("XAI_COST_CAP_PER_RUN", "0.38"))
 
         return (
@@ -1409,6 +1480,27 @@ ROUTING MANIFEST (JSON)
                     process=Process.sequential,
                 )
                 crew_output = crew.kickoff()
+
+                raw_output: str = crew_output.raw if hasattr(crew_output, "raw") else str(crew_output)
+                # Validate tool call sequence was followed
+                if "fill_standard_form" not in raw_output and "dry_run_skip" not in raw_output:
+                    self.logger.error(
+                        "_apply_one_job_via_crew: PROTOCOL VIOLATION — LLM skipped fill_standard_form "
+                        "job_post_id=%s company=%s attempt=%d — marking failed",
+                        job["job_post_id"], job["company"], attempt
+                    )
+                    # Log to audit_logs
+                    log_event(
+                        pipeline_run_id=self.pipeline_run_id,
+                        event_type="apply_protocol_violation",
+                        level="ERROR",
+                        agent="apply_agent",
+                        message=f"LLM skipped fill_standard_form for {job['company']}",
+                        metadata={"job_post_id": job["job_post_id"], "raw_output_preview": raw_output[:300]}
+                    )
+                    # Retry with next attempt — do NOT accept this result
+                    continue
+
                 result = self._parse_crew_output(crew_output)
                 logger.info(
                     "_apply_one_job_via_crew: attempt %d success — status=%s job=%s",
@@ -1604,20 +1696,25 @@ ROUTING MANIFEST (JSON)
             # ----------------------------------------------------------
             # Step 1: log run start
             # ----------------------------------------------------------
+            dry_run_eval: bool = (
+                os.getenv("DRY_RUN", "").lower() in ("true", "1", "yes")
+                or self._apply_cfg.get("dry_run", False)
+            )
             _log_event(
                 pipeline_run_id=self.pipeline_run_id,
+                    agent="apply_agent",
                 level="INFO",
                 event_type="apply_run_start",
                 message=(
                     f"Apply Agent starting | "
                     f"{len(self.routing_manifest)} jobs in manifest | "
-                    f"dry_run={run_config.dry_run}"
+                    f"dry_run={dry_run_eval}"
                 ),
             )
             self.logger.info(
                 "ApplyAgent.run: starting — %d jobs | dry_run=%s",
                 len(self.routing_manifest),
-                run_config.dry_run,
+                dry_run_eval,
             )
 
             # ----------------------------------------------------------
@@ -1674,7 +1771,7 @@ ROUTING MANIFEST (JSON)
                         "failed": 0,
                         "rerouted_to_manual": self._rerouted_count,
                         "budget_aborted": True,
-                        "dry_run": run_config.dry_run,
+                        "dry_run": dry_run_eval,
                         "platform_breakdown": {},
                         "cost_summary": {},
                     }
@@ -1748,7 +1845,7 @@ ROUTING MANIFEST (JSON)
 
                 # Circuit breaker — abort if N consecutive failures detected
                 _cb_threshold: int = int(
-                    os.getenv("APPLY_CIRCUIT_BREAKER_N", "5")
+                    self._apply_cfg.get("circuit_breaker_n", 5)
                 )
                 if status in ("failed", "captcha_blocked"):
                     self._consecutive_failures += 1
@@ -1774,8 +1871,13 @@ ROUTING MANIFEST (JSON)
                     break
 
                 # Inter-job sleep — spaces xAI calls below 3 RPM ceiling
-                delay_ms: int = int(os.getenv("APPLY_DELAY_MS", "3000"))
-                time.sleep(delay_ms / 1000.0)
+                import random
+                delay_min = self._apply_cfg.get("apply_delay_min_seconds", 45)
+                delay_max = self._apply_cfg.get("apply_delay_max_seconds", 90)
+                if not dry_run_eval:
+                    time.sleep(random.uniform(delay_min, delay_max))
+                else:
+                    time.sleep(0.3)
 
             # ── end loop ──────────────────────────────────────────────────────
 
@@ -1829,6 +1931,7 @@ ROUTING MANIFEST (JSON)
             )
             _log_event(
                 pipeline_run_id=self.pipeline_run_id,
+                    agent="apply_agent",
                 level="INFO",
                 event_type="apply_run_complete",
                 message=summary_msg,
@@ -1846,7 +1949,7 @@ ROUTING MANIFEST (JSON)
                 "failed": self._failed_count,
                 "rerouted_to_manual": self._rerouted_count,
                 "budget_aborted": self._budget_aborted,
-                "dry_run": run_config.dry_run,
+                "dry_run": dry_run_eval,
                 "platform_breakdown": platform_breakdown,
                 "cost_summary": cost_summary,
             }

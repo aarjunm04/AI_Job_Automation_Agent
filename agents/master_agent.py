@@ -25,7 +25,7 @@ from typing import Any, Dict, List, Optional
 
 from crewai import Agent, Task, Crew, Process
 import agentops
-from agentops.sdk.decorators import operation
+from agentops import operation
 
 from config.settings import db_config, run_config, budget_config, api_config
 from integrations.llm_interface import LLMInterface

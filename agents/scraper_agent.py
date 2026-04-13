@@ -16,7 +16,7 @@ from typing import Dict, Any, List, Optional
 import httpx
 from crewai import Agent, Task, Crew, Process
 import agentops
-from agentops.sdk.decorators import agent, operation, track_agent
+from agentops import agent, operation, track_agent
 
 from integrations.llm_interface import LLMInterface
 from tools.scraper_tools import (
@@ -50,33 +50,23 @@ _platform_config: Optional[Dict[str, Any]] = None
 __all__ = ["ScraperAgent"]
 
 
+from config.config_loader import config_loader as _cfg
+
 def _load_platform_config() -> Dict[str, Any]:
     """
-    Load platform configuration from config/platform_settings.json.
+    Load platform configuration from config_loader.
 
     Returns:
         Dictionary containing platform configuration.
-
-    Raises:
-        FileNotFoundError: If config/platform_settings.json does not exist.
     """
     global _platform_config
 
     if _platform_config is not None:
         return _platform_config
 
-    config_path = Path(__file__).parent.parent / "config" / "platform_settings.json"
+    _platform_config = _cfg.settings.get("platform_settings", {})
 
-    if not config_path.exists():
-        raise FileNotFoundError(
-            f"Platform configuration not found at {config_path}. "
-            "Create config/platform_settings.json with platform definitions."
-        )
-
-    with open(config_path, "r", encoding="utf-8") as f:
-        _platform_config = json.load(f)
-
-    logger.info(f"Loaded platform configuration from {config_path}")
+    logger.info("Loaded platform configuration from config_loader")
     return _platform_config
 
 
@@ -239,10 +229,8 @@ IMPORTANT:
             if custom_platforms:
                 playwright_platforms = custom_platforms
 
-            config_dir = Path(__file__).parent.parent / "config"
-            user_profile_path = config_dir / "user_profile.json"
-            with open(user_profile_path, "r", encoding="utf-8") as f:
-                user_profile = json.load(f)
+            user_profile_path = "config_loader.get_job_preferences()"
+            user_profile = {"job_preferences": _cfg.get_job_preferences()}
             custom_queries: List[str] = (
                 user_profile.get("job_preferences", {}).get("search_queries", [])
             )

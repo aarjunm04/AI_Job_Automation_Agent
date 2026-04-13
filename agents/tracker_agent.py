@@ -24,7 +24,7 @@ from datetime import datetime, timezone
 from typing import Any, Optional, List
 
 import agentops
-from agentops.sdk.decorators import agent, operation
+from agentops import agent, operation
 import psycopg2
 import psycopg2.extras
 from crewai import Agent, Task, Crew, Process
@@ -167,6 +167,23 @@ class TrackerAgent:
         self.end_agentops_session = _end_agentops_session
 
     # ------------------------------------------------------------------
+
+    def _safe_end_agentops(self, status: str = "Success") -> None:
+        """End AgentOps trace with a hard 5-second timeout.
+
+        Prevents pipeline hang when AgentOps cloud is unreachable.
+        """
+        import concurrent.futures
+        try:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+                future = ex.submit(agentops.end_trace, status)
+                future.result(timeout=5.0)
+        except concurrent.futures.TimeoutError:
+            self.logger.warning(
+                "_safe_end_agentops: timed out after 5s — skipping flush"
+            )
+        except Exception as exc:
+            self.logger.warning("_safe_end_agentops: failed — %s", exc)
     # Internal DB helpers
     # ------------------------------------------------------------------
 
@@ -385,7 +402,7 @@ class TrackerAgent:
                     "run: nothing to sync for pipeline_run_id=%s", self.pipeline_run_id
                 )
                 summary_ok: bool = self.record_run_summary(self.pipeline_run_id)
-                session_ok: bool = self.end_agentops_session("Success")
+                session_ok: bool = self._safe_end_agentops("Success")
                 return {
                     "success": True,
                     "reason": "nothing_to_sync",
@@ -552,7 +569,8 @@ class TrackerAgent:
             # Step 7 — AgentOps bookkeeping
             end_state: str = "Success" if not agent_errors else "Fail"
             summary_recorded: bool = self.record_run_summary(self.pipeline_run_id)
-            session_closed: bool = self.end_agentops_session(end_state)
+            self._safe_end_agentops(end_state)
+            session_closed: bool = True
 
             return {
                 "success": True,
@@ -580,7 +598,7 @@ class TrackerAgent:
                 pass
 
             # Best-effort session close
-            self.end_agentops_session("Fail")
+            self._safe_end_agentops("Fail")
 
             return {
                 "success": False,
@@ -604,7 +622,7 @@ class TrackerAgent:
                     jobs_found,
                     jobs_applied,
                     jobs_queued,
-                    EXTRACT(EPOCH FROM (COALESCE(closed_at, NOW()) - created_at)) / 60.0 AS duration_minutes
+                    EXTRACT(EPOCH FROM (COALESCE(completed_at, NOW()) - created_at)) / 60.0 AS duration_minutes
                 FROM pipeline_runs
                 WHERE pipeline_run_id = %s
             """, (self.pipeline_run_id,))
