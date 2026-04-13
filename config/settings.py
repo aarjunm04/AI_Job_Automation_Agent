@@ -102,8 +102,11 @@ class RunConfig:
     """
 
     jobs_per_run_target: int = field(
-        default_factory=lambda: int(os.getenv("JOBS_PER_RUN_TARGET", "150"))
+        default_factory=lambda: int(os.getenv("JOBS_PER_RUN_TARGET", "0"))
     )
+    # A value of 0 means "not set from env — defer to JSON". Any agent reading
+    # this must prefer config_loader.get_run_config().get("jobs_per_run_target", 80)
+    # over run_config.jobs_per_run_target for business logic.
     jobs_per_run_minimum: int = field(
         default_factory=lambda: int(os.getenv("JOBS_PER_RUN_MINIMUM", "100"))
     )

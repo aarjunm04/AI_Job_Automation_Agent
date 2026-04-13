@@ -173,7 +173,10 @@
     "remote_bonus": 10,
     "seniority_penalty": 20,
     "fuzzy_title_threshold": 80,
-    "skills_min_count": 3
+    "skills_min_count": 3,
+    "fit_score_auto_min": 0.8,
+    "fit_score_manual_min": 0.6,
+    "fit_score_reject_below": 0.5
   },
   "apply_settings": {
     "auto_apply_enabled": true,
