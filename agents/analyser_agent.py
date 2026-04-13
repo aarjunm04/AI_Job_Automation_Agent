@@ -44,7 +44,7 @@ from agentops import agent, operation, tool
 
 from integrations.llm_interface import LLMInterface
 from tools.rag_tools import query_resume_match, _query_resume_match, get_resume_context, embed_job_description
-from tools.postgres_tools import _log_event, save_job_score, get_run_stats, get_platform_config
+from tools.postgres_tools import _log_event_fn, save_job_score, get_run_stats, get_platform_config
 from tools.budget_tools import check_xai_run_cap, record_llm_cost, get_cost_summary
 from tools.agentops_tools import record_agent_error, record_fallback_event
 from utils.db_utils import get_db_conn
@@ -1322,10 +1322,11 @@ JOB LIST (JSON)
             # ----------------------------------------------------------
             # Step 1: log start
             # ----------------------------------------------------------
-            _log_event(
+            _log_event_fn(
                 pipeline_run_id=self.pipeline_run_id,
                 level="INFO",
                 event_type="analyser_run_start",
+                agent="analyser_agent",
                 message="Analyser Agent starting scoring pass",
             )
             self.logger.info(
@@ -1360,10 +1361,11 @@ JOB LIST (JSON)
                     "AnalyserAgent.run: no jobs found for batch %s — returning early",
                     self.pipeline_run_id,
                 )
-                _log_event(
+                _log_event_fn(
                     pipeline_run_id=self.pipeline_run_id,
                     level="INFO",
                     event_type="analyser_run_complete",
+                    agent="analyser_agent",
                     message="Analyser pass complete — 0 jobs found",
                 )
                 return {
@@ -1704,10 +1706,11 @@ JOB LIST (JSON)
                 f"budget_aborted={budget_aborted}"
             )
             self.logger.info("AnalyserAgent.run: %s", summary_msg)
-            _log_event(
+            _log_event_fn(
                 pipeline_run_id=self.pipeline_run_id,
                 level="INFO",
                 event_type="analyser_run_complete",
+                agent="analyser_agent",
                 message=summary_msg,
             )
 

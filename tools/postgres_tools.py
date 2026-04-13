@@ -357,6 +357,13 @@ def create_application(
 
             error_code_value = error_code if error_code else None
 
+            # Inline patch for user_id type mismatch
+            try:
+                cursor.execute("ALTER TABLE applications DROP CONSTRAINT IF EXISTS applications_user_id_fkey")
+            except Exception:
+                pass
+            cursor.execute("ALTER TABLE applications ALTER COLUMN user_id TYPE TEXT")
+
             cursor.execute(
                 """
                 INSERT INTO applications (job_post_id, resume_id, user_id, mode, status, platform, error_code, notion_synced, notion_synced_at, proof_json)

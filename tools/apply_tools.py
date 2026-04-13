@@ -71,7 +71,7 @@ from playwright.async_api import Page, TimeoutError as PlaywrightTimeoutError, a
 from auto_apply.ats_detector import ATSDetector, ATSProfile, ATSType
 from auto_apply.form_filler import FormFiller, FillResult
 from integrations.llm_interface import LLMInterface
-from tools.postgres_tools import create_application, update_application_status, log_event, _fetch_user_config, _priority_text
+from tools.postgres_tools import create_application, update_application_status, log_event, _log_event_fn, _fetch_user_config, _priority_text
 from tools.budget_tools import check_xai_run_cap, record_llm_cost
 from tools.agentops_tools import record_agent_error
 from tools.notion_tools import queue_job_to_applications_db
@@ -478,7 +478,7 @@ async def _run_apply(
         )
 
     # Resolve resume filename — use DB default_resume if given file is missing on disk
-    _resume_path: Path = RESUME_DIR / resume_filename
+    _resume_path: Path = _resolve_resume_path(resume_filename)
     if not _resume_path.is_file():
         logger.warning(
             "_run_apply: resume '%s' not found at '%s' — using default_resume '%s'",
@@ -498,7 +498,7 @@ async def _run_apply(
                 pipeline_run_id=pipeline_run_id,
                 event_type="dry_run_skip",
                 level="INFO",
-                agent="apply_agent",
+                agent="apply_tools",
                 message=f"dry_run|{job_url}",
             )
         except Exception as exc:  # noqa: BLE001
@@ -767,7 +767,7 @@ async def _run_apply(
                     pipeline_run_id=pipeline_run_id,
                     event_type="auto_apply_attempt",
                     level="INFO" if status == "applied" else "ERROR",
-                    agent="apply_agent",
+                    agent="apply_tools",
                     message=(
                         f"{status}|{job_url}"
                         f"|ats={ats_profile.ats_type.value}"

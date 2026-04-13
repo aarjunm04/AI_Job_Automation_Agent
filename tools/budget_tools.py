@@ -45,8 +45,8 @@ logger = logging.getLogger(__name__)
 logger.setLevel(os.getenv("LOG_LEVEL", "INFO"))
 
 # Budget caps from environment
-XAI_COST_CAP_PER_RUN = float(os.getenv("XAI_COST_CAP_PER_RUN", "0.38"))
-TOTAL_MONTHLY_BUDGET = float(os.getenv("TOTAL_MONTHLY_BUDGET", "10.00"))
+XAI_COST_CAP_PER_RUN = float(os.getenv("XAI_COST_CAP_PER_RUN"))
+TOTAL_MONTHLY_BUDGET = float(os.getenv("TOTAL_MONTHLY_BUDGET"))
 
 # Module-level state (reset per run)
 _run_xai_cost: float = 0.0
