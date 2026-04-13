@@ -45,6 +45,7 @@ from auto_apply.platforms.base_platform import ApplyResult
 from config.settings import db_config, run_config, budget_config
 from config.config_loader import config_loader
 from tools.budget_tools import check_xai_run_cap, record_llm_cost
+from tools.postgres_tools import _priority_text
 from utils.proxy_rate_limit import get_playwright_proxy, get_next_proxy, mark_proxy_dead, mark_proxy_success
 
 # ---------------------------------------------------------------------------
@@ -98,7 +99,7 @@ class ApplyRequest(BaseModel):
     platform: str = Field(..., description="ATS platform name (greenhouse, lever, etc)")
     job_url: str = Field(..., description="Full URL of the job application page")
     fit_score: float = Field(default=0.0, description="Fit score from analyser (0.0-1.0)")
-    run_batch_id: Optional[str] = Field(default=None, description="UUID of current run batch")
+    pipeline_run_id: Optional[str] = Field(default=None, description="UUID of current run batch")
     user_id: Optional[str] = Field(default=None, description="UUID of the user")
     job_title: Optional[str] = Field(default="", description="Job title for context")
     company: Optional[str] = Field(default="", description="Company name for context")
@@ -187,6 +188,7 @@ def _insert_application(
     status: str,
     platform: str,
     error_code: Optional[str] = None,
+    proof_json: Optional[Dict[str, Any]] = None,
 ) -> Optional[str]:
     """Insert application record into database."""
     conn = None
@@ -205,11 +207,23 @@ def _insert_application(
         
         cursor.execute(
             """
-            INSERT INTO applications (id, job_post_id, user_id, resume_id, mode, status, platform, error_code)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            INSERT INTO applications (id, job_post_id, user_id, resume_id, mode, status, platform, error_code, notion_synced, notion_synced_at, proof_json)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id
             """,
-            (app_id, job_id, user_id, resume_id, "auto", status, platform, error_code)
+            (
+                app_id,
+                job_id,
+                user_id,
+                resume_id,
+                "auto",
+                status,
+                platform,
+                error_code,
+                False,
+                None,
+                psycopg2.extras.Json(proof_json) if proof_json is not None else None,
+            )
         )
         conn.commit()
         return app_id
@@ -239,7 +253,7 @@ def _insert_queued_job(
             INSERT INTO queued_jobs (application_id, job_post_id, priority, notes)
             VALUES (%s, %s, %s, %s)
             """,
-            (application_id, job_id, priority, reason)
+            (application_id, job_id, _priority_text(int(priority)), reason)
         )
         conn.commit()
         return True
@@ -254,7 +268,7 @@ def _insert_queued_job(
 
 
 def _log_audit_event(
-    run_batch_id: str,
+    pipeline_run_id: str,
     level: str,
     event_type: str,
     message: str,
@@ -268,10 +282,10 @@ def _log_audit_event(
         cursor = conn.cursor()
         cursor.execute(
             """
-            INSERT INTO audit_logs (run_batch_id, job_post_id, application_id, level, event_type, message)
+            INSERT INTO audit_logs (pipeline_run_id, job_post_id, application_id, level, event_type, message)
             VALUES (%s, %s, %s, %s, %s, %s)
             """,
-            (run_batch_id, job_id, application_id, level, event_type, message)
+            (pipeline_run_id, job_id, application_id, level, event_type, message)
         )
         conn.commit()
     except Exception as e:
@@ -308,9 +322,9 @@ async def _execute_apply(
         logger.warning("Resume %s not found, using default: %s", request.resume_path, default_resume)
     
     # Check budget before proceeding
-    if request.run_batch_id:
+    if request.pipeline_run_id:
         try:
-            budget_result = json.loads(check_xai_run_cap(request.run_batch_id))
+            budget_result = json.loads(check_xai_run_cap(request.pipeline_run_id))
             if budget_result.get("abort"):
                 logger.critical("Budget cap hit - aborting apply for job %s", request.job_id)
                 return ApplyResponse(
@@ -378,7 +392,7 @@ async def _execute_apply(
                 "platform": request.platform,
                 "fit_score": request.fit_score,
                 "resume_suggested": request.resume_path,
-                "run_id": request.run_batch_id or "",
+                "run_id": request.pipeline_run_id or "",
             }
             
             # Get platform apply module
@@ -510,12 +524,20 @@ async def apply_to_job(request: ApplyRequest) -> ApplyResponse:
         app_status = "applied" if response.status == "applied" else (
             "manual_queued" if response.status == "queued" else "failed"
         )
+        proof_json: Optional[Dict[str, Any]] = None
+        if response.status == "applied" and (response.screenshot_path or response.proof_value):
+            proof_json = {
+                "screenshot": response.screenshot_path,
+                "confirmation_text": response.proof_value,
+                "applied_at": datetime.utcnow().isoformat(),
+            }
         app_id = _insert_application(
             job_id=request.job_id,
             user_id=user_id,
             status=app_status,
             platform=request.platform,
             error_code=response.error_code,
+            proof_json=proof_json,
         )
         
         # If queued, insert into queued_jobs table
@@ -529,9 +551,9 @@ async def apply_to_job(request: ApplyRequest) -> ApplyResponse:
             )
         
         # Log audit event
-        if request.run_batch_id:
+        if request.pipeline_run_id:
             _log_audit_event(
-                run_batch_id=request.run_batch_id,
+                pipeline_run_id=request.pipeline_run_id,
                 level="INFO" if response.status == "applied" else "WARNING",
                 event_type=f"apply_{response.status}",
                 message=f"{request.company} - {request.job_title} | {response.status} | {response.error_code or 'success'}",
@@ -608,7 +630,7 @@ async def retry_queued_job(job_id: str) -> ApplyResponse:
             SELECT j.url, j.title, j.company, j.source_platform, 
                    js.fit_score, js.resume_id,
                    r.storage_path as resume_path,
-                   j.run_batch_id
+                   j.pipeline_run_id
             FROM jobs j
             LEFT JOIN job_scores js ON js.job_post_id = j.id
             LEFT JOIN resumes r ON r.id = js.resume_id
@@ -630,7 +652,7 @@ async def retry_queued_job(job_id: str) -> ApplyResponse:
             platform=platform,
             job_url=row["url"],
             fit_score=float(row.get("fit_score", 0.0)),
-            run_batch_id=str(row.get("run_batch_id", "")),
+            pipeline_run_id=str(row.get("pipeline_run_id", "")),
             job_title=row.get("title", ""),
             company=row.get("company", ""),
         )
