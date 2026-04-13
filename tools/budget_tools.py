@@ -67,29 +67,29 @@ def _get_conn() -> Any:
 
 
 def _log_to_db(
-    run_batch_id: str, level: str, event_type: str, message: str
+    pipeline_run_id: str, level: str, event_type: str, message: str
 ) -> None:
     """
     Internal helper to log budget events to Postgres.
 
     Args:
-        run_batch_id: UUID of the run batch.
+        pipeline_run_id: UUID of the run batch.
         level: Log level.
         event_type: Event type.
         message: Log message.
     """
     import uuid
     
-    # Sanitize run_batch_id for Postgres UUID strictness
+    # Sanitize pipeline_run_id for Postgres UUID strictness
     valid_uuid = None
-    if run_batch_id and run_batch_id != "async_call":
+    if pipeline_run_id and pipeline_run_id != "async_call":
         try:
             # Test if it's a valid UUID
-            uuid_obj = uuid.UUID(str(run_batch_id))
+            uuid_obj = uuid.UUID(str(pipeline_run_id))
             valid_uuid = str(uuid_obj)
         except ValueError:
             valid_uuid = None
-    run_batch_id = valid_uuid
+    pipeline_run_id = valid_uuid
 
     conn = None
     try:
@@ -104,20 +104,20 @@ def _log_to_db(
         if psycopg2 is None:
             cursor.execute(
                 """
-                INSERT INTO audit_logs (run_batch_id, level, event_type, message)
+                INSERT INTO audit_logs (pipeline_run_id, level, event_type, message)
                 VALUES (%s, %s, %s, %s)
                 """,
-                (run_batch_id, level, event_type, message),
+                (pipeline_run_id, level, event_type, message),
             )
         else:
             for attempt in range(3):
                 try:
                     cursor.execute(
                         """
-                        INSERT INTO audit_logs (run_batch_id, level, event_type, message)
+                        INSERT INTO audit_logs (pipeline_run_id, level, event_type, message)
                         VALUES (%s, %s, %s, %s)
                         """,
-                        (run_batch_id, level, event_type, message),
+                        (pipeline_run_id, level, event_type, message),
                     )
                     break
                 except psycopg2.OperationalError as e:
@@ -136,31 +136,31 @@ def _log_to_db(
             conn.close()
 
 
-def reset_run_cost_tracker(run_batch_id: str) -> str:
+def reset_run_cost_tracker(pipeline_run_id: str) -> str:
     """
     Reset the run cost tracker for a new run.
 
     Called by Master Agent at the start of every run before any LLM calls.
 
     Args:
-        run_batch_id: UUID of the run batch.
+        pipeline_run_id: UUID of the run batch.
 
     Returns:
-        JSON string confirming reset with run_batch_id.
+        JSON string confirming reset with pipeline_run_id.
     """
     global _run_xai_cost, _run_perplexity_cost, _run_batch_id
 
     _run_xai_cost = 0.0
     _run_perplexity_cost = 0.0
-    _run_batch_id = run_batch_id
+    _run_batch_id = pipeline_run_id
 
-    logger.info(f"Cost tracker reset for run batch: {run_batch_id}")
+    logger.info(f"Cost tracker reset for run batch: {pipeline_run_id}")
 
-    return json.dumps({"reset": True, "run_batch_id": run_batch_id})
+    return json.dumps({"reset": True, "pipeline_run_id": pipeline_run_id})
 
 
 def record_llm_cost(
-    provider: str, cost_usd: float, agent_type: str, run_batch_id: str
+    provider: str, cost_usd: float, agent_type: str, pipeline_run_id: str
 ) -> str:
     """
     Record an LLM API cost and update the run tracker.
@@ -169,7 +169,7 @@ def record_llm_cost(
         provider: LLM provider ('xai' or 'perplexity').
         cost_usd: Cost in USD.
         agent_type: Agent that made the call.
-        run_batch_id: UUID of the run batch.
+        pipeline_run_id: UUID of the run batch.
 
     Returns:
         JSON string with cost details and running totals.
@@ -189,7 +189,7 @@ def record_llm_cost(
             f"run_xai_total=${_run_xai_cost:.4f}"
         )
 
-        _log_to_db(run_batch_id, "INFO", "llm_cost_recorded", message)
+        _log_to_db(pipeline_run_id, "INFO", "llm_cost_recorded", message)
 
         logger.info(message)
 
@@ -207,12 +207,12 @@ def record_llm_cost(
         return json.dumps({"error": "record_llm_cost_failed", "detail": str(e)})
 
 
-def check_xai_run_cap(run_batch_id: str) -> str:
+def check_xai_run_cap(pipeline_run_id: str) -> str:
     """
     Check if the xAI run cap has been exceeded.
 
     Args:
-        run_batch_id: UUID of the run batch.
+        pipeline_run_id: UUID of the run batch.
 
     Returns:
         JSON string with abort flag and cost details.
@@ -226,7 +226,7 @@ def check_xai_run_cap(run_batch_id: str) -> str:
                 f"aborting apply phase"
             )
 
-            _log_to_db(run_batch_id, "CRITICAL", "budget_cap_hit", message)
+            _log_to_db(pipeline_run_id, "CRITICAL", "budget_cap_hit", message)
 
             logger.critical(message)
 
@@ -260,15 +260,15 @@ def check_xai_run_cap(run_batch_id: str) -> str:
         return json.dumps({"error": "check_xai_run_cap_failed", "detail": str(e)})
 
 
-def check_monthly_budget(run_batch_id: str) -> str:
+def check_monthly_budget(pipeline_run_id: str) -> str:
     """
     Check if the monthly budget has been exceeded.
 
     Queries Postgres to calculate estimated monthly spend based on
-    jobs_auto_applied * $0.0025 per application.
+    jobs_applied * $0.0025 per application.
 
     Args:
-        run_batch_id: UUID of the run batch.
+        pipeline_run_id: UUID of the run batch.
 
     Returns:
         JSON string with abort flag and budget details.
@@ -291,8 +291,8 @@ def check_monthly_budget(run_batch_id: str) -> str:
 
         cursor.execute(
             """
-            SELECT COALESCE(SUM(jobs_auto_applied * 0.0025), 0) AS estimated_monthly_spend
-            FROM run_sessions
+            SELECT COALESCE(SUM(jobs_applied * 0.0025), 0) AS estimated_monthly_spend
+            FROM pipeline_runs
             WHERE run_date >= DATE_TRUNC('month', CURRENT_DATE)
             """
         )
@@ -306,7 +306,7 @@ def check_monthly_budget(run_batch_id: str) -> str:
                 f"${estimated_monthly_spend:.2f} — aborting run"
             )
 
-            _log_to_db(run_batch_id, "CRITICAL", "monthly_budget_cap_hit", message)
+            _log_to_db(pipeline_run_id, "CRITICAL", "monthly_budget_cap_hit", message)
 
             logger.critical(message)
 
@@ -345,12 +345,12 @@ def check_monthly_budget(run_batch_id: str) -> str:
             conn.close()
 
 
-def get_cost_summary(run_batch_id: str) -> str:
+def get_cost_summary(pipeline_run_id: str) -> str:
     """
     Get current run cost summary.
 
     Args:
-        run_batch_id: UUID of the run batch.
+        pipeline_run_id: UUID of the run batch.
 
     Returns:
         JSON string with all cost details for the current run.
@@ -362,7 +362,7 @@ def get_cost_summary(run_batch_id: str) -> str:
         xai_cap_remaining = max(0.0, XAI_COST_CAP_PER_RUN - _run_xai_cost)
 
         summary = {
-            "run_batch_id": run_batch_id,
+            "pipeline_run_id": pipeline_run_id,
             "run_xai_cost": _run_xai_cost,
             "run_perplexity_cost": _run_perplexity_cost,
             "run_total_cost": run_total_cost,

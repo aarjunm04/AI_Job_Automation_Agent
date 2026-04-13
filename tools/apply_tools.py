@@ -61,7 +61,7 @@ from playwright.async_api import Page, TimeoutError as PlaywrightTimeoutError, a
 from auto_apply.ats_detector import ATSDetector, ATSProfile, ATSType
 from auto_apply.form_filler import FormFiller, FillResult
 from integrations.llm_interface import LLMInterface
-from tools.postgres_tools import create_application, update_application_status, log_event, _fetch_user_config
+from tools.postgres_tools import create_application, update_application_status, log_event, _fetch_user_config, _priority_text
 from tools.budget_tools import check_xai_run_cap, record_llm_cost
 from tools.agentops_tools import record_agent_error
 from tools.notion_tools import queue_job_to_applications_db
@@ -114,7 +114,7 @@ _DB_URL: Optional[str] = (
 # TOOL 1 — ATS platform detection (Playwright + ATSDetector)
 # ---------------------------------------------------------------------------
 @tool
-def detect_ats_platform(job_url: str, run_batch_id: str, dry_run: bool = False) -> str:
+def detect_ats_platform(job_url: str, pipeline_run_id: str, dry_run: bool = False) -> str:
     """Detect the ATS platform powering a job application page.
 
     Launches a minimal headless Playwright session (no proxy), navigates to
@@ -124,7 +124,7 @@ def detect_ats_platform(job_url: str, run_batch_id: str, dry_run: bool = False) 
 
     Args:
         job_url: Full URL of the job application page.
-        run_batch_id: UUID of the current run batch (for logging context).
+        pipeline_run_id: UUID of the current run batch (for logging context).
         dry_run: If True, skip browser launch and return a mock ATS profile.
 
     Returns:
@@ -353,7 +353,7 @@ def check_captcha_present(page_html: str, job_url: str) -> str:
 
     Scans for known CAPTCHA fingerprints (reCAPTCHA, hCaptcha, Cloudflare
     Turnstile, etc.). Logs a WARNING-level event to Python logger when
-    detected; does not call Postgres directly (no valid run_batch_id at
+    detected; does not call Postgres directly (no valid pipeline_run_id at
     this scope).
 
     Args:
@@ -415,7 +415,7 @@ async def _run_apply(
     job_url: str,
     job_post_id: str,
     resume_filename: str,
-    run_batch_id: str,
+    pipeline_run_id: str,
     user_id: str,
     ats_platform: str,
 ) -> dict[str, Any]:
@@ -429,7 +429,7 @@ async def _run_apply(
         job_url: URL of the job application form.
         job_post_id: UUID of the ``job_posts`` row.
         resume_filename: Filename of the resume PDF inside ``RESUME_DIR``.
-        run_batch_id: UUID of the current run batch.
+        pipeline_run_id: UUID of the current run batch.
         user_id: UUID of the candidate (``users`` table).
         ats_platform: ATS type string from a prior ``detect_ats_platform``
             call, or ``"unknown"`` / ``""`` to trigger live detection.
@@ -486,7 +486,7 @@ async def _run_apply(
     if dry_run_effective:
         logger.info("_run_apply: DRY_RUN=true — skipping browser for %s", job_url)
         try:
-            log_event(run_batch_id, "INFO", "dry_run_skip", f"dry_run|{job_url}")
+            log_event(pipeline_run_id, "INFO", "dry_run_skip", f"dry_run|{job_url}")
         except Exception as exc:  # noqa: BLE001
             logger.warning("_run_apply: log_event (dry_run_skip) failed: %s", exc)
 
@@ -525,7 +525,7 @@ async def _run_apply(
 
     # Budget gate
     try:
-        budget_result: dict[str, Any] = json.loads(check_xai_run_cap(run_batch_id))
+        budget_result: dict[str, Any] = json.loads(check_xai_run_cap(pipeline_run_id))
         if budget_result.get("abort"):
             logger.critical(
                 "_run_apply: xAI budget cap hit — aborting apply for %s", job_url
@@ -669,7 +669,7 @@ async def _run_apply(
                     "xai",
                     0.002 * fill_result.llm_calls,
                     "APPLY_AGENT",
-                    run_batch_id,
+                    pipeline_run_id,
                 )
             except Exception as exc:  # noqa: BLE001
                 logger.warning("_run_apply: record_llm_cost failed: %s", exc)
@@ -764,7 +764,7 @@ async def _run_apply(
 
             try:
                 log_event(
-                    run_batch_id,
+                    pipeline_run_id,
                     "INFO" if status == "applied" else "ERROR",
                     "auto_apply_attempt",
                     (
@@ -826,7 +826,7 @@ def fill_standard_form(
     job_url: str,
     job_post_id: str,
     resume_filename: str,
-    run_batch_id: str,
+    pipeline_run_id: str,
     user_id: str,
     ats_platform: str,
 ) -> str:
@@ -845,7 +845,7 @@ def fill_standard_form(
         job_url: URL of the job application page.
         job_post_id: UUID of the ``job_posts`` row.
         resume_filename: Filename of the resume PDF inside ``RESUME_DIR``.
-        run_batch_id: UUID of the current run batch.
+        pipeline_run_id: UUID of the current run batch.
         user_id: UUID of the candidate (``users`` table).
         ats_platform: ATS type string from ``detect_ats_platform``, or
             ``"unknown"``/``""`` to trigger live detection.
@@ -865,7 +865,7 @@ def fill_standard_form(
                     job_url=job_url,
                     job_post_id=job_post_id,
                     resume_filename=resume_filename,
-                    run_batch_id=run_batch_id,
+                    pipeline_run_id=pipeline_run_id,
                     user_id=user_id,
                     ats_platform=ats_platform,
                 )
@@ -896,7 +896,7 @@ def fill_standard_form(
                     record_agent_error(
                         agent_type="ApplyAgent",
                         error_message=str(te),
-                        run_batch_id=run_batch_id,
+                        pipeline_run_id=pipeline_run_id,
                         error_code="TIMEOUT",
                         job_post_id=job_post_id,
                     )
@@ -920,7 +920,7 @@ def fill_standard_form(
                 record_agent_error(
                     agent_type="ApplyAgent",
                     error_message=str(exc),
-                    run_batch_id=run_batch_id,
+                    pipeline_run_id=pipeline_run_id,
                     error_code="APPLY_ERROR",
                     job_post_id=job_post_id,
                 )
@@ -952,17 +952,17 @@ def fill_standard_form(
 # TOOL 5 — Per-run apply summary (UNCHANGED)
 # ---------------------------------------------------------------------------
 @tool
-def get_apply_summary(run_batch_id: str) -> str:
+def get_apply_summary(pipeline_run_id: str) -> str:
     """Aggregate application counts by status for a given run batch.
 
     Queries the ``applications`` table joined with ``job_posts`` to count
     results grouped by status (applied, failed, manual_queued).
 
     Args:
-        run_batch_id: UUID of the run batch to summarise.
+        pipeline_run_id: UUID of the run batch to summarise.
 
     Returns:
-        JSON string ``{run_batch_id, applied, failed, manual_queued,
+        JSON string ``{pipeline_run_id, applied, failed, manual_queued,
         total_attempted}`` or an error dict on failure.
     """
     conn = None
@@ -979,10 +979,10 @@ def get_apply_summary(run_batch_id: str) -> str:
             SELECT a.status, COUNT(*) AS cnt
             FROM applications a
             JOIN jobs jp ON jp.id = a.job_post_id
-            WHERE jp.run_batch_id = %s
+            WHERE jp.pipeline_run_id = %s
             GROUP BY a.status
             """,
-            (run_batch_id,),
+            (pipeline_run_id,),
         )
 
         rows = cursor.fetchall()
@@ -996,9 +996,9 @@ def get_apply_summary(run_batch_id: str) -> str:
         total: int = sum(counts.values())
 
         logger.info(
-            "get_apply_summary: run_batch_id=%s applied=%d failed=%d "
+            "get_apply_summary: pipeline_run_id=%s applied=%d failed=%d "
             "manual_queued=%d total=%d",
-            run_batch_id,
+            pipeline_run_id,
             counts["applied"],
             counts["failed"],
             counts["manual_queued"],
@@ -1007,7 +1007,7 @@ def get_apply_summary(run_batch_id: str) -> str:
 
         return json.dumps(
             {
-                "run_batch_id": run_batch_id,
+                "pipeline_run_id": pipeline_run_id,
                 "applied": counts["applied"],
                 "failed": counts["failed"],
                 "manual_queued": counts["manual_queued"],
@@ -1042,7 +1042,7 @@ def route_and_apply(
     job_url: str,
     resume_path: str,
     fit_score: float,
-    run_batch_id: str,
+    pipeline_run_id: str,
     user_id: str,
     job_title: str = "",
     company: str = "",
@@ -1058,7 +1058,7 @@ def route_and_apply(
         job_url: Full URL of the job application page.
         resume_path: Filename of the resume PDF.
         fit_score: Fit score from analyser (0.0-1.0).
-        run_batch_id: UUID of the current run batch.
+        pipeline_run_id: UUID of the current run batch.
         user_id: UUID of the candidate.
         job_title: Job title for context.
         company: Company name for context.
@@ -1085,7 +1085,7 @@ def route_and_apply(
             "platform": platform,
             "job_url": job_url,
             "fit_score": fit_score,
-            "run_batch_id": run_batch_id,
+            "pipeline_run_id": pipeline_run_id,
             "user_id": user_id,
             "job_title": job_title,
             "company": company,
@@ -1293,7 +1293,7 @@ def save_to_queue(
             INSERT INTO queued_jobs (application_id, job_post_id, priority, notes)
             VALUES (%s, %s, %s, %s)
             """,
-            (app_id, job_id, priority, notes or reason)
+            (app_id, job_id, _priority_text(int(priority)), notes or reason)
         )
         
         conn.commit()
@@ -1431,7 +1431,7 @@ def get_best_resume(
 @tool
 def verify_apply_budget(
     projected_cost: float,
-    run_batch_id: str,
+    pipeline_run_id: str,
 ) -> str:
     """Check if projected cost fits within remaining budget.
     
@@ -1440,14 +1440,14 @@ def verify_apply_budget(
     
     Args:
         projected_cost: Estimated cost of the upcoming operation in USD.
-        run_batch_id: UUID of the current run batch.
+        pipeline_run_id: UUID of the current run batch.
         
     Returns:
         JSON string with allowed (bool) and remaining_budget.
     """
     try:
         # Check xAI run cap
-        cap_result = json.loads(check_xai_run_cap(run_batch_id))
+        cap_result = json.loads(check_xai_run_cap(pipeline_run_id))
         
         if cap_result.get("abort", False):
             return json.dumps({

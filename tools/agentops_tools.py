@@ -33,7 +33,7 @@ __all__ = [
 
 
 def _log_to_db(
-    run_batch_id: str,
+    pipeline_run_id: str,
     level: str,
     event_type: str,
     message: str,
@@ -47,7 +47,7 @@ def _log_to_db(
     pipeline.
 
     Args:
-        run_batch_id: UUID of the current run batch.
+        pipeline_run_id: UUID of the current run batch.
         level: Severity level — INFO | WARNING | ERROR | CRITICAL.
         event_type: Short snake_case label for the event.
         message: Human-readable event description.
@@ -68,11 +68,11 @@ def _log_to_db(
                 cursor.execute(
                     """
                     INSERT INTO audit_logs
-                        (run_batch_id, level, event_type, message, job_post_id, application_id)
+                        (pipeline_run_id, level, event_type, message, job_post_id, application_id)
                     VALUES (%s, %s, %s, %s, %s, %s)
                     """,
                     (
-                        run_batch_id,
+                        pipeline_run_id,
                         level,
                         event_type,
                         message,
@@ -106,7 +106,7 @@ def _log_to_db(
 def record_agent_error(
     agent_type: str,
     error_message: str,
-    run_batch_id: str,
+    pipeline_run_id: str,
     error_code: str = "",
     job_post_id: str = "",
 ) -> str:
@@ -121,7 +121,7 @@ def record_agent_error(
         agent_type: Class name of the agent that raised the error
             (e.g. ``"AnalyserAgent"``).
         error_message: Full exception message or summary.
-        run_batch_id: UUID of the current run batch.
+        pipeline_run_id: UUID of the current run batch.
         error_code: Short machine-readable error code (optional).
         job_post_id: UUID of the job post being processed when the error
             occurred (optional).
@@ -147,7 +147,7 @@ def record_agent_error(
                     "agent_type": agent_type,
                     "error_code": code,
                     "error_message": error_message,
-                    "run_batch_id": run_batch_id,
+                    "pipeline_run_id": pipeline_run_id,
                     "job_post_id": job_post_id or None,
                 },
                 returns={"status": "error"},
@@ -160,7 +160,7 @@ def record_agent_error(
 
     # Persist to Postgres
     _log_to_db(
-        run_batch_id=run_batch_id,
+        pipeline_run_id=pipeline_run_id,
         level="ERROR",
         event_type="agent_error",
         message=full_message,
@@ -181,7 +181,7 @@ def record_fallback_event(
     agent_type: str,
     from_provider: str,
     to_provider: str,
-    run_batch_id: str,
+    pipeline_run_id: str,
     fallback_level: int = 1,
     reason: str = "",
 ) -> str:
@@ -197,7 +197,7 @@ def record_fallback_event(
         from_provider: Name of the provider that failed
             (e.g. ``"xai/grok-4-fast-reasoning"``).
         to_provider: Name of the fallback provider being activated.
-        run_batch_id: UUID of the current run batch.
+        pipeline_run_id: UUID of the current run batch.
         fallback_level: 1 for fallback_1, 2 for fallback_2 (default: 1).
         reason: Optional human-readable reason for the fallback.
 
@@ -225,7 +225,7 @@ def record_fallback_event(
                     "to_provider": to_provider,
                     "fallback_level": fallback_level,
                     "reason": reason,
-                    "run_batch_id": run_batch_id,
+                    "pipeline_run_id": pipeline_run_id,
                 },
                 returns={"status": "fallback_activated"},
             )
@@ -237,7 +237,7 @@ def record_fallback_event(
 
     # Persist to Postgres
     _log_to_db(
-        run_batch_id=run_batch_id,
+        pipeline_run_id=pipeline_run_id,
         level="WARNING",
         event_type="llm_fallback",
         message=message,

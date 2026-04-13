@@ -73,7 +73,7 @@ def _get_client() -> NotionClient:
 def sync_application_to_job_tracker(
     application_id: str,
     job_post_id: str,
-    run_batch_id: str,
+    pipeline_run_id: str,
     title: str,
     company: str,
     job_url: str,
@@ -93,7 +93,7 @@ def sync_application_to_job_tracker(
     Args:
         application_id: UUID of the application record.
         job_post_id: UUID of the job post.
-        run_batch_id: UUID of the run batch.
+        pipeline_run_id: UUID of the run batch.
         title: Job title.
         company: Company name.
         job_url: Job posting URL.
@@ -152,7 +152,7 @@ def sync_application_to_job_tracker(
 
         # Log success event
         _log_event(
-            run_batch_id=run_batch_id,
+            pipeline_run_id=pipeline_run_id,
             level="INFO",
             event_type="notion_synced",
             message=f"Job Tracker page created for {company} — {title}",
@@ -173,7 +173,7 @@ def sync_application_to_job_tracker(
 
         # Log error event
         _log_event(
-            run_batch_id=run_batch_id,
+            pipeline_run_id=pipeline_run_id,
             level="ERROR",
             event_type="notion_sync_failed",
             message=f"Job Tracker sync failed for {company} — {title}: {str(e)}",
@@ -188,7 +188,7 @@ def sync_application_to_job_tracker(
 @tool
 def queue_job_to_applications_db(
     job_post_id: str,
-    run_batch_id: str,
+    pipeline_run_id: str,
     title: str,
     company: str,
     job_url: str,
@@ -209,7 +209,7 @@ def queue_job_to_applications_db(
 
     Args:
         job_post_id: UUID of the job post.
-        run_batch_id: UUID of the run batch.
+        pipeline_run_id: UUID of the run batch.
         title: Job title.
         company: Company name.
         job_url: Job posting URL.
@@ -272,7 +272,7 @@ def queue_job_to_applications_db(
 
         # Log success event
         _log_event(
-            run_batch_id=run_batch_id,
+            pipeline_run_id=pipeline_run_id,
             level="INFO",
             event_type="notion_queued",
             message=f"Applications DB page created for {company} — {title}",
@@ -297,7 +297,7 @@ def queue_job_to_applications_db(
 
         # Log error event
         _log_event(
-            run_batch_id=run_batch_id,
+            pipeline_run_id=pipeline_run_id,
             level="ERROR",
             event_type="notion_queue_failed",
             message=f"Applications DB queue failed for {company} — {title}: {str(e)}",
@@ -310,7 +310,7 @@ def queue_job_to_applications_db(
 
 @tool
 def update_notion_page_status(
-    page_id: str, status: str, run_batch_id: str
+    page_id: str, status: str, pipeline_run_id: str
 ) -> str:
     """
     Update the Status property of a Notion page.
@@ -318,7 +318,7 @@ def update_notion_page_status(
     Args:
         page_id: Notion page ID.
         status: New status value.
-        run_batch_id: UUID of the run batch.
+        pipeline_run_id: UUID of the run batch.
 
     Returns:
         JSON string with update result.
@@ -345,7 +345,7 @@ def update_notion_page_status(
 
         # Log success event
         _log_event(
-            run_batch_id=run_batch_id,
+            pipeline_run_id=pipeline_run_id,
             level="INFO",
             event_type="notion_status_updated",
             message=f"Notion page {page_id} status updated to: {status}",
@@ -362,7 +362,7 @@ def update_notion_page_status(
 
         # Log error event
         _log_event(
-            run_batch_id=run_batch_id,
+            pipeline_run_id=pipeline_run_id,
             level="ERROR",
             event_type="notion_status_update_failed",
             message=f"Notion page {page_id} status update failed: {str(e)}",
@@ -374,7 +374,7 @@ def update_notion_page_status(
 
 
 @tool
-def get_pending_manual_queue(run_batch_id: str) -> str:
+def get_pending_manual_queue(pipeline_run_id: str) -> str:
     """
     Get all pending jobs from the Notion Applications database.
 
@@ -382,7 +382,7 @@ def get_pending_manual_queue(run_batch_id: str) -> str:
     a list of pending manual jobs.
 
     Args:
-        run_batch_id: UUID of the run batch.
+        pipeline_run_id: UUID of the run batch.
 
     Returns:
         JSON string with array of pending job objects.
@@ -447,7 +447,7 @@ def get_pending_manual_queue(run_batch_id: str) -> str:
 
         # Log error event
         _log_event(
-            run_batch_id=run_batch_id,
+            pipeline_run_id=pipeline_run_id,
             level="ERROR",
             event_type="notion_query_failed",
             message=f"Applications DB query failed: {str(e)}",
@@ -457,14 +457,14 @@ def get_pending_manual_queue(run_batch_id: str) -> str:
 
 
 @tool
-def check_notion_connection(run_batch_id: str) -> str:
+def check_notion_connection(pipeline_run_id: str) -> str:
     """
     Check Notion API connection health.
 
     Performs a health check on the Notion API connection and logs the result.
 
     Args:
-        run_batch_id: UUID of the run batch.
+        pipeline_run_id: UUID of the run batch.
 
     Returns:
         JSON string with connection status and bot information.
@@ -477,7 +477,7 @@ def check_notion_connection(run_batch_id: str) -> str:
         # Log event based on connection status
         if health["connected"]:
             _log_event(
-                run_batch_id=run_batch_id,
+                pipeline_run_id=pipeline_run_id,
                 level="INFO",
                 event_type="notion_health_check",
                 message=f"Notion connection healthy: {health['bot_name']}",
@@ -485,7 +485,7 @@ def check_notion_connection(run_batch_id: str) -> str:
             logger.info(f"Notion health check passed: {health['bot_name']}")
         else:
             _log_event(
-                run_batch_id=run_batch_id,
+                pipeline_run_id=pipeline_run_id,
                 level="ERROR",
                 event_type="notion_health_check_failed",
                 message=f"Notion connection failed: {health['error']}",
@@ -499,7 +499,7 @@ def check_notion_connection(run_batch_id: str) -> str:
 
         # Log error event
         _log_event(
-            run_batch_id=run_batch_id,
+            pipeline_run_id=pipeline_run_id,
             level="ERROR",
             event_type="notion_health_check_error",
             message=f"Notion health check error: {str(e)}",

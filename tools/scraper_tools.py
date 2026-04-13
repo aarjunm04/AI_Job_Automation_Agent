@@ -107,7 +107,7 @@ def _with_retry(func, max_retries: int = 3):
 
 
 @tool
-def run_jobspy_scrape(run_batch_id: str) -> str:
+def run_jobspy_scrape(pipeline_run_id: str) -> str:
     """Run JobSpy across all configured search queries.
 
     Reads search_queries from config/user_profile.json via config_loader.
@@ -116,7 +116,7 @@ def run_jobspy_scrape(run_batch_id: str) -> str:
     Fail-soft: one bad query does not abort the rest.
 
     Args:
-        run_batch_id: UUID string for this pipeline run, used for dedup/logging.
+        pipeline_run_id: UUID string for this pipeline run, used for dedup/logging.
 
     Returns:
         JSON string with aggregate stats dict (jobs_found, jobs_upserted, etc.).
@@ -162,7 +162,7 @@ def run_jobspy_scrape(run_batch_id: str) -> str:
     for job in all_jobs:
         try:
             result = _upsert_job_post(
-                run_batch_id=run_batch_id,
+                pipeline_run_id=pipeline_run_id,
                 source_platform=job.get("source", "jobspy"),
                 title=job.get("title", ""),
                 company=job.get("company", ""),
@@ -185,7 +185,7 @@ def run_jobspy_scrape(run_batch_id: str) -> str:
             "jobs_found": len(all_jobs),
             "jobs_upserted": jobs_upserted,
             "queries_run": len(queries),
-            "run_batch_id": run_batch_id,
+            "pipeline_run_id": pipeline_run_id,
             "errors": errors[:10],
         }
     )
@@ -193,13 +193,13 @@ def run_jobspy_scrape(run_batch_id: str) -> str:
 
 @tool
 def run_rest_api_scrape(
-    run_batch_id: str, platforms: str = "remoteok,himalayas"
+    pipeline_run_id: str, platforms: str = "remoteok,himalayas"
 ) -> str:
     """
     Scrape REST API platforms (RemoteOK, Himalayas).
 
     Args:
-        run_batch_id: UUID of the run batch.
+        pipeline_run_id: UUID of the run batch.
         platforms: Comma-separated list of platforms to scrape.
 
     Returns:
@@ -246,7 +246,7 @@ def run_rest_api_scrape(
                 for job in raw_jobs:
                     try:
                         result = _upsert_job_post(
-                            run_batch_id=run_batch_id,
+                            pipeline_run_id=pipeline_run_id,
                             source_platform=platform_name,
                             title=job.get("title", ""),
                             company=job.get("company", ""),
@@ -279,7 +279,7 @@ def run_rest_api_scrape(
         except Exception as e:
             logger.error(f"REST API scrape failed for {platform_name}: {e}")
             _log_event(
-                run_batch_id=run_batch_id,
+                pipeline_run_id=pipeline_run_id,
                 level="ERROR",
                 event_type="rest_api_scrape_failed",
                 message=f"{platform_name} scrape failed: {str(e)}",
@@ -298,13 +298,13 @@ def run_rest_api_scrape(
 
 @tool
 def run_playwright_scrape(
-    run_batch_id: str, platform: str, max_jobs: int = 30
+    pipeline_run_id: str, platform: str, max_jobs: int = 30
 ) -> str:
     """
     Scrape a single platform using Playwright browser automation.
 
     Args:
-        run_batch_id: UUID of the run batch.
+        pipeline_run_id: UUID of the run batch.
         platform: Platform name (wellfound, weworkremotely, nodesk).
         max_jobs: Maximum number of jobs to scrape.
 
@@ -378,7 +378,7 @@ def run_playwright_scrape(
         for job in raw_jobs:
             try:
                 result = _upsert_job_post(
-                    run_batch_id=run_batch_id,
+                    pipeline_run_id=pipeline_run_id,
                     source_platform=platform,
                     title=job.get("title", ""),
                     company=job.get("company", ""),
@@ -416,14 +416,14 @@ def run_playwright_scrape(
 
         if blocked:
             _log_event(
-                run_batch_id=run_batch_id,
+                pipeline_run_id=pipeline_run_id,
                 level="WARNING",
                 event_type="playwright_blocked",
                 message=f"{platform} blocked or CAPTCHA detected: {str(e)}",
             )
         else:
             _log_event(
-                run_batch_id=run_batch_id,
+                pipeline_run_id=pipeline_run_id,
                 level="ERROR",
                 event_type="playwright_scrape_failed",
                 message=f"{platform} scrape failed: {str(e)}",
@@ -445,7 +445,7 @@ def run_playwright_scrape(
 
 @tool
 def run_serpapi_scrape(
-    run_batch_id: str,
+    pipeline_run_id: str,
     query: str = "",
     location: str = "Remote",
     results_wanted: int = 25,
@@ -498,7 +498,7 @@ def run_serpapi_scrape(
     for job in all_raw_jobs:
         try:
             result = _upsert_job_post(
-                run_batch_id=run_batch_id,
+                pipeline_run_id=pipeline_run_id,
                 source_platform="serpapi_google_jobs",
                 title=job.get("title", ""),
                 company=job.get("company_name", ""),
@@ -522,19 +522,19 @@ def run_serpapi_scrape(
             "jobs_found": len(all_raw_jobs),
             "jobs_upserted": jobs_upserted,
             "queries_run": len(queries_to_run),
-            "run_batch_id": run_batch_id,
+            "pipeline_run_id": pipeline_run_id,
             "errors": all_errors[:10],
         }
     )
 
 
 @tool
-def run_safety_net_scrape(run_batch_id: str, current_job_count: int) -> str:
+def run_safety_net_scrape(pipeline_run_id: str, current_job_count: int) -> str:
     """
     Run safety-net scrapers (Nodesk) if minimum job count not met.
 
     Args:
-        run_batch_id: UUID of the run batch.
+        pipeline_run_id: UUID of the run batch.
         current_job_count: Current number of jobs collected.
 
     Returns:
@@ -554,7 +554,7 @@ def run_safety_net_scrape(run_batch_id: str, current_job_count: int) -> str:
             )
 
         _log_event(
-            run_batch_id=run_batch_id,
+            pipeline_run_id=pipeline_run_id,
             level="INFO",
             event_type="safety_net_triggered",
             message=f"Only {current_job_count} jobs found, activating Nodesk",
@@ -571,7 +571,7 @@ def run_safety_net_scrape(run_batch_id: str, current_job_count: int) -> str:
         for platform in platforms:
             try:
                 result = _run_playwright_scrape(
-                    run_batch_id=run_batch_id, platform=platform, max_jobs=30
+                    pipeline_run_id=pipeline_run_id, platform=platform, max_jobs=30
                 )
                 result_data = json.loads(result)
 
@@ -585,7 +585,7 @@ def run_safety_net_scrape(run_batch_id: str, current_job_count: int) -> str:
             except Exception as e:
                 logger.error(f"Safety net scrape failed for {platform}: {e}")
                 _log_event(
-                    run_batch_id=run_batch_id,
+                    pipeline_run_id=pipeline_run_id,
                     level="ERROR",
                     event_type="safety_net_scrape_failed",
                     message=f"{platform} safety net scrape failed: {str(e)}",
@@ -614,12 +614,12 @@ def run_safety_net_scrape(run_batch_id: str, current_job_count: int) -> str:
 
 
 @tool
-def normalise_and_dedup(run_batch_id: str) -> str:
+def normalise_and_dedup(pipeline_run_id: str) -> str:
     """
     Normalize and deduplicate jobs for the current run batch.
 
     Args:
-        run_batch_id: UUID of the run batch.
+        pipeline_run_id: UUID of the run batch.
 
     Returns:
         JSON string with deduplication results.
@@ -634,11 +634,11 @@ def normalise_and_dedup(run_batch_id: str) -> str:
             """
             SELECT url, COUNT(*) as count, ARRAY_AGG(id ORDER BY created_at DESC) as ids
             FROM jobs
-            WHERE run_batch_id = %s
+            WHERE pipeline_run_id = %s
             GROUP BY url
             HAVING COUNT(*) > 1
             """,
-            (run_batch_id,),
+            (pipeline_run_id,),
         )
 
         duplicates = cursor.fetchall()
@@ -662,9 +662,9 @@ def normalise_and_dedup(run_batch_id: str) -> str:
             """
             SELECT COUNT(*) as count
             FROM jobs
-            WHERE run_batch_id = %s
+            WHERE pipeline_run_id = %s
             """,
-            (run_batch_id,),
+            (pipeline_run_id,),
         )
 
         result = cursor.fetchone()
@@ -680,7 +680,7 @@ def normalise_and_dedup(run_batch_id: str) -> str:
             {
                 "duplicates_removed": duplicates_removed,
                 "jobs_remaining": jobs_remaining,
-                "run_batch_id": run_batch_id,
+                "pipeline_run_id": pipeline_run_id,
             }
         )
 
@@ -692,7 +692,7 @@ def normalise_and_dedup(run_batch_id: str) -> str:
             {
                 "duplicates_removed": 0,
                 "jobs_remaining": 0,
-                "run_batch_id": run_batch_id,
+                "pipeline_run_id": pipeline_run_id,
                 "error": str(e),
             }
         )
@@ -702,12 +702,12 @@ def normalise_and_dedup(run_batch_id: str) -> str:
 
 
 @tool
-def get_scrape_summary(run_batch_id: str) -> str:
+def get_scrape_summary(pipeline_run_id: str) -> str:
     """
     Get summary statistics for the current scrape run.
 
     Args:
-        run_batch_id: UUID of the run batch.
+        pipeline_run_id: UUID of the run batch.
 
     Returns:
         JSON string with scrape summary and platform breakdown.
@@ -719,7 +719,7 @@ def get_scrape_summary(run_batch_id: str) -> str:
             conn = get_db_conn()
             if not conn:
                 return json.dumps({
-                    "run_batch_id": run_batch_id,
+                    "pipeline_run_id": pipeline_run_id,
                     "total_jobs": 0,
                     "by_platform": {},
                     "minimum_met": False,
@@ -732,11 +732,11 @@ def get_scrape_summary(run_batch_id: str) -> str:
                 """
                 SELECT source_platform, COUNT(*) as count
                 FROM jobs
-                WHERE run_batch_id = %s
+                WHERE pipeline_run_id = %s
                 GROUP BY source_platform
                 ORDER BY count DESC
                 """,
-                (run_batch_id,),
+                (pipeline_run_id,),
             )
 
             platform_results = cursor.fetchall()
@@ -752,7 +752,7 @@ def get_scrape_summary(run_batch_id: str) -> str:
 
             return json.dumps(
                 {
-                    "run_batch_id": run_batch_id,
+                    "pipeline_run_id": pipeline_run_id,
                     "total_jobs": total_jobs,
                     "by_platform": by_platform,
                     "minimum_met": minimum_met,
@@ -775,7 +775,7 @@ def get_scrape_summary(run_batch_id: str) -> str:
 
     return json.dumps(
         {
-            "run_batch_id": run_batch_id,
+            "pipeline_run_id": pipeline_run_id,
             "total_jobs": 0,
             "by_platform": {},
             "minimum_met": False,

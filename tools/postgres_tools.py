@@ -50,6 +50,16 @@ __all__ = [
 ]
 
 
+def _priority_text(score: int) -> str:
+    """Map legacy integer priority score to canonical text value."""
+    if score <= 3:
+        return "high"
+    elif score <= 6:
+        return "mid"
+    else:
+        return "low"
+
+
 def _sanitize_timestamp(value: Any) -> Optional[datetime]:
     """Return None if value is NaN, inf, or not a valid datetime."""
     if pd.isnull(value):  # handles NaT, NaN, None all at once
@@ -167,7 +177,7 @@ def _fetch_user_config() -> dict[str, Any]:
 
 @tool
 def upsert_job_post(
-    run_batch_id: str,
+    pipeline_run_id: str,
     source_platform: str,
     title: str,
     company: str,
@@ -179,7 +189,7 @@ def upsert_job_post(
     Insert or update a job post in the database.
 
     Args:
-        run_batch_id: UUID of the run batch.
+        pipeline_run_id: UUID of the run batch.
         source_platform: Platform where job was discovered.
         title: Job title.
         company: Company name.
@@ -202,18 +212,18 @@ def upsert_job_post(
                 try:
                     cursor.execute(
                         """
-                        INSERT INTO jobs (run_batch_id, source_platform, title, company, url, location, posted_at)
+                        INSERT INTO jobs (pipeline_run_id, source_platform, title, company, url, location, posted_at)
                         VALUES (%s, %s, %s, %s, %s, %s, %s)
                         ON CONFLICT (url) DO UPDATE SET
                             title = EXCLUDED.title,
                             company = EXCLUDED.company,
                             location = EXCLUDED.location,
                             source_platform = EXCLUDED.source_platform,
-                            run_batch_id = EXCLUDED.run_batch_id
+                            pipeline_run_id = EXCLUDED.pipeline_run_id
                         RETURNING id, (xmax = 0) AS inserted
                         """,
                         (
-                            run_batch_id,
+                            pipeline_run_id,
                             source_platform,
                             title,
                             company,
@@ -348,11 +358,22 @@ def create_application(
 
             cursor.execute(
                 """
-                INSERT INTO applications (job_post_id, resume_id, user_id, mode, status, platform, error_code)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                INSERT INTO applications (job_post_id, resume_id, user_id, mode, status, platform, error_code, notion_synced, notion_synced_at, proof_json)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING id
                 """,
-                (job_post_id, resume_id, user_id, mode, status, platform, error_code_value),
+                (
+                    job_post_id,
+                    resume_id,
+                    user_id,
+                    mode,
+                    status,
+                    platform,
+                    error_code_value,
+                    False,
+                    None,
+                    None,
+                ),
             )
 
             application_result = cursor.fetchone()
@@ -386,7 +407,7 @@ def create_application(
                     VALUES (%s, %s, %s)
                     RETURNING id
                     """,
-                    (application_id, job_post_id, priority),
+                    (application_id, job_post_id, _priority_text(int(priority))),
                 )
 
                 queued_result = cursor.fetchone()
@@ -493,7 +514,7 @@ def create_run_batch(run_index_in_week: int) -> str:
         run_index_in_week: Index of this run in the week (1, 2, or 3).
 
     Returns:
-        JSON string with run_batch_id and run_date.
+        JSON string with pipeline_run_id and run_date.
     """
 
     @_with_retry(max_retries=3)
@@ -505,7 +526,7 @@ def create_run_batch(run_index_in_week: int) -> str:
 
             cursor.execute(
                 """
-                INSERT INTO run_sessions (run_index_in_week)
+                INSERT INTO pipeline_runs (run_index_in_week)
                 VALUES (%s)
                 RETURNING id, run_date
                 """,
@@ -520,11 +541,11 @@ def create_run_batch(run_index_in_week: int) -> str:
                 f"index={run_index_in_week}"
             )
 
-            # FIX 4: run_batches table never written
+            # FIX 4: pipeline_runs table never written
             try:
                 cursor.execute(
                     """
-                    INSERT INTO run_batches (run_batch_id, mode, status, dry_run, started_at, updated_at)
+                    INSERT INTO pipeline_runs (pipeline_run_id, mode, status, dry_run, started_at, updated_at)
                     VALUES (%s, %s, %s, %s, NOW(), NOW())
                     ON CONFLICT DO NOTHING
                     """,
@@ -532,11 +553,11 @@ def create_run_batch(run_index_in_week: int) -> str:
                 )
                 conn.commit()
             except Exception as rb_exc:
-                logger.warning("create_run_batch: run_batches insert failed (non-critical): %s", rb_exc)
+                logger.warning("create_run_batch: pipeline_runs insert failed (non-critical): %s", rb_exc)
 
             return json.dumps(
                 {
-                    "run_batch_id": str(result["id"]),
+                    "pipeline_run_id": str(result["id"]),
                     "run_date": str(result["run_date"]),
                 }
             )
@@ -560,15 +581,15 @@ def create_run_batch(run_index_in_week: int) -> str:
 
 @tool
 def update_run_batch_stats(
-    run_batch_id: str, jobs_discovered: int, jobs_auto_applied: int, jobs_queued: int
+    pipeline_run_id: str, jobs_found: int, jobs_applied: int, jobs_queued: int
 ) -> str:
     """
     Update run batch statistics and close the batch.
 
     Args:
-        run_batch_id: UUID of the run batch.
-        jobs_discovered: Total jobs discovered.
-        jobs_auto_applied: Jobs automatically applied to.
+        pipeline_run_id: UUID of the run batch.
+        jobs_found: Total jobs discovered.
+        jobs_applied: Jobs automatically applied to.
         jobs_queued: Jobs queued for manual review.
 
     Returns:
@@ -584,15 +605,15 @@ def update_run_batch_stats(
 
             cursor.execute(
                 """
-                UPDATE run_sessions
-                SET jobs_discovered = %s,
-                    jobs_auto_applied = %s,
+                UPDATE pipeline_runs
+                SET jobs_found = %s,
+                    jobs_applied = %s,
                     jobs_queued = %s,
                     closed_at = NOW()
                 WHERE id = %s
                 RETURNING id
                 """,
-                (jobs_discovered, jobs_auto_applied, jobs_queued, run_batch_id),
+                (jobs_found, jobs_applied, jobs_queued, pipeline_run_id),
             )
 
             result = cursor.fetchone()
@@ -600,28 +621,28 @@ def update_run_batch_stats(
 
             updated = result is not None
             logger.info(
-                f"Run batch stats updated: id={run_batch_id}, discovered={jobs_discovered}, "
-                f"applied={jobs_auto_applied}, queued={jobs_queued}"
+                f"Run batch stats updated: id={pipeline_run_id}, discovered={jobs_found}, "
+                f"applied={jobs_applied}, queued={jobs_queued}"
             )
 
-            # FIX 4: run_batches table never written
+            # FIX 4: pipeline_runs table never written
             try:
                 cursor.execute(
                     """
-                    UPDATE run_batches
+                    UPDATE pipeline_runs
                     SET jobs_found = %s,
                         jobs_applied = %s,
                         jobs_queued = %s,
                         status = 'completed',
                         completed_at = NOW(),
                         updated_at = NOW()
-                    WHERE run_batch_id = %s
+                    WHERE pipeline_run_id = %s
                     """,
-                    (jobs_discovered, jobs_auto_applied, jobs_queued, run_batch_id),
+                    (jobs_found, jobs_applied, jobs_queued, pipeline_run_id),
                 )
                 conn.commit()
             except Exception as rb_exc:
-                logger.warning("update_run_batch_stats: run_batches update failed (non-critical): %s", rb_exc)
+                logger.warning("update_run_batch_stats: pipeline_runs update failed (non-critical): %s", rb_exc)
 
             return json.dumps({"updated": updated})
 
@@ -646,7 +667,7 @@ def update_run_batch_stats(
 
 @tool
 def log_event(
-    run_batch_id: str,
+    pipeline_run_id: str,
     level: str,
     event_type: str,
     message: str,
@@ -660,7 +681,7 @@ def log_event(
     logging failures from disrupting the pipeline.
 
     Args:
-        run_batch_id: UUID of the run batch.
+        pipeline_run_id: UUID of the run batch.
         level: Log level ('INFO', 'WARNING', 'ERROR', 'CRITICAL').
         event_type: Type of event.
         message: Log message.
@@ -680,11 +701,11 @@ def log_event(
 
         cursor.execute(
             """
-            INSERT INTO audit_logs (run_batch_id, level, event_type, message, application_id, job_post_id)
+            INSERT INTO audit_logs (pipeline_run_id, level, event_type, message, application_id, job_post_id)
             VALUES (%s, %s, %s, %s, %s, %s)
             RETURNING id
             """,
-            (run_batch_id, level, event_type, message, app_id_value, job_id_value),
+            (pipeline_run_id, level, event_type, message, app_id_value, job_id_value),
         )
 
         result = cursor.fetchone()
@@ -824,12 +845,12 @@ def get_platform_config(platform: str) -> str:
 
 
 @tool
-def get_run_stats(run_batch_id: str) -> str:
+def get_run_stats(pipeline_run_id: str) -> str:
     """
     Retrieve run batch statistics including error count.
 
     Args:
-        run_batch_id: UUID of the run batch.
+        pipeline_run_id: UUID of the run batch.
 
     Returns:
         JSON string with run batch stats and error count.
@@ -844,28 +865,28 @@ def get_run_stats(run_batch_id: str) -> str:
 
             cursor.execute(
                 """
-                SELECT id, run_date, run_index_in_week, jobs_discovered,
-                       jobs_auto_applied, jobs_queued, started_at, closed_at
-                FROM run_sessions
+                SELECT id, run_date, run_index_in_week, jobs_found,
+                       jobs_applied, jobs_queued, started_at, closed_at
+                FROM pipeline_runs
                 WHERE id = %s
                 """,
-                (run_batch_id,),
+                (pipeline_run_id,),
             )
 
             batch_result = cursor.fetchone()
 
             if not batch_result:
                 return json.dumps(
-                    {"error": "run_batch_not_found", "detail": f"No run batch with id {run_batch_id}"}
+                    {"error": "run_batch_not_found", "detail": f"No run batch with id {pipeline_run_id}"}
                 )
 
             cursor.execute(
                 """
                 SELECT COUNT(*) AS error_count
                 FROM audit_logs
-                WHERE run_batch_id = %s AND level = 'ERROR'
+                WHERE pipeline_run_id = %s AND level = 'ERROR'
                 """,
-                (run_batch_id,),
+                (pipeline_run_id,),
             )
 
             error_result = cursor.fetchone()
@@ -874,15 +895,15 @@ def get_run_stats(run_batch_id: str) -> str:
                 "id": str(batch_result["id"]),
                 "run_date": str(batch_result["run_date"]),
                 "run_index_in_week": batch_result["run_index_in_week"],
-                "jobs_discovered": batch_result["jobs_discovered"],
-                "jobs_auto_applied": batch_result["jobs_auto_applied"],
+                "jobs_found": batch_result["jobs_found"],
+                "jobs_applied": batch_result["jobs_applied"],
                 "jobs_queued": batch_result["jobs_queued"],
                 "started_at": str(batch_result["started_at"]),
                 "closed_at": str(batch_result["closed_at"]) if batch_result["closed_at"] else None,
                 "error_count": error_result["error_count"],
             }
 
-            logger.info(f"Run stats retrieved: {run_batch_id}")
+            logger.info(f"Run stats retrieved: {pipeline_run_id}")
 
             return json.dumps(stats)
 
@@ -923,14 +944,14 @@ def get_recent_applications(limit: int = 20) -> str:
 
 
 @tool
-def get_pending_manual_queue_db(run_batch_id: str) -> str:
+def get_pending_manual_queue_db(pipeline_run_id: str) -> str:
     """Fetch all manual-queue applications from Postgres for a given run batch.
 
     Queries ``applications JOIN jobs`` where ``applications.status = 'manual_queued'``
-    and ``jobs.run_batch_id`` matches. Returns full job metadata ready for Notion sync.
+    and ``jobs.pipeline_run_id`` matches. Returns full job metadata ready for Notion sync.
 
     Args:
-        run_batch_id: UUID of the run batch to query.
+        pipeline_run_id: UUID of the run batch to query.
 
     Returns:
         JSON string with array of application + job objects ordered by fit_score DESC.
@@ -960,16 +981,16 @@ def get_pending_manual_queue_db(run_batch_id: str) -> str:
             JOIN jobs j           ON j.id = a.job_post_id
             LEFT JOIN job_scores js ON js.job_post_id = j.id
             WHERE a.status = 'manual_queued'
-              AND j.run_batch_id = %s
+              AND j.pipeline_run_id = %s
             ORDER BY js.fit_score DESC NULLS LAST
             """,
-            (run_batch_id,),
+            (pipeline_run_id,),
         )
         rows = [dict(r) for r in cur.fetchall()]
         conn.close()
         logger.info(
             "get_pending_manual_queue_db: found %d rows for batch %s",
-            len(rows), run_batch_id,
+            len(rows), pipeline_run_id,
         )
         return json.dumps(rows, default=str)
     except Exception as exc:
