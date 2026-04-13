@@ -89,14 +89,14 @@ class ScraperAgent:
     removes duplicates, and persists results to Postgres.
     """
 
-    def __init__(self, run_batch_id: str) -> None:
+    def __init__(self, pipeline_run_id: str) -> None:
         """
         Initialize the Scraper Agent.
 
         Args:
-            run_batch_id: UUID of the current run batch.
+            pipeline_run_id: UUID of the current run batch.
         """
-        self.run_batch_id = run_batch_id
+        self.pipeline_run_id = pipeline_run_id
         self.llm_interface = LLMInterface()
         self.llm = self.llm_interface.get_llm("SCRAPER_AGENT")
         self.platform_config = _load_platform_config()
@@ -104,7 +104,7 @@ class ScraperAgent:
         self.logger = logging.getLogger(self.__class__.__name__)
 
         self.logger.info(
-            f"ScraperAgent initialized for run batch: {run_batch_id}"
+            f"ScraperAgent initialized for run batch: {pipeline_run_id}"
         )
 
     def _build_agent(self) -> Agent:
@@ -162,17 +162,17 @@ Execute a comprehensive job discovery run across all configured platforms.
 
 STEP 1: JobSpy Scrape (LinkedIn + Indeed)
 - Call run_jobspy_scrape with:
-  - run_batch_id: {self.run_batch_id}
+  - pipeline_run_id: {self.pipeline_run_id}
   The tool reads all search queries from config/user_profile.json automatically.
 
 STEP 2: REST API Scrape (RemoteOK + Himalayas)
 - Call run_rest_api_scrape with:
-  - run_batch_id: {self.run_batch_id}
+  - pipeline_run_id: {self.pipeline_run_id}
   - platforms: "remoteok,himalayas"
 
 STEP 3: SerpAPI Scrape (Google Jobs)
 - Call run_serpapi_scrape with:
-  - run_batch_id: {self.run_batch_id}
+  - pipeline_run_id: {self.pipeline_run_id}
   - search_query: "{search_query}"
   - location: "Remote"
   - results_wanted: 25
@@ -183,21 +183,21 @@ via HTTP. This step is executed automatically — do NOT call any tool for this.
 The playwright results will be merged into the job pool before normalization.
 
 STEP 5: Check Total Job Count
-- Call get_scrape_summary with run_batch_id: {self.run_batch_id}
+- Call get_scrape_summary with pipeline_run_id: {self.pipeline_run_id}
 - Parse the total_jobs count from the response
 
 STEP 6: Safety Net Activation (Conditional)
 - If total_jobs < {min_jobs}:
   - Call run_safety_net_scrape with:
-    - run_batch_id: {self.run_batch_id}
+    - pipeline_run_id: {self.pipeline_run_id}
     - current_job_count: [total from step 5]
 
 STEP 7: Normalize and Deduplicate
-- Call normalise_and_dedup with run_batch_id: {self.run_batch_id}
+- Call normalise_and_dedup with pipeline_run_id: {self.pipeline_run_id}
 - This removes duplicate URLs and cleans the dataset
 
 STEP 8: Final Summary
-- Call get_scrape_summary with run_batch_id: {self.run_batch_id}
+- Call get_scrape_summary with pipeline_run_id: {self.pipeline_run_id}
 - Return this final summary as your output
 
 IMPORTANT:
@@ -224,7 +224,7 @@ IMPORTANT:
         up to 3 times with exponential back-off on connection errors.
 
         Returns:
-            Dict with keys: run_batch_id, jobs_found, jobs (list[dict]),
+            Dict with keys: pipeline_run_id, jobs_found, jobs (list[dict]),
             platforms_scraped, duration_seconds on success; or
             {success, reason, total_jobs, jobs, aborted} on failure.
         """
@@ -271,7 +271,7 @@ IMPORTANT:
                             "Content-Type": "application/json",
                         },
                         json={
-                            "run_batch_id": self.run_batch_id,
+                            "pipeline_run_id": self.pipeline_run_id,
                             "search_queries": search_queries,
                             "platforms": playwright_platforms,
                             "max_jobs": max_jobs,
@@ -321,7 +321,7 @@ IMPORTANT:
         try:
             self.logger.info("Fallback Step 1: JobSpy Scrape")
             run_jobspy_scrape.run(
-                run_batch_id=self.run_batch_id,
+                pipeline_run_id=self.pipeline_run_id,
             )
         except Exception as e:
             if isinstance(e, (KeyboardInterrupt, SystemExit)):
@@ -331,7 +331,7 @@ IMPORTANT:
         try:
             self.logger.info("Fallback Step 2: REST API Scrape")
             run_rest_api_scrape.run(
-                run_batch_id=self.run_batch_id,
+                pipeline_run_id=self.pipeline_run_id,
                 platforms="remoteok,himalayas"
             )
         except Exception as e:
@@ -340,7 +340,7 @@ IMPORTANT:
         try:
             self.logger.info("Fallback Step 3: SerpAPI Scrape")
             run_serpapi_scrape.run(
-                run_batch_id=self.run_batch_id,
+                pipeline_run_id=self.pipeline_run_id,
                 query=search_query,
                 location="Remote",
                 results_wanted=25
@@ -360,14 +360,14 @@ IMPORTANT:
 
         try:
             self.logger.info("Fallback Step 5: Check Total Job Count")
-            summary_str = get_scrape_summary.run(run_batch_id=self.run_batch_id)
+            summary_str = get_scrape_summary.run(pipeline_run_id=self.pipeline_run_id)
             summary = json.loads(summary_str)
             total_jobs = summary.get("total_jobs", 0)
 
             if total_jobs < min_jobs:
                 self.logger.info("Fallback Step 6: Safety Net Activation")
                 run_safety_net_scrape.run(
-                    run_batch_id=self.run_batch_id,
+                    pipeline_run_id=self.pipeline_run_id,
                     current_job_count=total_jobs
                 )
         except Exception as e:
@@ -375,13 +375,13 @@ IMPORTANT:
 
         try:
             self.logger.info("Fallback Step 7: Normalize and Deduplicate")
-            normalise_and_dedup.run(run_batch_id=self.run_batch_id)
+            normalise_and_dedup.run(pipeline_run_id=self.pipeline_run_id)
         except Exception as e:
             self.logger.error(f"Fallback Deduplication failed: {e}")
 
         try:
             self.logger.info("Fallback Step 8: Final Summary")
-            final_summary_str = get_scrape_summary.run(run_batch_id=self.run_batch_id)
+            final_summary_str = get_scrape_summary.run(pipeline_run_id=self.pipeline_run_id)
             final_summary = json.loads(final_summary_str)
         except Exception as e:
             self.logger.error(f"Fallback Final Summary failed: {e}")
@@ -403,19 +403,19 @@ IMPORTANT:
         try:
             # Log run start
             log_event(
-                run_batch_id=self.run_batch_id,
+                pipeline_run_id=self.pipeline_run_id,
                 level="INFO",
                 event_type="scraper_run_start",
-                message=f"ScraperAgent run started for batch {self.run_batch_id}",
+                message=f"ScraperAgent run started for batch {self.pipeline_run_id}",
             )
 
-            self.logger.info(f"Starting scraper run for batch: {self.run_batch_id}")
+            self.logger.info(f"Starting scraper run for batch: {self.pipeline_run_id}")
 
             # Check monthly budget + xAI run cap before proceeding
-            budget_check = check_monthly_budget(run_batch_id=self.run_batch_id)
+            budget_check = check_monthly_budget(pipeline_run_id=self.pipeline_run_id)
             budget_result = json.loads(budget_check)
 
-            xai_check = check_xai_run_cap(run_batch_id=self.run_batch_id)
+            xai_check = check_xai_run_cap(pipeline_run_id=self.pipeline_run_id)
             xai_result = json.loads(xai_check)
 
             budget_abort = budget_result.get("abort", False)
@@ -434,7 +434,7 @@ IMPORTANT:
                     "Bypassing LLM orchestration and using fallback scrape sequence."
                 )
                 log_event(
-                    run_batch_id=self.run_batch_id,
+                    pipeline_run_id=self.pipeline_run_id,
                     level="WARNING",
                     event_type="scraper_budget_cap",
                     message=f"Budget cap hit {abort_reason}. Using hardcoded scrape fallback.",
@@ -463,7 +463,7 @@ IMPORTANT:
                         "Bypassing LLM orchestration and using fallback scrape sequence."
                     )
                     log_event(
-                        run_batch_id=self.run_batch_id,
+                        pipeline_run_id=self.pipeline_run_id,
                         level="WARNING",
                         event_type="scraper_llm_failure",
                         message=f"LLM failed {llm_e}. Using hardcoded scrape fallback.",
@@ -489,20 +489,20 @@ IMPORTANT:
             by_platform = result_data.get("by_platform", {})
             
             # Calculate jobs by category
-            jobs_auto_applied = 0  # Will be set by Apply Agent later
+            jobs_applied = 0  # Will be set by Apply Agent later
             jobs_queued = 0  # Will be set by Analyser Agent later
 
             # Update run batch stats
             update_run_batch_stats.run(
-                run_batch_id=self.run_batch_id,
-                jobs_discovered=total_jobs,
-                jobs_auto_applied=jobs_auto_applied,
+                pipeline_run_id=self.pipeline_run_id,
+                jobs_found=total_jobs,
+                jobs_applied=jobs_applied,
                 jobs_queued=jobs_queued,
             )
 
             # Log completion
             log_event(
-                run_batch_id=self.run_batch_id,
+                pipeline_run_id=self.pipeline_run_id,
                 level="INFO",
                 event_type="scraper_run_complete",
                 message=f"Scraper complete — {total_jobs} jobs discovered",
@@ -510,7 +510,7 @@ IMPORTANT:
 
             return {
                 "success": True,
-                "run_batch_id": self.run_batch_id,
+                "pipeline_run_id": self.pipeline_run_id,
                 "total_jobs": total_jobs,
                 "by_platform": by_platform,
                 "safety_net_triggered": result_data.get("safety_net_triggered", False),
@@ -523,7 +523,7 @@ IMPORTANT:
 
             # Log critical error
             log_event(
-                run_batch_id=self.run_batch_id,
+                pipeline_run_id=self.pipeline_run_id,
                 level="ERROR",
                 event_type="scraper_phase_exception",
                 message=f"Scraper run phase exception — detail: {str(e)}",

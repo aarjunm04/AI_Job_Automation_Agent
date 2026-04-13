@@ -2,7 +2,7 @@
 Analyser Agent for AI Job Application Agent.
 
 The most logic-heavy agent in the pipeline.  Receives all job_posts discovered
-by the Scraper Agent for the current ``run_batch_id``, scores each job against
+by the Scraper Agent for the current ``pipeline_run_id``, scores each job against
 15 resume variants using RAG, makes eligibility and routing decisions, and
 writes scores + routes back to Postgres.
 
@@ -29,6 +29,7 @@ import re
 import logging
 import os
 import time
+from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from itertools import islice
 from typing import Any, Optional
@@ -117,16 +118,16 @@ class AnalyserAgent:
     manual-review / skip, and persists results to Postgres.
     """
 
-    def __init__(self, run_batch_id: str, user_id: str) -> None:
+    def __init__(self, pipeline_run_id: str, user_id: str) -> None:
         """
         Initialise the Analyser Agent for a given run batch.
 
         Args:
-            run_batch_id: UUID of the current run batch (from ``run_batches``
+            pipeline_run_id: UUID of the current run batch (from ``pipeline_runs``
                 table), handed off by the Scraper Agent via the Master Agent.
             user_id: UUID of the candidate user (from ``users`` table).
         """
-        self.run_batch_id = run_batch_id
+        self.pipeline_run_id = pipeline_run_id
         self.user_id = user_id
         self.llm_interface = LLMInterface()
         self.llm = self.llm_interface.get_llm("ANALYSER_AGENT")
@@ -137,8 +138,8 @@ class AnalyserAgent:
         self._fallback_level: int = 0
 
         self.logger.info(
-            "AnalyserAgent initialised — run_batch_id=%s user_id=%s",
-            run_batch_id,
+            "AnalyserAgent initialised — pipeline_run_id=%s user_id=%s",
+            pipeline_run_id,
             user_id,
         )
 
@@ -179,18 +180,18 @@ class AnalyserAgent:
                         url,
                         location
                     FROM jobs
-                    WHERE run_batch_id = %s
+                    WHERE pipeline_run_id = %s
                       AND id NOT IN (SELECT job_post_id FROM job_scores)
                     ORDER BY created_at ASC
                     """,
-                    (self.run_batch_id,),
+                    (self.pipeline_run_id,),
                 )
                 rows = cursor.fetchall()
                 jobs: list[dict[str, Any]] = [dict(row) for row in rows]
                 self.logger.info(
                     "_get_jobs_for_run: fetched %d jobs for batch %s",
                     len(jobs),
-                    self.run_batch_id,
+                    self.pipeline_run_id,
                 )
                 
                 # BUG-07: Deduplication on (company.lower().strip(), title.lower().strip())
@@ -341,17 +342,28 @@ class AnalyserAgent:
                     _conn = get_db_conn()  # S2.4: uses get_db_conn() from utils.db_utils
                     _is_local = True
                 cursor = _conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+                resume_used_value: Optional[str] = None
+                try:
+                    resume_used_value = (
+                        str(reasons_json.get("resume_suggested"))
+                        if reasons_json.get("resume_suggested") is not None
+                        else None
+                    )
+                except Exception:  # noqa: BLE001
+                    resume_used_value = None
                 # S5.2: table name = job_scores (schema-verified), ON CONFLICT added
                 cursor.execute(
                     """
                     INSERT INTO job_scores
-                        (job_post_id, resume_id, fit_score, eligibility_pass, reasons_json)
-                    VALUES (%s, %s, %s, %s, %s)
+                        (job_post_id, resume_id, fit_score, eligibility_pass, reasons_json, routed_at, resume_used)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (job_post_id) DO UPDATE SET
                         resume_id = EXCLUDED.resume_id,
                         fit_score = EXCLUDED.fit_score,
                         eligibility_pass = EXCLUDED.eligibility_pass,
                         reasons_json = EXCLUDED.reasons_json,
+                        routed_at = EXCLUDED.routed_at,
+                        resume_used = EXCLUDED.resume_used,
                         scored_at = NOW()
                     RETURNING id
                     """,
@@ -361,6 +373,8 @@ class AnalyserAgent:
                         fit_score,
                         eligibility_pass,
                         json.dumps(reasons_json),
+                        datetime.utcnow(),
+                        resume_used_value,
                     ),
                 )
                 result = cursor.fetchone()
@@ -648,7 +662,7 @@ class AnalyserAgent:
         prompt: str,
         purpose: str = "analyser_job_scoring",
         max_tokens: int = 2048,
-        run_batch_id: Optional[str] = None,
+        pipeline_run_id: Optional[str] = None,
     ) -> str:
         """Call the configured LLM provider chain with exponential backoff.
 
@@ -675,7 +689,7 @@ class AnalyserAgent:
                     prompt=prompt,
                     max_tokens=max_tokens,
                     purpose=purpose,
-                    run_batch_id=run_batch_id or self.run_batch_id,
+                    pipeline_run_id=pipeline_run_id or self.pipeline_run_id,
                 )
                 if attempt > 0:
                     self.logger.info(
@@ -759,7 +773,7 @@ class AnalyserAgent:
                 response_text = await self._call_llm(
                     prompt=prompt,
                     purpose="analyser_job_scoring_individual",
-                    run_batch_id=self.run_batch_id,
+                    pipeline_run_id=self.pipeline_run_id,
                 )
                 score = json.loads(response_text)
                 score["job_index"] = idx
@@ -895,7 +909,7 @@ class AnalyserAgent:
             response_text: str = await self._call_llm(
                 prompt=prompt,
                 purpose="analyser_job_scoring_batch",
-                run_batch_id=self.run_batch_id,
+                pipeline_run_id=self.pipeline_run_id,
             )
             scores = json.loads(response_text)
             if not isinstance(scores, list):
@@ -942,7 +956,7 @@ class AnalyserAgent:
                 response_text: str = await self._call_llm(
                     prompt=batch_prompt,
                     purpose="analyser_job_scoring_batch",
-                    run_batch_id=self.run_batch_id,
+                    pipeline_run_id=self.pipeline_run_id,
                 )
                 scores = json.loads(response_text)
                 if not isinstance(scores, list):
@@ -1062,7 +1076,7 @@ class AnalyserAgent:
                 agent_type="AnalyserAgent",
                 from_provider=failed_provider,
                 to_provider=str(to_model),
-                run_batch_id=self.run_batch_id,
+                pipeline_run_id=self.pipeline_run_id,
                 fallback_level=1,
                 reason=f"Primary provider {failed_provider} failed",
             )
@@ -1079,7 +1093,7 @@ class AnalyserAgent:
                 agent_type="AnalyserAgent",
                 from_provider=failed_provider,
                 to_provider=str(to_model),
-                run_batch_id=self.run_batch_id,
+                pipeline_run_id=self.pipeline_run_id,
                 fallback_level=2,
                 reason=f"Fallback-1 provider {failed_provider} failed",
             )
@@ -1109,7 +1123,7 @@ class AnalyserAgent:
     async def _call_with_fallback(
         self,
         prompt: str,
-        run_batch_id: str,
+        pipeline_run_id: str,
         purpose: str = "analyser_fallback_call"
     ) -> str:
         """
@@ -1219,7 +1233,7 @@ class AnalyserAgent:
 
         description = f"""
 You are scoring {len(jobs)} job posts for the current run batch.
-run_batch_id: {self.run_batch_id}
+pipeline_run_id: {self.pipeline_run_id}
 
 SCORING INSTRUCTIONS
 ====================
@@ -1245,7 +1259,7 @@ SCORING INSTRUCTIONS
    - fit_score >= 0.90           → route = "manual" (FORCE — never auto)
 
 4. AFTER every 10 jobs call `check_xai_run_cap` with:
-   - run_batch_id: {self.run_batch_id}
+   - pipeline_run_id: {self.pipeline_run_id}
    If the response JSON contains "abort": true — STOP immediately and
    return partial results with "budget_aborted": true.
 
@@ -1254,7 +1268,7 @@ SCORING INSTRUCTIONS
    - provider: "xai"
    - cost_usd: [estimated cost]
    - agent_type: "AnalyserAgent"
-   - run_batch_id: {self.run_batch_id}
+   - pipeline_run_id: {self.pipeline_run_id}
    Budget hard cap per run: ${run_xai_cap}
 
 6. RETURN a complete routing manifest as a single JSON object (no
@@ -1289,7 +1303,7 @@ JOB LIST (JSON)
 
         Lifecycle:
         1. Log run start.
-        2. Fetch all job posts for ``run_batch_id`` from Postgres.
+        2. Fetch all job posts for ``pipeline_run_id`` from Postgres.
         3. Early-return if no jobs found.
         4. Build CrewAI agent + task.
         5. Execute crew (with LLM fallback on provider failure).
@@ -1299,7 +1313,7 @@ JOB LIST (JSON)
         9. Return structured result dict.
 
         Returns:
-            Dict with keys: ``success``, ``run_batch_id``, ``total_scored``,
+            Dict with keys: ``success``, ``pipeline_run_id``, ``total_scored``,
             ``auto_route``, ``manual_route``, ``skipped``,
             ``budget_aborted``, ``routing_manifest``.
             On failure: ``{"success": False, "error": str}``.
@@ -1309,19 +1323,19 @@ JOB LIST (JSON)
             # Step 1: log start
             # ----------------------------------------------------------
             _log_event(
-                run_batch_id=self.run_batch_id,
+                pipeline_run_id=self.pipeline_run_id,
                 level="INFO",
                 event_type="analyser_run_start",
                 message="Analyser Agent starting scoring pass",
             )
             self.logger.info(
-                "AnalyserAgent.run: starting pass for batch %s", self.run_batch_id
+                "AnalyserAgent.run: starting pass for batch %s", self.pipeline_run_id
             )
 
             # ----------------------------------------------------------
             # S4.4: Budget gate — check ONCE before the job loop
             # ----------------------------------------------------------
-            _budget_check_raw: str = check_xai_run_cap(run_batch_id=self.run_batch_id)
+            _budget_check_raw: str = check_xai_run_cap(pipeline_run_id=self.pipeline_run_id)
             try:
                 _budget_check: dict = json.loads(_budget_check_raw)
             except (json.JSONDecodeError, TypeError, ValueError):
@@ -1330,7 +1344,7 @@ JOB LIST (JSON)
             if not _budget_ok:
                 self.logger.warning(
                     "xAI budget cap reached — all jobs routed manual_queue run_id=%s",
-                    self.run_batch_id,
+                    self.pipeline_run_id,
                 )
 
             # ----------------------------------------------------------
@@ -1344,10 +1358,10 @@ JOB LIST (JSON)
             if not jobs:
                 self.logger.info(
                     "AnalyserAgent.run: no jobs found for batch %s — returning early",
-                    self.run_batch_id,
+                    self.pipeline_run_id,
                 )
                 _log_event(
-                    run_batch_id=self.run_batch_id,
+                    pipeline_run_id=self.pipeline_run_id,
                     level="INFO",
                     event_type="analyser_run_complete",
                     message="Analyser pass complete — 0 jobs found",
@@ -1461,7 +1475,7 @@ JOB LIST (JSON)
                         }
                         # S3.4: payload with session_id, correct field names, env-driven top_k
                         rag_payload: dict[str, Any] = {
-                            "session_id": str(self.run_batch_id),
+                            "session_id": str(self.pipeline_run_id),
                             "job_description": str(job.get("description") or job.get("title", "")),
                             "query": str(job.get("title", "")),
                             "top_k": int(os.getenv("RAG_TOP_K", "3")),
@@ -1606,7 +1620,6 @@ JOB LIST (JSON)
                 }
 
                 resume_id: Optional[str] = self._resolve_resume_id(resume_suggested)
-
                 auto_app_written: Optional[str] = None
 
                 _shared_conn = None
@@ -1692,7 +1705,7 @@ JOB LIST (JSON)
             )
             self.logger.info("AnalyserAgent.run: %s", summary_msg)
             _log_event(
-                run_batch_id=self.run_batch_id,
+                pipeline_run_id=self.pipeline_run_id,
                 level="INFO",
                 event_type="analyser_run_complete",
                 message=summary_msg,
@@ -1703,7 +1716,7 @@ JOB LIST (JSON)
             # ----------------------------------------------------------
             return {
                 "success": True,
-                "run_batch_id": self.run_batch_id,
+                "pipeline_run_id": self.pipeline_run_id,
                 "total_scored": total_scored,
                 "auto_route": auto_count,
                 "manual_route": manual_count,
@@ -1720,7 +1733,7 @@ JOB LIST (JSON)
                 getattr(record_agent_error, "run", record_agent_error)(
                     agent_type="AnalyserAgent",
                     error_message=str(exc),
-                    run_batch_id=self.run_batch_id,
+                    pipeline_run_id=self.pipeline_run_id,
                     error_code="ANALYSER_UNHANDLED_EXCEPTION",
                 )
             except Exception:  # noqa: BLE001
@@ -1785,7 +1798,7 @@ JOB LIST (JSON)
         Return the routing manifest for all eligibility-passing jobs in this
         run batch.
 
-        Queries Postgres for all job_posts in the current ``run_batch_id``
+        Queries Postgres for all job_posts in the current ``pipeline_run_id``
         where the corresponding ``job_scores`` row has ``eligibility_pass =
         TRUE``, ordered by ``fit_score DESC`` so the Apply Agent processes
         highest-confidence jobs first.
@@ -1819,11 +1832,11 @@ JOB LIST (JSON)
                         js.eligibility_pass
                     FROM jobs jp
                     JOIN job_scores js ON js.job_post_id = jp.id
-                    WHERE jp.run_batch_id = %s
+                    WHERE jp.pipeline_run_id = %s
                       AND js.eligibility_pass = TRUE
                     ORDER BY js.fit_score DESC
                     """,
-                    (self.run_batch_id,),
+                    (self.pipeline_run_id,),
                 )
                 rows = cursor.fetchall()
                 manifest: list[dict[str, Any]] = []
@@ -1843,7 +1856,7 @@ JOB LIST (JSON)
                 self.logger.info(
                     "get_routing_manifest: returning %d eligible jobs for batch %s",
                     len(manifest),
-                    self.run_batch_id,
+                    self.pipeline_run_id,
                 )
                 return manifest
 
@@ -1972,11 +1985,11 @@ JOB LIST (JSON)
                         audit_cursor.execute(
                             """
                             INSERT INTO audit_logs
-                                (run_batch_id, job_post_id, level, event_type, message)
+                                (pipeline_run_id, job_post_id, level, event_type, message)
                             VALUES (%s, %s, %s, %s, %s)
                             """,
                             (
-                                self.run_batch_id,
+                                self.pipeline_run_id,
                                 job_post_id,
                                 "WARNING",
                                 "manual_queue_persist_silent",
@@ -2020,11 +2033,11 @@ JOB LIST (JSON)
                         audit_cursor.execute(
                             """
                             INSERT INTO audit_logs
-                                (run_batch_id, job_post_id, level, event_type, message)
+                                (pipeline_run_id, job_post_id, level, event_type, message)
                             VALUES (%s, %s, %s, %s, %s)
                             """,
                             (
-                                self.run_batch_id,
+                                self.pipeline_run_id,
                                 job_post_id,
                                 "ERROR",
                                 "manual_queue_persist_failure",

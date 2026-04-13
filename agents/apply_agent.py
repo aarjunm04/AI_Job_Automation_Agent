@@ -51,6 +51,7 @@ from tools.postgres_tools import (
     log_event,
     _log_event,
     get_platform_config,
+    _priority_text,
 )
 from tools.budget_tools import (
     check_xai_run_cap,
@@ -108,7 +109,7 @@ class ApplyAgent:
     """CrewAI Apply Agent — autonomous job application executor.
 
     Loads auto-route jobs directly from Postgres for the given
-    ``run_batch_id``, runs safety checks on every job, executes
+    ``pipeline_run_id``, runs safety checks on every job, executes
     Playwright-powered form filling, captures proof-of-submission,
     re-routes failures to the manual queue, and enforces the xAI cost
     cap mid-run.
@@ -117,7 +118,7 @@ class ApplyAgent:
     manifest objects are accepted from callers.
 
     Attributes:
-        run_batch_id: UUID of the current run batch.
+        pipeline_run_id: UUID of the current run batch.
         user_id: UUID of the candidate user.
         routing_manifest: List of auto-route job dicts loaded from Postgres
             (``jobs JOIN job_scores WHERE route = 'auto'``).
@@ -129,20 +130,20 @@ class ApplyAgent:
 
     def __init__(
         self,
-        run_batch_id: str,
+        pipeline_run_id: str,
         user_id: str,
     ) -> None:
         """Initialise the Apply Agent.
 
         Loads the routing manifest (auto-route jobs) directly from
-        Postgres using ``run_batch_id``.  No in-memory manifest is
+        Postgres using ``pipeline_run_id``.  No in-memory manifest is
         accepted — all state passes via the database.
 
         Args:
-            run_batch_id: UUID of the current run batch.
+            pipeline_run_id: UUID of the current run batch.
             user_id: UUID of the candidate user.
         """
-        self.run_batch_id: str = run_batch_id
+        self.pipeline_run_id: str = pipeline_run_id
         self.user_id: str = user_id
 
         self.llm_interface: LLMInterface = LLMInterface()
@@ -192,8 +193,8 @@ class ApplyAgent:
         )
 
         self.logger.info(
-            "ApplyAgent initialised — run_batch_id=%s user_id=%s jobs=%d",
-            run_batch_id,
+            "ApplyAgent initialised — pipeline_run_id=%s user_id=%s jobs=%d",
+            pipeline_run_id,
             user_id,
             len(self.routing_manifest),
         )
@@ -238,12 +239,12 @@ class ApplyAgent:
                         js.eligibility_pass
                     FROM jobs jp
 	                    JOIN job_scores js ON js.job_post_id = jp.id
-	                    WHERE jp.run_batch_id = %s
+	                    WHERE jp.pipeline_run_id = %s
 	                      AND js.eligibility_pass = TRUE
 	                      AND js.fit_score >= 0.60
 	                    ORDER BY js.fit_score DESC
 	                    """,
-	                    (self.run_batch_id,),
+	                    (self.pipeline_run_id,),
 	                )
                 rows = cursor.fetchall()
                 manifest: List[Dict[str, Any]] = []
@@ -277,7 +278,7 @@ class ApplyAgent:
                     "_load_routing_manifest: loaded %d auto-route jobs "
                     "for batch %s",
                     len(manifest),
-                    self.run_batch_id,
+                    self.pipeline_run_id,
                 )
                 return manifest
             except Exception as exc:  # noqa: BLE001
@@ -339,7 +340,7 @@ class ApplyAgent:
 
         Queries the ``applications`` table joined with ``jobs`` to count
         the number of successfully applied applications grouped by
-        ``source_platform`` for the current ``run_batch_id``.
+        ``source_platform`` for the current ``pipeline_run_id``.
         Used by ``_pre_apply_safety_check`` to enforce per-platform
         rate limits (``max_per_run``).
 
@@ -360,11 +361,11 @@ class ApplyAgent:
                     SELECT jp.source_platform, COUNT(*) AS cnt
                     FROM applications a
                     JOIN jobs jp ON jp.id = a.job_post_id
-                    WHERE jp.run_batch_id = %s
+                    WHERE jp.pipeline_run_id = %s
                       AND a.status = 'applied'
                     GROUP BY jp.source_platform
                     """,
-                    (self.run_batch_id,),
+                    (self.pipeline_run_id,),
                 )
                 rows = cursor.fetchall()
                 return {
@@ -463,8 +464,9 @@ class ApplyAgent:
                     cur.execute(
                         """INSERT INTO applications
                            (job_post_id, resume_id, user_id, mode,
-                            status, platform, error_code)
-                           VALUES (%s, %s, %s, %s, %s, %s, %s)
+                            status, platform, error_code, notion_synced,
+                            notion_synced_at, proof_json)
+                           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                            ON CONFLICT DO NOTHING
                            RETURNING id""",
                         (
@@ -475,6 +477,9 @@ class ApplyAgent:
                             status,
                             self._detect_ats(job.get("url", "")),
                             error_code,
+                            False,
+                            None,
+                            None,
                         ),
                     )
                     row = cur.fetchone()
@@ -489,7 +494,7 @@ class ApplyAgent:
                             (
                                 application_id,
                                 job.get("id", job.get("job_post_id", "")),
-                                5,
+                                _priority_text(5),
                                 error_code,
                             ),
                         )
@@ -519,7 +524,7 @@ class ApplyAgent:
 
         Checks:
             1. **Budget gate** — ``check_xai_run_cap`` abort flag.
-            2. **Platform limit** — ``max_per_run`` from ``config_limits``.
+            2. **Platform limit** — ``max_per_run`` from ``system_config``.
             3. **Resume exists** — fall back to ``default_resume`` if missing.
             4. **URL valid** — must start with ``http``.
 
@@ -533,7 +538,7 @@ class ApplyAgent:
         # Check 1 — Budget gate
         try:
             cap_raw: str = check_xai_run_cap(
-                run_batch_id=self.run_batch_id
+                pipeline_run_id=self.pipeline_run_id
             )
             cap_result: Dict[str, Any] = {}
             try:
@@ -722,7 +727,7 @@ class ApplyAgent:
                 job_url=job_url,
                 job_post_id=job_post_id,
                 resume_filename=resume_to_use,
-                run_batch_id=self.run_batch_id,
+                pipeline_run_id=self.pipeline_run_id,
                 user_id=self.user_id,
                 ats_platform=ats,
             )
@@ -743,7 +748,7 @@ class ApplyAgent:
                 # treat as a real application.
                 self._applied_count += 1
                 _log_event(
-                    run_batch_id=self.run_batch_id,
+                    pipeline_run_id=self.pipeline_run_id,
                     level="INFO",
                     event_type="dry_run_skip",
                     message=(
@@ -761,7 +766,7 @@ class ApplyAgent:
             elif result.get("applied", False):
                 self._applied_count += 1
                 _log_event(
-                    run_batch_id=self.run_batch_id,
+                    pipeline_run_id=self.pipeline_run_id,
                     level="INFO",
                     event_type="job_applied",
                     message=(
@@ -786,7 +791,7 @@ class ApplyAgent:
             else:
                 self._failed_count += 1
                 _log_event(
-                    run_batch_id=self.run_batch_id,
+                    pipeline_run_id=self.pipeline_run_id,
                     level="ERROR",
                     event_type="job_apply_failed",
                     message=(
@@ -822,7 +827,7 @@ class ApplyAgent:
                 _record_agent_error(
                     agent_type="ApplyAgent",
                     error_message=str(exc),
-                    run_batch_id=self.run_batch_id,
+                    pipeline_run_id=self.pipeline_run_id,
                     error_code="SINGLE_JOB_EXCEPTION",
                     job_post_id=job_post_id,
                 )
@@ -890,7 +895,7 @@ class ApplyAgent:
                 )
 
             _log_event(
-                run_batch_id=self.run_batch_id,
+                pipeline_run_id=self.pipeline_run_id,
                 level="WARNING",
                 event_type="job_rerouted_to_manual",
                 message=(
@@ -941,7 +946,7 @@ class ApplyAgent:
                 agent_type="ApplyAgent",
                 from_provider=failed_provider,
                 to_provider=str(to_model),
-                run_batch_id=self.run_batch_id,
+                pipeline_run_id=self.pipeline_run_id,
                 fallback_level=1,
                 reason=f"Primary provider {failed_provider} failed",
             )
@@ -959,7 +964,7 @@ class ApplyAgent:
                 agent_type="ApplyAgent",
                 from_provider=failed_provider,
                 to_provider=str(to_model),
-                run_batch_id=self.run_batch_id,
+                pipeline_run_id=self.pipeline_run_id,
                 fallback_level=2,
                 reason=f"Fallback-1 provider {failed_provider} failed",
             )
@@ -1199,7 +1204,7 @@ class ApplyAgent:
 
         description: str = f"""
 You are applying to {len(self.routing_manifest)} auto-routed jobs for the current run batch.
-run_batch_id: {self.run_batch_id}
+pipeline_run_id: {self.pipeline_run_id}
 user_id: {self.user_id}
 dry_run: {str(self.dry_run).lower()}
 
@@ -1232,7 +1237,7 @@ APPLICATION INSTRUCTIONS
    the job's resume_suggested value as resume_filename.
 
 6. After EVERY 5 applications, call check_xai_run_cap with
-   run_batch_id={self.run_batch_id}. If the response contains
+   pipeline_run_id={self.pipeline_run_id}. If the response contains
    "abort": true — STOP immediately and re-queue ALL remaining jobs
    to the manual queue via update_application_status.
 
@@ -1243,7 +1248,7 @@ APPLICATION INSTRUCTIONS
    re-route to manual queue via update_application_status.
 
 9. After processing ALL jobs, call get_apply_summary with
-   run_batch_id={self.run_batch_id} for final counts.
+   pipeline_run_id={self.pipeline_run_id} for final counts.
 
 10. Return a complete application manifest.
 
@@ -1287,7 +1292,7 @@ ROUTING MANIFEST (JSON)
 
         return (
             f"SESSION CONTEXT\n"
-            f"  run_batch_id : {self.run_batch_id}\n"
+            f"  pipeline_run_id : {self.pipeline_run_id}\n"
             f"  user_id      : {self.user_id}\n"
             f"  dry_run      : {dry_run_str}\n"
             f"\n"
@@ -1303,14 +1308,14 @@ ROUTING MANIFEST (JSON)
             f"\n"
             f"1. Call detect_ats_platform with:\n"
             f"     job_url=\"{job['url']}\"\n"
-            f"     run_batch_id=\"{self.run_batch_id}\"\n"
+            f"     pipeline_run_id=\"{self.pipeline_run_id}\"\n"
             f"   Save the returned ats_type value for use in step 2.\n"
             f"\n"
             f"2. Call fill_standard_form with EXACTLY these arguments — no others:\n"
             f"     job_url=\"{job['url']}\"\n"
             f"     job_post_id=\"{job['job_post_id']}\"\n"
             f"     resume_filename=\"{job['resume_suggested']}\"\n"
-            f"     run_batch_id=\"{self.run_batch_id}\"\n"
+            f"     pipeline_run_id=\"{self.pipeline_run_id}\"\n"
             f"     user_id=\"{self.user_id}\"\n"
             f"     ats_platform=<ats_type returned in step 1>\n"
             f"     dry_run={dry_run_str}\n"
@@ -1319,7 +1324,7 @@ ROUTING MANIFEST (JSON)
             f"   will be discarded and the job will be marked failed.\n"
             f"\n"
             f"3. Call get_apply_summary with:\n"
-            f"     run_batch_id=\"{self.run_batch_id}\"\n"
+            f"     pipeline_run_id=\"{self.pipeline_run_id}\"\n"
             f"   Use its output to populate your Final Answer.\n"
             f"\n"
             f"4. Write Final Answer as a JSON object with EXACTLY these keys:\n"
@@ -1600,7 +1605,7 @@ ROUTING MANIFEST (JSON)
             # Step 1: log run start
             # ----------------------------------------------------------
             _log_event(
-                run_batch_id=self.run_batch_id,
+                pipeline_run_id=self.pipeline_run_id,
                 level="INFO",
                 event_type="apply_run_start",
                 message=(
@@ -1637,7 +1642,7 @@ ROUTING MANIFEST (JSON)
                 from tools.budget_tools import check_monthly_budget
 
                 budget_raw: str = check_monthly_budget(
-                    run_batch_id=self.run_batch_id
+                    pipeline_run_id=self.pipeline_run_id
                 )
                 budget_result: Dict[str, Any] = {}
                 try:
@@ -1663,7 +1668,7 @@ ROUTING MANIFEST (JSON)
                         )
                     return {
                         "success": True,
-                        "run_batch_id": self.run_batch_id,
+                        "pipeline_run_id": self.pipeline_run_id,
                         "total_attempted": 0,
                         "applied": 0,
                         "failed": 0,
@@ -1700,7 +1705,7 @@ ROUTING MANIFEST (JSON)
                 # Budget check every 5 jobs (uses existing check_xai_run_cap import)
                 if idx % 5 == 0:
                     try:
-                        cap_result = check_xai_run_cap(run_batch_id=self.run_batch_id)
+                        cap_result = check_xai_run_cap(pipeline_run_id=self.pipeline_run_id)
                         if isinstance(cap_result, str):
                             cap_result = json.loads(cap_result)
                         if cap_result.get("abort"):
@@ -1805,7 +1810,7 @@ ROUTING MANIFEST (JSON)
             cost_summary: Dict[str, Any] = {}
             try:
                 cost_raw: str = get_cost_summary(
-                    run_batch_id=self.run_batch_id
+                    pipeline_run_id=self.pipeline_run_id
                 )
                 cost_summary = json.loads(cost_raw)
             except Exception as cost_exc:  # noqa: BLE001
@@ -1823,7 +1828,7 @@ ROUTING MANIFEST (JSON)
                 f"Budget_aborted={self._budget_aborted}"
             )
             _log_event(
-                run_batch_id=self.run_batch_id,
+                pipeline_run_id=self.pipeline_run_id,
                 level="INFO",
                 event_type="apply_run_complete",
                 message=summary_msg,
@@ -1835,7 +1840,7 @@ ROUTING MANIFEST (JSON)
             # ----------------------------------------------------------
             return {
                 "success": True,
-                "run_batch_id": self.run_batch_id,
+                "pipeline_run_id": self.pipeline_run_id,
                 "total_attempted": len(per_job_results),
                 "applied": self._applied_count,
                 "failed": self._failed_count,
@@ -1856,7 +1861,7 @@ ROUTING MANIFEST (JSON)
                 _record_agent_error(
                     agent_type="ApplyAgent",
                     error_message=str(exc),
-                    run_batch_id=self.run_batch_id,
+                    pipeline_run_id=self.pipeline_run_id,
                     error_code="APPLY_UNHANDLED_EXCEPTION",
                 )
             except Exception:  # noqa: BLE001
@@ -1881,7 +1886,7 @@ ROUTING MANIFEST (JSON)
             return {
                 "success": False,
                 "error": str(exc),
-                "run_batch_id": self.run_batch_id,
+                "pipeline_run_id": self.pipeline_run_id,
                 "applied": self._applied_count,
                 "failed": self._failed_count,
                 "rerouted_to_manual": self._rerouted_count,

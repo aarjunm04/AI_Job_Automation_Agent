@@ -67,13 +67,13 @@ __all__ = ["MasterAgent"]
 # AgentOps session helpers (mirrors tracker_agent.py pattern)
 # ---------------------------------------------------------------------------
 
-def _start_agentops_session(run_batch_id: str, run_index_in_week: int) -> bool:
+def _start_agentops_session(pipeline_run_id: str, run_index_in_week: int) -> bool:
     """Initialise an AgentOps session for the current pipeline run.
 
     Fails silently — AgentOps downtime must never block the master.
 
     Args:
-        run_batch_id: UUID of the current run batch.
+        pipeline_run_id: UUID of the current run batch.
         run_index_in_week: Schedule index (1, 2, or 3).
 
     Returns:
@@ -90,13 +90,13 @@ def _start_agentops_session(run_batch_id: str, run_index_in_week: int) -> bool:
         agentops.init(api_key=api_key, auto_start_session=False)
         agentops.start_trace(
             tags=[
-                f"run_batch_id:{run_batch_id}",
+                f"pipeline_run_id:{pipeline_run_id}",
                 f"run_index:{run_index_in_week}",
             ]
         )
         logger.info(
-            "_start_agentops_session: session started for run_batch_id=%s",
-            run_batch_id,
+            "_start_agentops_session: session started for pipeline_run_id=%s",
+            pipeline_run_id,
         )
         return True
     except Exception as exc:  # noqa: BLE001
@@ -106,13 +106,13 @@ def _start_agentops_session(run_batch_id: str, run_index_in_week: int) -> bool:
         return False
 
 
-def _end_agentops_session(run_batch_id: str, end_state: str = "Success") -> bool:
+def _end_agentops_session(pipeline_run_id: str, end_state: str = "Success") -> bool:
     """End the current AgentOps session.
 
     Fails silently — AgentOps downtime must never block the master.
 
     Args:
-        run_batch_id: UUID of the current run batch (for logging context).
+        pipeline_run_id: UUID of the current run batch (for logging context).
         end_state: Final state to report; ``"Success"`` or ``"Fail"``.
 
     Returns:
@@ -123,7 +123,7 @@ def _end_agentops_session(run_batch_id: str, end_state: str = "Success") -> bool
         logger.info(
             "_end_agentops_session: session closed state=%s run=%s",
             end_state,
-            run_batch_id,
+            pipeline_run_id,
         )
         return True
     except Exception as exc:  # noqa: BLE001
@@ -133,20 +133,20 @@ def _end_agentops_session(run_batch_id: str, end_state: str = "Success") -> bool
         return False
 
 
-def _record_run_summary(run_batch_id: str) -> bool:
+def _record_run_summary(pipeline_run_id: str) -> bool:
     """Emit a run-summary ActionEvent to AgentOps.
 
     Fails silently — AgentOps downtime must never block the master.
 
     Args:
-        run_batch_id: UUID of the current run batch.
+        pipeline_run_id: UUID of the current run batch.
 
     Returns:
         ``True`` if the event was recorded, ``False`` otherwise.
     """
     try:
         logger.info(
-            "_record_run_summary: recorded for run_batch_id=%s (auto-tracked in v4)", run_batch_id
+            "_record_run_summary: recorded for pipeline_run_id=%s (auto-tracked in v4)", pipeline_run_id
         )
         return True
     except Exception as exc:  # noqa: BLE001
@@ -173,7 +173,7 @@ class MasterAgent:
     Attributes:
         mode: Pipeline execution mode — ``"full"``, ``"scrape_only"``,
             ``"analyse_only"``, ``"apply_only"``, or ``"dry_run"``.
-        run_batch_id: UUID generated at __init__ time, replaced by the
+        pipeline_run_id: UUID generated at __init__ time, replaced by the
             Postgres-assigned UUID after ``_create_run_session``.
         run_index_in_week: Schedule index (1 = Mon, 2 = Thu, 3 = Sat).
         user_id: UUID of the candidate user.
@@ -196,7 +196,7 @@ class MasterAgent:
             os.environ["DRY_RUN"] = "true"
 
         self.mode: str = mode if mode != "dry_run" else "full"
-        self.run_batch_id: str = str(uuid.uuid4())
+        self.pipeline_run_id: str = str(uuid.uuid4())
         self.run_index_in_week: int = self._calculate_run_index()
         from config.config_loader import config_loader as _cl
         self.user_id: str = (
@@ -214,9 +214,9 @@ class MasterAgent:
         self.logger: logging.Logger = logging.getLogger(self.__class__.__name__)
 
         self.logger.info(
-            "MasterAgent initialised — mode=%s run_batch_id=%s index=%d",
+            "MasterAgent initialised — mode=%s pipeline_run_id=%s index=%d",
             self.mode,
-            self.run_batch_id,
+            self.pipeline_run_id,
             self.run_index_in_week,
         )
 
@@ -357,11 +357,11 @@ class MasterAgent:
     def _create_run_session(self) -> str:
         """Create the run batch in Postgres and initialise cost tracking.
 
-        Creates a ``run_batches`` row, resets the per-run cost tracker,
+        Creates a ``pipeline_runs`` row, resets the per-run cost tracker,
         and starts the AgentOps session.
 
         Returns:
-            The Postgres-assigned ``run_batch_id`` UUID string.
+            The Postgres-assigned ``pipeline_run_id`` UUID string.
         """
         # Create run batch in Postgres
         raw_result: str = _create_run_batch(run_index_in_week=self.run_index_in_week)
@@ -376,31 +376,31 @@ class MasterAgent:
                 raw_result[:200],
             )
 
-        if parsed.get("run_batch_id"):
-            self.run_batch_id = parsed["run_batch_id"]
+        if parsed.get("pipeline_run_id"):
+            self.pipeline_run_id = parsed["pipeline_run_id"]
 
         # Reset per-run cost tracker
-        reset_run_cost_tracker(run_batch_id=self.run_batch_id)
+        reset_run_cost_tracker(pipeline_run_id=self.pipeline_run_id)
 
         # Start AgentOps session
-        _start_agentops_session(self.run_batch_id, self.run_index_in_week)
+        _start_agentops_session(self.pipeline_run_id, self.run_index_in_week)
 
         # Log session creation
         _log_event(
-            run_batch_id=self.run_batch_id,
+            pipeline_run_id=self.pipeline_run_id,
             level="INFO",
             event_type="run_session_created",
             message=(
-                f"Run {self.run_batch_id} started | mode={self.mode} "
+                f"Run {self.pipeline_run_id} started | mode={self.mode} "
                 f"| index={self.run_index_in_week}"
             ),
         )
 
         self.logger.info(
-            "Run session created: run_batch_id=%s", self.run_batch_id
+            "Run session created: pipeline_run_id=%s", self.pipeline_run_id
         )
 
-        return self.run_batch_id
+        return self.pipeline_run_id
 
     # ------------------------------------------------------------------
     # Internal: phase runners
@@ -416,7 +416,7 @@ class MasterAgent:
         """
         try:
             # Budget gate — monthly budget check
-            budget_raw: str = check_monthly_budget(run_batch_id=self.run_batch_id)
+            budget_raw: str = check_monthly_budget(pipeline_run_id=self.pipeline_run_id)
             budget_result: Dict[str, Any] = {}
             try:
                 budget_result = json.loads(budget_raw)
@@ -436,7 +436,7 @@ class MasterAgent:
                 }
 
             # Instantiate and run scraper
-            scraper_agent = ScraperAgent(run_batch_id=self.run_batch_id)
+            scraper_agent = ScraperAgent(pipeline_run_id=self.pipeline_run_id)
             result: Dict[str, Any] = scraper_agent.run()
 
             if not result.get("success", False):
@@ -446,7 +446,7 @@ class MasterAgent:
                 _record_agent_error(
                     agent_type="ScraperAgent",
                     error_message=result.get("error", "scraper_run_failed"),
-                    run_batch_id=self.run_batch_id,
+                    pipeline_run_id=self.pipeline_run_id,
                     error_code="SCRAPER_PHASE_FAILED",
                 )
                 result["phase"] = "scraper"
@@ -454,7 +454,7 @@ class MasterAgent:
                 return result
 
             # ----------------------------------------------------------
-            # Dedup: filter out jobs already processed in this run_batch_id
+            # Dedup: filter out jobs already processed in this pipeline_run_id
             # Guards against crash-restart re-processing duplicates.
             # Uses fuzzy dedup (title+company sim ≥ 0.85) on top of URL hash.
             # ----------------------------------------------------------
@@ -463,8 +463,8 @@ class MasterAgent:
                 try:
                     with db_conn.cursor() as cur:
                         cur.execute(
-                            "SELECT url FROM jobs WHERE run_batch_id = %s",
-                            (self.run_batch_id,)
+                            "SELECT url FROM jobs WHERE pipeline_run_id = %s",
+                            (self.pipeline_run_id,)
                         )
                         already_processed = {row[0] for row in cur.fetchall()}
 
@@ -472,7 +472,7 @@ class MasterAgent:
                     removed = len(already_processed)
                     if removed:
                         self.logger.info(
-                            "run_batch_id dedup: %d URLs already in DB | "
+                            "pipeline_run_id dedup: %d URLs already in DB | "
                             "original=%d",
                             removed,
                             original_count,
@@ -491,7 +491,7 @@ class MasterAgent:
             self._run_state["scraper"] = result
 
             _log_event(
-                run_batch_id=self.run_batch_id,
+                pipeline_run_id=self.pipeline_run_id,
                 level="INFO",
                 event_type="scraper_phase_complete",
                 message=(
@@ -513,7 +513,7 @@ class MasterAgent:
             _record_agent_error(
                 agent_type="ScraperAgent",
                 error_message=str(exc),
-                run_batch_id=self.run_batch_id,
+                pipeline_run_id=self.pipeline_run_id,
                 error_code="SCRAPER_PHASE_EXCEPTION",
             )
             return {
@@ -547,7 +547,7 @@ class MasterAgent:
                 }
 
             # Budget gate — xAI run cap
-            cap_raw: str = check_xai_run_cap(run_batch_id=self.run_batch_id)
+            cap_raw: str = check_xai_run_cap(pipeline_run_id=self.pipeline_run_id)
             cap_result: Dict[str, Any] = {}
             try:
                 cap_result = json.loads(cap_raw)
@@ -584,7 +584,7 @@ class MasterAgent:
 
             # Instantiate and run analyser
             analyser_agent = AnalyserAgent(
-                run_batch_id=self.run_batch_id,
+                pipeline_run_id=self.pipeline_run_id,
                 user_id=_user_id,
             )
             result: Dict[str, Any] = analyser_agent.run()
@@ -596,7 +596,7 @@ class MasterAgent:
                 _record_agent_error(
                     agent_type="AnalyserAgent",
                     error_message=result.get("error", "analyser_run_failed"),
-                    run_batch_id=self.run_batch_id,
+                    pipeline_run_id=self.pipeline_run_id,
                     error_code="ANALYSER_PHASE_FAILED",
                 )
                 result["phase"] = "analyser"
@@ -607,7 +607,7 @@ class MasterAgent:
             self._run_state["analyser"] = result
 
             _log_event(
-                run_batch_id=self.run_batch_id,
+                pipeline_run_id=self.pipeline_run_id,
                 level="INFO",
                 event_type="analyser_phase_complete",
                 message=(
@@ -635,7 +635,7 @@ class MasterAgent:
             _record_agent_error(
                 agent_type="AnalyserAgent",
                 error_message=str(exc),
-                run_batch_id=self.run_batch_id,
+                pipeline_run_id=self.pipeline_run_id,
                 error_code="ANALYSER_PHASE_EXCEPTION",
             )
             return {
@@ -660,7 +660,7 @@ class MasterAgent:
             config_loader.get_budget_settings().get("xai_cost_cap_per_run_usd", float(os.getenv("XAI_COST_CAP_PER_RUN", "0.38")))
         )
         try:
-            cost_raw: str = get_cost_summary(run_batch_id=self.run_batch_id)
+            cost_raw: str = get_cost_summary(pipeline_run_id=self.pipeline_run_id)
             cost_data: Dict[str, Any] = json.loads(cost_raw)
             total_spent: float = float(cost_data.get("run_total_cost", 0.0))
             if total_spent >= veto_threshold:
@@ -700,7 +700,7 @@ class MasterAgent:
                 }
 
             # Budget gate — xAI run cap
-            cap_raw: str = check_xai_run_cap(run_batch_id=self.run_batch_id)
+            cap_raw: str = check_xai_run_cap(pipeline_run_id=self.pipeline_run_id)
             cap_result: Dict[str, Any] = {}
             try:
                 cap_result = json.loads(cap_raw)
@@ -733,7 +733,7 @@ class MasterAgent:
             # ApplyAgent loads its routing manifest from Postgres
             # internally — no in-memory manifest passing.
             apply_agent = ApplyAgent(
-                run_batch_id=self.run_batch_id,
+                pipeline_run_id=self.pipeline_run_id,
                 user_id=self.user_id,
             )
 
@@ -756,7 +756,7 @@ class MasterAgent:
             failed_count: int = result.get("failed", 0)
 
             _log_event(
-                run_batch_id=self.run_batch_id,
+                pipeline_run_id=self.pipeline_run_id,
                 level="INFO",
                 event_type="apply_phase_complete",
                 message=(
@@ -789,7 +789,7 @@ class MasterAgent:
             _record_agent_error(
                 agent_type="ApplyAgent",
                 error_message=str(exc),
-                run_batch_id=self.run_batch_id,
+                pipeline_run_id=self.pipeline_run_id,
                 error_code="APPLY_PHASE_EXCEPTION",
             )
             return {
@@ -810,7 +810,7 @@ class MasterAgent:
         """
         try:
             tracker_agent = TrackerAgent(
-                run_batch_id=self.run_batch_id,
+                pipeline_run_id=self.pipeline_run_id,
                 user_id=self.user_id,
             )
             result: Dict[str, Any] = tracker_agent.run()
@@ -819,7 +819,7 @@ class MasterAgent:
             self._run_state["tracker"] = result
 
             _log_event(
-                run_batch_id=self.run_batch_id,
+                pipeline_run_id=self.pipeline_run_id,
                 level="INFO",
                 event_type="tracker_phase_complete",
                 message=(
@@ -884,7 +884,7 @@ class MasterAgent:
         run_stats: Dict[str, Any] = {}
         try:
             raw_stats: str = _get_run_stats(
-                run_batch_id=self.run_batch_id
+                pipeline_run_id=self.pipeline_run_id
             )
             run_stats = json.loads(raw_stats)
         except Exception as exc:  # noqa: BLE001
@@ -895,7 +895,7 @@ class MasterAgent:
         # Get final cost summary
         cost_data: Dict[str, Any] = {}
         try:
-            raw_cost: str = get_cost_summary(run_batch_id=self.run_batch_id)
+            raw_cost: str = get_cost_summary(pipeline_run_id=self.pipeline_run_id)
             cost_data = json.loads(raw_cost)
         except Exception as exc:  # noqa: BLE001
             self.logger.warning(
@@ -907,13 +907,13 @@ class MasterAgent:
         analyser_result: Dict[str, Any] = self._run_state.get("analyser", {})
         apply_result: Dict[str, Any] = self._run_state.get("apply", {})
 
-        jobs_discovered: int = scraper_result.get(
+        jobs_found: int = scraper_result.get(
             "total_jobs",
-            run_stats.get("jobs_discovered", 0),
+            run_stats.get("jobs_found", 0),
         )
-        jobs_auto_applied: int = apply_result.get(
+        jobs_applied: int = apply_result.get(
             "applied",
-            run_stats.get("jobs_auto_applied", 0),
+            run_stats.get("jobs_applied", 0),
         )
         jobs_manual_queued: int = analyser_result.get(
             "manual_route",
@@ -956,7 +956,7 @@ class MasterAgent:
         )
 
         report: Dict[str, Any] = {
-            "run_batch_id": self.run_batch_id,
+            "pipeline_run_id": self.pipeline_run_id,
             "run_index_in_week": self.run_index_in_week,
             "mode": self.mode,
             "dry_run": os.getenv("DRY_RUN", "false").lower() == "true",
@@ -965,8 +965,8 @@ class MasterAgent:
             "duration_minutes": round(duration_minutes, 2),
             "phases_completed": phases_completed,
             "phases_aborted": phases_aborted,
-            "jobs_discovered": jobs_discovered,
-            "jobs_auto_applied": jobs_auto_applied,
+            "jobs_found": jobs_found,
+            "jobs_applied": jobs_applied,
             "jobs_manual_queued": jobs_manual_queued,
             "jobs_skipped": jobs_skipped,
             "jobs_failed": jobs_failed,
@@ -1016,11 +1016,11 @@ class MasterAgent:
 
             # Step 3 — Log pipeline start banner
             _log_event(
-                run_batch_id=self.run_batch_id,
+                pipeline_run_id=self.pipeline_run_id,
                 level="INFO",
                 event_type="pipeline_start",
                 message=(
-                    f"=== PIPELINE START | run={self.run_batch_id} "
+                    f"=== PIPELINE START | run={self.pipeline_run_id} "
                     f"| mode={self.mode} "
                     f"| target={run_config.jobs_per_run_target} jobs ==="
                 ),
@@ -1028,7 +1028,7 @@ class MasterAgent:
 
             self.logger.info(
                 "=== PIPELINE START | run=%s | mode=%s | target=%d jobs ===",
-                self.run_batch_id,
+                self.pipeline_run_id,
                 self.mode,
                 run_config.jobs_per_run_target,
             )
@@ -1096,7 +1096,7 @@ class MasterAgent:
                 _record_agent_error(
                     agent_type="MasterAgent",
                     error_message=str(exc),
-                    run_batch_id=self.run_batch_id,
+                    pipeline_run_id=self.pipeline_run_id,
                     error_code="CRITICAL",
                 )
             except Exception as record_exc:  # noqa: BLE001
@@ -1125,7 +1125,7 @@ class MasterAgent:
                 report = {
                     "success": False,
                     "error": str(report_exc),
-                    "run_batch_id": self.run_batch_id,
+                    "pipeline_run_id": self.pipeline_run_id,
                 }
 
             if unhandled_exception is not None:
@@ -1137,9 +1137,9 @@ class MasterAgent:
             # Update run batch stats
             try:
                 _update_run_batch_stats(
-                    run_batch_id=self.run_batch_id,
-                    jobs_discovered=report["jobs_discovered"],
-                    jobs_auto_applied=report["jobs_auto_applied"],
+                    pipeline_run_id=self.pipeline_run_id,
+                    jobs_found=report["jobs_found"],
+                    jobs_applied=report["jobs_applied"],
                     jobs_queued=report["jobs_manual_queued"],
                 )
             except Exception as exc:  # noqa: BLE001
@@ -1150,12 +1150,12 @@ class MasterAgent:
             # Log pipeline close banner
             try:
                 _log_event(
-                    run_batch_id=self.run_batch_id,
+                    pipeline_run_id=self.pipeline_run_id,
                     level="INFO",
                     event_type="pipeline_complete",
                     message=(
                         f"=== PIPELINE COMPLETE "
-                        f"| applied={report.get('jobs_auto_applied', 0)} "
+                        f"| applied={report.get('jobs_applied', 0)} "
                         f"| queued={report.get('jobs_manual_queued', 0)} "
                         f"| cost=${float(report.get('total_cost_usd', 0.0)):.4f} ==="
                     ),
@@ -1167,15 +1167,15 @@ class MasterAgent:
 
             self.logger.info(
                 "=== PIPELINE COMPLETE | applied=%d | queued=%d | cost=$%.4f ===",
-                int(report.get("jobs_auto_applied", 0)),
+                int(report.get("jobs_applied", 0)),
                 int(report.get("jobs_manual_queued", 0)),
                 float(report.get("total_cost_usd", 0.0)),
             )
 
             # Record run summary and end AgentOps session
-            _record_run_summary(self.run_batch_id)
+            _record_run_summary(self.pipeline_run_id)
             end_state = "Success" if report.get("success") else "Fail"
-            _end_agentops_session(self.run_batch_id, end_state)
+            _end_agentops_session(self.pipeline_run_id, end_state)
 
             # Write JSON report to logs/
             try:
@@ -1212,7 +1212,7 @@ class MasterAgent:
 
             # Write timestamped archive
             ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-            archive = logs_dir / f"run_{ts}_{self.run_batch_id[:8]}.json"
+            archive = logs_dir / f"run_{ts}_{self.pipeline_run_id[:8]}.json"
             archive.write_text(json.dumps(report, indent=2, default=str))
 
             self.logger.info(

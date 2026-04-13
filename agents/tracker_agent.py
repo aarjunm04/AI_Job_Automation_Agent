@@ -60,19 +60,19 @@ __all__: list[str] = ["TrackerAgent"]
 # Private AgentOps helpers (not yet in agentops_tools.py public API)
 # ---------------------------------------------------------------------------
 
-def _record_run_summary(run_batch_id: str) -> bool:
+def _record_run_summary(pipeline_run_id: str) -> bool:
     """Emit a run-summary ActionEvent to AgentOps.
 
     Fails silently — AgentOps downtime must never block the tracker.
 
     Args:
-        run_batch_id: UUID of the current run batch.
+        pipeline_run_id: UUID of the current run batch.
 
     Returns:
         True if the event was recorded, False otherwise.
     """
     try:
-        logger.info("_record_run_summary: recorded for run_batch_id=%s (auto-tracked in v4)", run_batch_id)
+        logger.info("_record_run_summary: recorded for pipeline_run_id=%s (auto-tracked in v4)", pipeline_run_id)
         return True
     except Exception as exc:  # noqa: BLE001
         logger.warning(
@@ -115,7 +115,7 @@ class TrackerAgent:
     (Postgres) is always closed cleanly regardless.
 
     Attributes:
-        run_batch_id: UUID of the current pipeline run batch.
+        pipeline_run_id: UUID of the current pipeline run batch.
         user_id: UUID of the candidate user.
         llminterface: Centralised LLM provider manager.
         llm: Primary CrewAI LLM object (Groq llama-3.3-70b-versatile).
@@ -123,15 +123,15 @@ class TrackerAgent:
         logger: Instance-level Python logger.
     """
 
-    def __init__(self, run_batch_id: str, user_id: str) -> None:
+    def __init__(self, pipeline_run_id: str, user_id: str) -> None:
         """Initialise the TrackerAgent.
 
         Args:
-            run_batch_id: UUID of the current run batch in Postgres.
+            pipeline_run_id: UUID of the current run batch in Postgres.
             user_id: UUID of the candidate (users table).
         """
         self.logger: logging.Logger = logging.getLogger(self.__class__.__name__)
-        self.run_batch_id: str = run_batch_id
+        self.pipeline_run_id: str = pipeline_run_id
         self.user_id: str = user_id
         
         self.llminterface: LLMInterface = LLMInterface()
@@ -208,7 +208,7 @@ class TrackerAgent:
                 ORDER BY scored_at DESC
                 LIMIT 1
             ) js ON TRUE
-            WHERE jp.run_batch_id = %s
+            WHERE jp.pipeline_run_id = %s
               AND a.status = %s
         """
 
@@ -220,7 +220,7 @@ class TrackerAgent:
             cursor = conn.cursor(
                 cursor_factory=psycopg2.extras.RealDictCursor
             )
-            cursor.execute(sql, (self.run_batch_id, status))
+            cursor.execute(sql, (self.pipeline_run_id, status))
             rows = cursor.fetchall()
             result: list[dict[str, Any]] = [dict(row) for row in rows]
             self.logger.info(
@@ -313,7 +313,7 @@ class TrackerAgent:
             Configured CrewAI Task instance ready to be added to a Crew.
         """
         description = (
-            f"Close out run batch {self.run_batch_id}. "
+            f"Close out run batch {self.pipeline_run_id}. "
             f"Applied count: {len(applied_jobs)}. "
             f"Queued count: {len(queued_jobs)}. "
             f"Notion sync has already been completed in Python; do NOT sync Notion. "
@@ -351,14 +351,14 @@ class TrackerAgent:
         AgentOps, and results in an ``end_state="Fail"`` session close.
 
         Returns:
-            Dict with keys: success, run_batch_id, notion_synced_applied,
+            Dict with keys: success, pipeline_run_id, notion_synced_applied,
             notion_synced_queued, agentops_recorded, session_closed.
             On failure: success=False and an "error" key with the message.
         """
         # Step 1 — log start
         try:
             _log_event(
-                run_batch_id=self.run_batch_id,
+                pipeline_run_id=self.pipeline_run_id,
                 level="INFO",
                 event_type="tracker_run_start",
                 message="Tracker Agent starting sync pass",
@@ -373,23 +373,23 @@ class TrackerAgent:
             applied: list[dict[str, Any]] = self._get_applied_jobs()
             queued: list[dict[str, Any]] = self._get_queued_jobs()
             self.logger.info(
-                "run: fetched applied=%d queued=%d for run_batch_id=%s",
+                "run: fetched applied=%d queued=%d for pipeline_run_id=%s",
                 len(applied),
                 len(queued),
-                self.run_batch_id,
+                self.pipeline_run_id,
             )
 
             # Step 3 — short-circuit if nothing to do
             if not applied and not queued:
                 self.logger.info(
-                    "run: nothing to sync for run_batch_id=%s", self.run_batch_id
+                    "run: nothing to sync for pipeline_run_id=%s", self.pipeline_run_id
                 )
-                summary_ok: bool = self.record_run_summary(self.run_batch_id)
+                summary_ok: bool = self.record_run_summary(self.pipeline_run_id)
                 session_ok: bool = self.end_agentops_session("Success")
                 return {
                     "success": True,
                     "reason": "nothing_to_sync",
-                    "run_batch_id": self.run_batch_id,
+                    "pipeline_run_id": self.pipeline_run_id,
                     "notion_synced_applied": 0,
                     "notion_synced_queued": 0,
                     "agentops_recorded": summary_ok,
@@ -404,7 +404,7 @@ class TrackerAgent:
                     self.sync_application_to_job_tracker_(
                         application_id=str(job.get("application_id", "")),
                         job_post_id=str(job.get("job_post_id", "")),
-                        run_batch_id=self.run_batch_id,
+                        pipeline_run_id=self.pipeline_run_id,
                         title=str(job.get("title", "")),
                         company=str(job.get("company", "")),
                         job_url=str(job.get("url", "")),
@@ -424,7 +424,7 @@ class TrackerAgent:
                 try:
                     self.queue_job_to_applications_db_(
                         job_post_id=str(job.get("job_post_id", "")),
-                        run_batch_id=self.run_batch_id,
+                        pipeline_run_id=self.pipeline_run_id,
                         title=str(job.get("title", "")),
                         company=str(job.get("company", "")),
                         job_url=str(job.get("url", "")),
@@ -455,7 +455,7 @@ class TrackerAgent:
                 )
                 return {
                     "success": False,
-                    "run_batch_id": self.run_batch_id,
+                    "pipeline_run_id": self.pipeline_run_id,
                     "error": "llm_init_failed",
                 }
             agent: Agent = self._build_agent()
@@ -533,7 +533,7 @@ class TrackerAgent:
             # Step 6 — log completion
             try:
                 _log_event(
-                    run_batch_id=self.run_batch_id,
+                    pipeline_run_id=self.pipeline_run_id,
                     level="INFO",
                     event_type="tracker_run_complete",
                     message=(
@@ -551,12 +551,12 @@ class TrackerAgent:
 
             # Step 7 — AgentOps bookkeeping
             end_state: str = "Success" if not agent_errors else "Fail"
-            summary_recorded: bool = self.record_run_summary(self.run_batch_id)
+            summary_recorded: bool = self.record_run_summary(self.pipeline_run_id)
             session_closed: bool = self.end_agentops_session(end_state)
 
             return {
                 "success": True,
-                "run_batch_id": self.run_batch_id,
+                "pipeline_run_id": self.pipeline_run_id,
                 "notion_synced_applied": notion_applied,
                 "notion_synced_queued": notion_queued,
                 "agentops_recorded": summary_recorded,
@@ -573,7 +573,7 @@ class TrackerAgent:
                 _record_agent_error(
                     agent_type="TrackerAgent",
                     error_message=str(exc),
-                    run_batch_id=self.run_batch_id,
+                    pipeline_run_id=self.pipeline_run_id,
                     error_code="TRACKER_UNHANDLED_ERROR",
                 )
             except Exception:  # noqa: BLE001
@@ -584,7 +584,7 @@ class TrackerAgent:
 
             return {
                 "success": False,
-                "run_batch_id": self.run_batch_id,
+                "pipeline_run_id": self.pipeline_run_id,
                 "error": str(exc),
             }
 
@@ -593,7 +593,7 @@ class TrackerAgent:
     # ------------------------------------------------------------------
 
     def _get_run_session_stats(self) -> Optional[dict[str, Any]]:
-        """Query run_sessions table for this run's stats."""
+        """Query pipeline_runs table for this run's stats."""
         conn = None
         try:
             conn = get_db_conn()
@@ -601,13 +601,13 @@ class TrackerAgent:
             
             cursor.execute("""
                 SELECT 
-                    jobs_discovered,
-                    jobs_auto_applied,
+                    jobs_found,
+                    jobs_applied,
                     jobs_queued,
                     EXTRACT(EPOCH FROM (COALESCE(closed_at, NOW()) - created_at)) / 60.0 AS duration_minutes
-                FROM run_sessions
-                WHERE run_batch_id = %s
-            """, (self.run_batch_id,))
+                FROM pipeline_runs
+                WHERE pipeline_run_id = %s
+            """, (self.pipeline_run_id,))
             
             row = cursor.fetchone()
             return dict(row) if row else None
@@ -629,9 +629,9 @@ class TrackerAgent:
                 SELECT status, COUNT(*) as count
                 FROM applications a
                 JOIN jobs j ON j.id = a.job_post_id
-                WHERE j.run_batch_id = %s
+                WHERE j.pipeline_run_id = %s
                 GROUP BY status
-            """, (self.run_batch_id,))
+            """, (self.pipeline_run_id,))
             
             results = cursor.fetchall()
             
@@ -651,7 +651,7 @@ class TrackerAgent:
         try:
             from tools.budget_tools import get_cost_summary
             
-            raw = get_cost_summary(self.run_batch_id)
+            raw = get_cost_summary(self.pipeline_run_id)
             data = json.loads(raw) if isinstance(raw, str) else raw
             return float(data.get("run_total_cost", 0.0))
         except Exception as exc:
@@ -675,11 +675,11 @@ class TrackerAgent:
                 FROM applications a
                 JOIN jobs j ON j.id = a.job_post_id
                 LEFT JOIN job_scores js ON js.job_post_id = j.id
-                WHERE j.run_batch_id = %s
+                WHERE j.pipeline_run_id = %s
                   AND a.status = 'applied'
                 ORDER BY js.fit_score DESC NULLS LAST
                 LIMIT %s
-            """, (self.run_batch_id, limit))
+            """, (self.pipeline_run_id, limit))
             
             rows = cursor.fetchall()
             return [dict(row) for row in rows]
@@ -700,11 +700,11 @@ class TrackerAgent:
             cursor.execute("""
                 SELECT message
                 FROM audit_logs
-                WHERE run_batch_id = %s
+                WHERE pipeline_run_id = %s
                   AND level = 'ERROR'
                 ORDER BY created_at DESC
                 LIMIT 5
-            """, (self.run_batch_id,))
+            """, (self.pipeline_run_id,))
             
             rows = cursor.fetchall()
             
