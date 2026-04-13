@@ -24,7 +24,7 @@ import agentops
 from psycopg2.extensions import connection as PgConnection
 from utils.db_utils import get_db_conn
 from crewai.tools import tool
-from agentops.sdk.decorators import operation
+from agentops import operation
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +38,7 @@ __all__ = [
     "create_run_batch",
     "update_run_batch_stats",
     "log_event",
+    "_log_event_fn",
     "get_queued_jobs",
     "get_platform_config",
     "get_run_stats",
@@ -609,7 +610,7 @@ def update_run_batch_stats(
                 SET jobs_found = %s,
                     jobs_applied = %s,
                     jobs_queued = %s,
-                    closed_at = NOW()
+                    completed_at = NOW()
                 WHERE id = %s
                 RETURNING id
                 """,
@@ -665,64 +666,71 @@ def update_run_batch_stats(
         )
 
 
-@tool
+@tool("log_event")
 def log_event(
     pipeline_run_id: str,
-    level: str,
     event_type: str,
+    level: str,
+    agent: str,
     message: str,
-    application_id: str = "",
-    job_post_id: str = "",
+    job_post_id: Optional[str] = None,
+    metadata: Optional[dict] = None,
 ) -> str:
-    """
-    Log an event to the audit_logs table.
+    """CrewAI tool wrapper for log_event."""
+    if job_post_id:
+        md = dict(metadata or {})
+        md.setdefault("job_post_id", job_post_id)
+        metadata = md
+    _log_event_fn(
+        pipeline_run_id=pipeline_run_id,
+        event_type=event_type,
+        level=level,
+        agent=agent,
+        message=message,
+        metadata=metadata,
+    )
+    return "logged"
 
-    This function never retries and silently swallows errors to prevent
-    logging failures from disrupting the pipeline.
+def _log_event_fn(
+    pipeline_run_id: str,
+    event_type: str,
+    level: str,
+    agent: str,
+    message: str,
+    metadata: dict | None = None,
+) -> None:
+    """Log an event to the audit_logs table.
 
-    Args:
-        pipeline_run_id: UUID of the run batch.
-        level: Log level ('INFO', 'WARNING', 'ERROR', 'CRITICAL').
-        event_type: Type of event.
-        message: Log message.
-        application_id: UUID of related application (optional).
-        job_post_id: UUID of related job post (optional).
-
-    Returns:
-        JSON string with logged flag and log_id.
+    Fail-soft: never raises.
     """
     conn = None
     try:
         conn = _get_conn()
         cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
-        app_id_value = application_id if application_id else None
-        job_id_value = job_post_id if job_post_id else None
+        metadata_value = json.dumps(metadata) if metadata else None
 
         cursor.execute(
             """
-            INSERT INTO audit_logs (pipeline_run_id, level, event_type, message, application_id, job_post_id)
+            INSERT INTO audit_logs (pipeline_run_id, event_type, level, agent, message, metadata)
             VALUES (%s, %s, %s, %s, %s, %s)
-            RETURNING id
             """,
-            (pipeline_run_id, level, event_type, message, app_id_value, job_id_value),
+            (pipeline_run_id, event_type, level, agent, message, metadata_value),
         )
-
-        result = cursor.fetchone()
         conn.commit()
-
-        logger.debug(f"Event logged: {level} - {event_type} - {message}")
-
-        return json.dumps({"logged": True, "log_id": str(result["id"])})
-
     except Exception as e:
         if conn:
-            conn.rollback()
+            try:
+                conn.rollback()
+            except Exception:  # noqa: BLE001
+                pass
         logger.warning(f"Failed to log event (non-critical): {e}")
-        return json.dumps({"logged": False, "log_id": None})
     finally:
         if conn:
-            conn.close()
+            try:
+                conn.close()
+            except Exception:  # noqa: BLE001
+                pass
 
 
 @tool
@@ -866,7 +874,7 @@ def get_run_stats(pipeline_run_id: str) -> str:
             cursor.execute(
                 """
                 SELECT id, run_date, run_index_in_week, jobs_found,
-                       jobs_applied, jobs_queued, started_at, closed_at
+                       jobs_applied, jobs_queued, started_at, completed_at
                 FROM pipeline_runs
                 WHERE id = %s
                 """,
@@ -899,7 +907,7 @@ def get_run_stats(pipeline_run_id: str) -> str:
                 "jobs_applied": batch_result["jobs_applied"],
                 "jobs_queued": batch_result["jobs_queued"],
                 "started_at": str(batch_result["started_at"]),
-                "closed_at": str(batch_result["closed_at"]) if batch_result["closed_at"] else None,
+                "completed_at": str(batch_result["completed_at"]) if batch_result["completed_at"] else None,
                 "error_count": error_result["error_count"],
             }
 
