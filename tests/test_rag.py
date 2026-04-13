@@ -5,7 +5,7 @@ from unittest.mock import patch, MagicMock
 
 # Import the tools to be tested
 from tools.rag_tools import (
-    query_resume_match,
+    query_rag,
     get_resume_context,
     embed_job_description,
 )
@@ -62,7 +62,7 @@ def test_query_resume_match_success(mock_select_resume: MagicMock) -> None:
         ],
     }
 
-    result_str = query_resume_match.func(
+    result_str = query_rag.func(
         job_description="We are looking for a Senior AI Agent Engineer with LLM architecture experience.",
         job_title="Senior AI Agent Engineer",
         required_skills="Python, LLM, AgentOps, Postgres",
@@ -91,7 +91,7 @@ def test_query_resume_match_fallback_on_error(
     }
     mock_select_resume.side_effect = Exception("ChromaDB connection timeout")
 
-    result_str = query_resume_match.func(
+    result_str = query_rag.func(
         job_description="Description",
         job_title="Title",
         required_skills="Skills",
@@ -157,7 +157,7 @@ class TestRAGFallbackDBPath(unittest.TestCase):
             "platform_settings": {},
         }
 
-        result_str = query_resume_match.func(
+        result_str = query_rag.func(
             job_description="Python developer job",
             job_title="ML Engineer",
             required_skills="Python",
@@ -173,7 +173,7 @@ class TestRAGFallbackDBPath(unittest.TestCase):
         self.mock_rag.side_effect = Exception("chromadb_crash")
         self.mock_fetch.side_effect = RuntimeError("db_config_fetch_failed")
 
-        result_str = query_resume_match.func(
+        result_str = query_rag.func(
             job_description="Some job",
             job_title="Engineer",
             required_skills="Python",
@@ -198,7 +198,7 @@ class TestRAGFallbackDBPath(unittest.TestCase):
             ],
         }
 
-        result_str = query_resume_match.func(
+        result_str = query_rag.func(
             job_description="Build LLM pipelines",
             job_title="AI Engineer",
             required_skills="Python, LLM",
