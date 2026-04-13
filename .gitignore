@@ -427,3 +427,4 @@ scripts
 
 #db query shell script
 database/db_cli.sh
+jobs.txt
