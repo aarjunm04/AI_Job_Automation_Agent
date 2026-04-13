@@ -5,7 +5,7 @@ Thread-safe graceful shutdown flag for the entire pipeline.
 The SIGTERM handler in main.py calls request_shutdown(). Every agent
 and long-running loop polls is_shutdown_requested() between operations.
 This prevents Docker force-kill (SIGKILL) from corrupting Postgres
-run_sessions rows by giving the pipeline time to write closed_at.
+pipeline_runs rows by giving the pipeline time to write completed_at.
 
 Single source of truth for shutdown state — no global variables
 scattered across agent files.
@@ -127,7 +127,7 @@ def get_shutdown_reason() -> Optional[str]:
 
         if is_shutdown_requested():
             reason = get_shutdown_reason()
-            log_event(run_batch_id, "WARNING", "shutdown", reason or "unknown")
+            log_event(pipeline_run_id, "WARNING", "shutdown", reason or "unknown")
     """
     with _shutdown_lock:
         return _shutdown_reason

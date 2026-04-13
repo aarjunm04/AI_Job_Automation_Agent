@@ -382,7 +382,7 @@ def deduplicate_jobs_fuzzy(
 
 def upsert_jobs_postgres(
     jobs: list[dict[str, Any]],
-    run_batch_id: str,
+    pipeline_run_id: str,
 ) -> dict[str, Any]:
     """Batch upsert normalised jobs into the Postgres ``jobs`` table.
 
@@ -391,7 +391,7 @@ def upsert_jobs_postgres(
 
     Args:
         jobs: List of normalised job dicts from ``normalise_job_post``.
-        run_batch_id: UUID of the current run batch.
+        pipeline_run_id: UUID of the current run batch.
 
     Returns:
         Dict with ``inserted``, ``updated``, and ``errors`` counts.
@@ -419,11 +419,11 @@ def upsert_jobs_postgres(
             try:
                 cursor.execute(
                     """
-                    INSERT INTO jobs (run_batch_id, source_platform, title,
+                    INSERT INTO jobs (pipeline_run_id, source_platform, title,
                         company, location, url, posted_at)
                     VALUES (%s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (url) DO UPDATE SET
-                        run_batch_id = EXCLUDED.run_batch_id,
+                        pipeline_run_id = EXCLUDED.pipeline_run_id,
                         title = EXCLUDED.title,
                         company = EXCLUDED.company,
                         location = EXCLUDED.location,
@@ -431,7 +431,7 @@ def upsert_jobs_postgres(
                     RETURNING (xmax = 0) AS is_insert
                     """,
                     (
-                        run_batch_id,
+                        pipeline_run_id,
                         job.get("source_platform", "unknown"),
                         job.get("title", ""),
                         job.get("company", ""),
