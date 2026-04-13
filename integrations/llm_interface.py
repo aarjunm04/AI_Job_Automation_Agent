@@ -36,6 +36,15 @@ os.environ["CEREBRAS_MODEL"] = os.getenv("CEREBRAS_MODEL", "llama-3.3-70b")
 
 # ----------------------------------------------
 
+
+def _resolve_fallback_1_model() -> str:
+    """Resolve fallback_1 model string based on available API keys."""
+    if os.getenv("CEREBRAS_API_KEY"):
+        return "cerebras/llama-3.3-70b"
+    if os.getenv("SAMBANOVA_API_KEY"):
+        return "sambanova/Meta-Llama-3.3-70B-Instruct"
+    return "groq/llama-3.3-70b-versatile"
+
 __all__ = ["LLMInterface"]
 
 # Logging configuration
@@ -60,31 +69,27 @@ VALID_AGENT_TYPES = frozenset({
 _AGENT_CONFIG: dict[str, dict[str, Any]] = {
     "MASTER_AGENT": {
         "primary": (f"groq/{os.getenv('GROQ_MODEL')}", "GROQ_API_KEY", os.getenv("GROQ_BASE_URL")),
-        "fallback_1": (os.getenv("CEREBRAS_MODEL"), "CEREBRAS_API_KEY", os.getenv("CEREBRAS_BASE_URL")),
-        "fallback_2": None,
+        "fallback_1": (_resolve_fallback_1_model(), "CEREBRAS_API_KEY", os.getenv("CEREBRAS_BASE_URL")),
+        "fallback_2": ("groq/llama-3.3-70b-versatile", "GROQ_API_KEY", os.getenv("GROQ_BASE_URL")),
     },
     "SCRAPER_AGENT": {
         "primary": (f"groq/{os.getenv('GROQ_MODEL')}", "GROQ_API_KEY", os.getenv("GROQ_BASE_URL")),
-        "fallback_1": (os.getenv("CEREBRAS_MODEL"), "CEREBRAS_API_KEY", os.getenv("CEREBRAS_BASE_URL")),
-        "fallback_2": None,
+        "fallback_1": (_resolve_fallback_1_model(), "CEREBRAS_API_KEY", os.getenv("CEREBRAS_BASE_URL")),
+        "fallback_2": ("groq/llama-3.3-70b-versatile", "GROQ_API_KEY", os.getenv("GROQ_BASE_URL")),
     },
     "ANALYSER_AGENT": {
-        "primary": (f"xai/{os.getenv('XAI_DEFAULT_MODEL')}", "XAI_API_KEY", os.getenv("XAI_BASE_URL")),
-        "fallback_1": (os.getenv("CEREBRAS_MODEL"), "CEREBRAS_API_KEY", os.getenv("CEREBRAS_BASE_URL")),
-        "fallback_2": None,
+        "primary": ("xai/grok-4-fast-reasoning", "XAI_API_KEY", os.getenv("XAI_BASE_URL")),
+        "fallback_1": (_resolve_fallback_1_model(), "CEREBRAS_API_KEY", os.getenv("CEREBRAS_BASE_URL")),
+        "fallback_2": ("groq/llama-3.3-70b-versatile", "GROQ_API_KEY", os.getenv("GROQ_BASE_URL")),
     },
     "APPLY_AGENT": {
         "primary": (
-            f"xai/{os.getenv('XAI_DEFAULT_MODEL')}",
+            "xai/grok-4-1-fast-reasoning",
             "XAI_API_KEY",
             os.getenv("XAI_BASE_URL"),
         ),
-        "fallback_1": (
-            os.getenv("CEREBRAS_MODEL"),
-            "CEREBRAS_API_KEY",
-            os.getenv("CEREBRAS_BASE_URL"),
-        ),
-        "fallback_2": None,
+        "fallback_1": (_resolve_fallback_1_model(), "CEREBRAS_API_KEY", os.getenv("CEREBRAS_BASE_URL")),
+        "fallback_2": ("groq/llama-3.3-70b-versatile", "GROQ_API_KEY", os.getenv("GROQ_BASE_URL")),
     },
     "TRACKER_AGENT": {
         "primary": (
@@ -92,16 +97,12 @@ _AGENT_CONFIG: dict[str, dict[str, Any]] = {
             "GROQ_API_KEY",
             os.getenv("GROQ_BASE_URL"),
         ),
-        "fallback_1": (
-            os.getenv("CEREBRAS_MODEL"),
-            "CEREBRAS_API_KEY",
-            os.getenv("CEREBRAS_BASE_URL"),
-        ),
-        "fallback_2": None,
+        "fallback_1": (_resolve_fallback_1_model(), "CEREBRAS_API_KEY", os.getenv("CEREBRAS_BASE_URL")),
+        "fallback_2": ("groq/llama-3.3-70b-versatile", "GROQ_API_KEY", os.getenv("GROQ_BASE_URL")),
     },
     "DEVELOPER_AGENT": {
         "primary": (
-            f"xai/{os.getenv('XAI_DEFAULT_MODEL')}",
+            "xai/grok-4-1-fast-reasoning",
             "XAI_API_KEY",
             os.getenv("XAI_BASE_URL"),
         ),
@@ -110,7 +111,7 @@ _AGENT_CONFIG: dict[str, dict[str, Any]] = {
             "PERPLEXITY_API_KEY",
             os.getenv("PERPLEXITY_BASE_URL"),
         ),
-        "fallback_2": None,
+        "fallback_2": ("groq/llama-3.3-70b-versatile", "GROQ_API_KEY", os.getenv("GROQ_BASE_URL")),
     },
 }
 
