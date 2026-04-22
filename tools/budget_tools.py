@@ -6,13 +6,15 @@ The Master Agent calls these tools before and after every Apply Agent invocation
 to ensure budget compliance.
 
 Module-level state tracks costs per run and is reset at the start of each run.
+Integrates with LiteLLM via success_callback to capture and record every LLM cost
+to the PostgreSQL llm_costs table for accurate budget tracking.
 """
 
 import os
 import json
 import logging
 import time
-from typing import Any
+from typing import Any, Optional
 
 try:
     import psycopg2
@@ -51,11 +53,12 @@ TOTAL_MONTHLY_BUDGET = float(os.getenv("TOTAL_MONTHLY_BUDGET"))
 # Module-level state (reset per run)
 _run_xai_cost: float = 0.0
 _run_perplexity_cost: float = 0.0
-_run_batch_id: str = ""
+_pipeline_run_id: str = ""
 
 __all__ = [
-    "reset_run_cost_tracker",
+    "init_budget_run",
     "record_llm_cost",
+    "register_litellm_callback",
     "check_xai_run_cap",
     "check_monthly_budget",
     "get_cost_summary",
@@ -136,75 +139,218 @@ def _log_to_db(
             conn.close()
 
 
-def reset_run_cost_tracker(pipeline_run_id: str) -> str:
+def init_budget_run(pipeline_run_id: str) -> None:
     """
-    Reset the run cost tracker for a new run.
+    Initialize budget tracking for a new pipeline run.
 
-    Called by Master Agent at the start of every run before any LLM calls.
+    Must be called at the start of each pipeline run with the active
+    pipeline_run_id so all subsequent LLM costs are attributed correctly.
 
     Args:
-        pipeline_run_id: UUID of the run batch.
-
-    Returns:
-        JSON string confirming reset with pipeline_run_id.
+        pipeline_run_id: UUID of the active pipeline run from pipeline_runs table.
     """
-    global _run_xai_cost, _run_perplexity_cost, _run_batch_id
-
+    global _run_xai_cost, _run_perplexity_cost, _pipeline_run_id
+    
     _run_xai_cost = 0.0
     _run_perplexity_cost = 0.0
-    _run_batch_id = pipeline_run_id
-
-    logger.info(f"Cost tracker reset for run batch: {pipeline_run_id}")
-
-    return json.dumps({"reset": True, "pipeline_run_id": pipeline_run_id})
+    _pipeline_run_id = pipeline_run_id
+    
+    logger.info("Budget tracking initialized for run %s", pipeline_run_id)
 
 
 def record_llm_cost(
-    provider: str, cost_usd: float, agent_type: str, pipeline_run_id: str
-) -> str:
+    provider: str,
+    model: str,
+    cost_usd: float,
+    pipeline_run_id: str,
+    tokens_used: int = 0,
+) -> bool:
     """
-    Record an LLM API cost and update the run tracker.
+    Write a single LLM call cost to the llm_costs table in Postgres.
 
     Args:
-        provider: LLM provider ('xai' or 'perplexity').
-        cost_usd: Cost in USD.
-        agent_type: Agent that made the call.
-        pipeline_run_id: UUID of the run batch.
+        provider: Provider name, e.g. 'xai', 'cerebras', 'groq'.
+        model: Model name used for this call.
+        cost_usd: Dollar cost of this completion as float.
+        pipeline_run_id: UUID of the active pipeline run.
+        tokens_used: Total tokens consumed (prompt + completion).
 
     Returns:
-        JSON string with cost details and running totals.
+        True if the write succeeded, False on any error (fail soft).
     """
     global _run_xai_cost, _run_perplexity_cost
 
+    conn = None
     try:
-        if provider.lower() == "xai":
+        # Update module-level accumulators
+        provider_lower = provider.lower()
+        if provider_lower == "xai":
             _run_xai_cost += cost_usd
-        elif provider.lower() == "perplexity":
+        elif provider_lower == "perplexity":
             _run_perplexity_cost += cost_usd
-        else:
-            logger.warning(f"Unknown provider '{provider}' - cost not tracked")
 
-        message = (
-            f"{provider} +${cost_usd:.4f} | agent={agent_type} | "
-            f"run_xai_total=${_run_xai_cost:.4f}"
+        # Ensure llm_costs table exists
+        conn = _get_conn()
+        if not conn:
+            logger.warning("record_llm_cost: DB connection failed")
+            return False
+
+        cursor = conn.cursor()
+
+        # Create table if not exists
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS llm_costs (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                provider TEXT NOT NULL,
+                model TEXT NOT NULL,
+                cost_usd NUMERIC(10,6) NOT NULL DEFAULT 0,
+                pipeline_run_id TEXT,
+                tokens_used INTEGER DEFAULT 0,
+                recorded_at TIMESTAMPTZ DEFAULT NOW()
+            );
+            """
         )
 
-        _log_to_db(pipeline_run_id, "INFO", "llm_cost_recorded", message)
+        # Insert cost record (with 3 retries on transient errors)
+        for attempt in range(3):
+            try:
+                cursor.execute(
+                    """
+                    INSERT INTO llm_costs 
+                    (provider, model, cost_usd, pipeline_run_id, tokens_used)
+                    VALUES (%s, %s, %s, %s, %s)
+                    """,
+                    (provider, model, cost_usd, pipeline_run_id, tokens_used),
+                )
+                conn.commit()
+                logger.info(
+                    "LLM cost recorded: provider=%s, model=%s, cost=$%.6f, "
+                    "pipeline_run_id=%s, tokens=%d",
+                    provider,
+                    model,
+                    cost_usd,
+                    pipeline_run_id,
+                    tokens_used,
+                )
+                return True
+            except psycopg2.OperationalError as e:
+                if attempt == 2:
+                    logger.warning(
+                        "record_llm_cost: DB error after 3 attempts: %s", e
+                    )
+                    if conn:
+                        conn.rollback()
+                    return False
+                time.sleep(2 ** attempt)
+            except Exception as e:
+                logger.warning("record_llm_cost: Unexpected error: %s", e)
+                if conn:
+                    conn.rollback()
+                return False
 
-        logger.info(message)
-
-        return json.dumps(
-            {
-                "provider": provider,
-                "cost_added": cost_usd,
-                "run_xai_total": _run_xai_cost,
-                "run_perplexity_total": _run_perplexity_cost,
-            }
-        )
+        return False
 
     except Exception as e:
-        logger.error(f"Failed to record LLM cost: {e}")
-        return json.dumps({"error": "record_llm_cost_failed", "detail": str(e)})
+        logger.warning("record_llm_cost: Exception during write: %s", e)
+        if conn:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+        return False
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
+def _litellm_cost_callback(
+    kwargs: dict,
+    completion_response: object,
+    start_time: float,
+    end_time: float,
+) -> None:
+    """
+    LiteLLM success callback — captures cost after every LLM completion.
+
+    Registered once at pipeline boot via litellm.success_callback.
+    Extracts cost using litellm.completion_cost(), writes to DB via
+    record_llm_cost(). Fails soft — never raises, never crashes the pipeline.
+
+    Args:
+        kwargs: LiteLLM call kwargs including model name.
+        completion_response: The full LiteLLM completion response object.
+        start_time: Call start timestamp.
+        end_time: Call end timestamp.
+    """
+    try:
+        # Extract model from kwargs
+        model = kwargs.get("model", "unknown")
+
+        # Infer provider
+        model_lower = model.lower()
+        api_base = kwargs.get("api_base", "").lower()
+
+        if "grok" in model_lower or "xai" in model_lower:
+            provider = "xai"
+        elif "llama" in model_lower and "cerebras" in api_base:
+            provider = "cerebras"
+        elif "llama" in model_lower:
+            provider = "groq"
+        else:
+            provider = "unknown"
+
+        # Get cost from litellm
+        cost = 0.0
+        try:
+            import litellm
+
+            cost = litellm.completion_cost(completion_response=completion_response)
+        except Exception as e:
+            logger.debug("Failed to extract cost from completion_response: %s", e)
+            cost = 0.0
+
+        # Get token count
+        tokens_used = 0
+        try:
+            if hasattr(completion_response, "usage") and completion_response.usage:
+                tokens_used = completion_response.usage.total_tokens or 0
+        except Exception as e:
+            logger.debug("Failed to extract token count: %s", e)
+
+        # Write to DB
+        record_llm_cost(provider, model, cost, _pipeline_run_id, tokens_used)
+
+    except Exception as e:
+        logger.warning("_litellm_cost_callback: Unexpected error: %s", e)
+
+
+def register_litellm_callback() -> None:
+    """
+    Register the LiteLLM success callback for cost tracking.
+
+    Must be called ONCE at pipeline boot, before any LLM call is made.
+    Safe to call multiple times — idempotent via guard check.
+
+    Should be called in:
+    - agents/apply_agent.py __init__ or boot sequence
+    - agents/analyser_agent.py __init__ or boot sequence
+    """
+    try:
+        import litellm
+
+        if _litellm_cost_callback not in litellm.success_callback:
+            litellm.success_callback.append(_litellm_cost_callback)
+            logger.info(
+                "LiteLLM cost callback registered — budget tracking active"
+            )
+        else:
+            logger.debug("LiteLLM cost callback already registered")
+    except Exception as e:
+        logger.warning("Failed to register LiteLLM cost callback: %s", e)
 
 
 def check_xai_run_cap(pipeline_run_id: str) -> str:

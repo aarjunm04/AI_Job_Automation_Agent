@@ -36,9 +36,10 @@ from pathlib import Path
 def _resolve_resume_path(resume_filename: str) -> Path:
     """Resolve absolute resume path, preventing double-prefix."""
     resume_filename = resume_filename.lstrip("/")
-    if resume_filename.startswith("resumes/"):
-        return Path("app") / resume_filename
-    return Path("app") / "resumes" / resume_filename
+    resume_dir = os.getenv("RESUME_DIR", "app/resumes")
+    # Strip any leading directory prefix from filename before joining
+    resume_basename = os.path.basename(resume_filename)
+    return Path(resume_dir) / resume_basename
 
 from typing import Any, Optional
 
@@ -67,6 +68,12 @@ import psycopg2.extras
 import requests
 from crewai.tools import tool
 from playwright.async_api import Page, TimeoutError as PlaywrightTimeoutError, async_playwright
+
+try:
+    from playwright_stealth import stealth_sync
+    STEALTH_AVAILABLE: bool = True
+except ImportError:
+    STEALTH_AVAILABLE = False
 
 from auto_apply.ats_detector import ATSDetector, ATSProfile, ATSType
 from auto_apply.form_filler import FormFiller, FillResult
@@ -99,6 +106,7 @@ __all__ = [
     "save_to_queue",
     "get_best_resume",
     "verify_apply_budget",
+    "_apply_stealth_sync",
 ]
 
 # ---------------------------------------------------------------------------
@@ -107,6 +115,11 @@ __all__ = [
 DRY_RUN: bool = os.getenv("DRY_RUN", "false").lower() == "true"
 RESUME_DIR: Path = Path(run_config.resume_dir)
 MAX_SESSIONS: int = run_config.max_playwright_sessions
+STEALTH_ENABLED: bool = os.getenv("PLAYWRIGHT_STEALTH_ENABLED", "true").lower() == "true"
+PLAYWRIGHT_USER_AGENT: str = os.getenv(
+    "PLAYWRIGHT_USER_AGENT",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+)
 
 # Database URL — kept as module-level for get_apply_summary (exact legacy logic)
 _DB_URL: Optional[str] = (
@@ -114,6 +127,61 @@ _DB_URL: Optional[str] = (
     if os.getenv("ACTIVE_DB", "local") == "local"
     else os.getenv("SUPABASE_DB_URL")
 )
+
+# ---------------------------------------------------------------------------
+# Stealth Integration Helpers
+# ---------------------------------------------------------------------------
+
+async def _apply_stealth_sync(page: Page) -> bool:
+    """Apply playwright-stealth to a Playwright page with retry logic.
+    
+    Wraps stealth_sync in try/except — if it fails, logs warning and 
+    continues (fail-soft, never crash apply pipeline). Applies realistic 
+    viewport and user agent headers after stealth sync.
+    
+    Args:
+        page: Playwright async Page object to apply stealth to.
+        
+    Returns:
+        True if stealth applied successfully, False on failure (non-fatal).
+    """
+    if not STEALTH_ENABLED or not STEALTH_AVAILABLE:
+        logger.debug(
+            "_apply_stealth_sync: stealth disabled or unavailable "
+            "(STEALTH_ENABLED=%s, STEALTH_AVAILABLE=%s)",
+            STEALTH_ENABLED,
+            STEALTH_AVAILABLE,
+        )
+        return False
+
+    try:
+        # Apply stealth_sync (strips Playwright fingerprints)
+        stealth_sync(page)
+        logger.debug("_apply_stealth_sync: stealth_sync applied successfully")
+        
+        # Set realistic viewport size (Chrome desktop window)
+        try:
+            await page.set_viewport_size({"width": 1920, "height": 1080})
+            logger.debug("_apply_stealth_sync: viewport set to 1920x1080")
+        except Exception as vp_exc:
+            logger.warning("_apply_stealth_sync: viewport set failed: %s", vp_exc)
+        
+        # Set realistic user agent via extra HTTP headers
+        try:
+            await page.set_extra_http_headers({"User-Agent": PLAYWRIGHT_USER_AGENT})
+            logger.debug("_apply_stealth_sync: user agent header set")
+        except Exception as ua_exc:
+            logger.warning("_apply_stealth_sync: user agent header failed: %s", ua_exc)
+        
+        return True
+        
+    except Exception as exc:
+        logger.warning(
+            "_apply_stealth_sync: stealth_sync or config failed (continuing): %s",
+            exc,
+        )
+        return False
+
 
 # ---------------------------------------------------------------------------
 # Proxy — delegate to utils.proxy_rate_limit for thread-safe round-robin
@@ -168,10 +236,23 @@ def detect_ats_platform(job_url: str, pipeline_run_id: str, dry_run: bool = Fals
             Merged dict of ``ATSProfile.to_dict()`` and ``{"job_url": url}``.
         """
         async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=True)
+            browser = await p.chromium.launch(
+                headless=True,
+                args=[
+                    "--disable-blink-features=AutomationControlled",
+                    "--disable-infobars",
+                    "--no-sandbox",
+                    "--disable-dev-shm-usage",
+                    "--disable-extensions-except=",
+                    "--disable-default-apps",
+                ],
+            )
             context = await browser.new_context()
             page: Page = await context.new_page()
             try:
+                # Apply stealth measures (fail-soft)
+                await _apply_stealth_sync(page)
+                
                 await page.goto(url, wait_until="networkidle", timeout=20000)
                 detector = ATSDetector()
                 ats_profile: ATSProfile = await detector.detect(page, url)
@@ -451,7 +532,10 @@ async def _run_apply(
     # DB CONFIG FETCH — Authoritative dry_run + default_resume from Postgres
     # -----------------------------------------------------------------------
     dry_run_effective: bool
-    default_resume_effective: str
+    default_resume_effective: str = os.getenv(
+        "DEFAULT_RESUME_PATH", "resumes/AarjunAIAutomation.pdf"
+    )
+    auto_apply_enabled: bool = True
     try:
         _cfg: dict[str, Any] = _fetch_user_config()
         _user_settings: dict[str, Any] = _cfg.get("user_settings", {})
@@ -461,6 +545,12 @@ async def _run_apply(
         job_filters: dict[str, Any] = platform_config.get("job_filters", {})
 
         dry_run_effective = bool(_user_settings.get("dry_run", False))
+        default_resume_effective = str(
+            _user_settings.get("default_resume", default_resume_effective)
+        )
+        auto_apply_enabled = bool(
+            _user_settings.get("auto_apply_enabled", auto_apply_enabled)
+        )
         logger.info(
             "_run_apply: DB config — dry_run=%s default_resume=%s auto_apply_enabled=%s",
             dry_run_effective,
@@ -469,7 +559,9 @@ async def _run_apply(
         )
     except Exception as _cfg_exc:  # noqa: BLE001
         dry_run_effective = os.getenv("DRY_RUN", "false").lower() == "true"
-        default_resume_effective = "AarjunGen.pdf"
+        default_resume_effective: str = os.getenv(
+            "DEFAULT_RESUME_PATH", "resumes/AarjunAIAutomation.pdf"
+        )
         logger.warning(
             "_run_apply: DB config fetch failed (%s) — "
             "falling back to env/hardcoded: dry_run=%s",
@@ -540,15 +632,18 @@ async def _run_apply(
         logger.warning("_run_apply: budget cap check failed (proceeding): %s", exc)
 
     # -----------------------------------------------------------------------
-    # STEP 2 — Browser setup
+    # STEP 2 — Browser setup with stealth-enabled launch args
     # -----------------------------------------------------------------------
     async with async_playwright() as p:
         browser = await p.chromium.launch(
             headless=True,
             args=[
+                "--disable-blink-features=AutomationControlled",
+                "--disable-infobars",
                 "--no-sandbox",
                 "--disable-dev-shm-usage",
-                "--disable-blink-features=AutomationControlled",
+                "--disable-extensions-except=",
+                "--disable-default-apps",
             ],
         )
         proxy: Optional[dict[str, str]] = get_playwright_proxy()
@@ -564,6 +659,9 @@ async def _run_apply(
             "Object.defineProperty(navigator,'webdriver',{get:()=>undefined})"
         )
         page: Page = await context.new_page()
+
+        # Apply stealth measures immediately after new_page() (fail-soft)
+        await _apply_stealth_sync(page)
 
         # Initialise fill_result default before any early returns that skip STEP 8
         fill_result: FillResult = FillResult()
@@ -966,6 +1064,12 @@ def get_apply_summary(pipeline_run_id: str) -> str:
         JSON string ``{pipeline_run_id, applied, failed, manual_queued,
         total_attempted}`` or an error dict on failure.
     """
+    # Strip all keys except pipeline_run_id — LLM sometimes passes full prior response
+    if isinstance(pipeline_run_id, dict):
+        pipeline_run_id = pipeline_run_id.get("pipeline_run_id", "")
+    if not pipeline_run_id or not isinstance(pipeline_run_id, str):
+        logger.warning("getapplysummary: invalid pipeline_run_id input, returning empty summary")
+        return {"error": "invalid_input", "pipeline_run_id": "", "jobs_applied": 0}
     conn = None
     try:
         conn = get_db_conn()
