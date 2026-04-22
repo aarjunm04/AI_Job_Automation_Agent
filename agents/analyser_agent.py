@@ -46,7 +46,12 @@ from integrations.llm_interface import LLMInterface
 from tools.rag_tools import query_resume_match, _query_resume_match, get_resume_context, embed_job_description
 from tools.postgres_tools import _log_event_fn, save_job_score, get_run_stats, get_platform_config
 from tools.budget_tools import check_xai_run_cap, record_llm_cost, get_cost_summary, register_litellm_callback, init_budget_run
-from tools.agentops_tools import record_agent_error, record_fallback_event
+from tools.agentops_tools import (
+    record_agent_error,
+    _record_agent_error,
+    record_fallback_event,
+    _record_fallback_event,
+)
 from utils.db_utils import get_db_conn
 
 logger = logging.getLogger(__name__)
@@ -1076,7 +1081,7 @@ class AnalyserAgent:
         """
         if self._fallback_level == 0 and self.fallback_llm_1 is not None:
             to_model: str = getattr(self.fallback_llm_1, "model", "fallback_1")
-            getattr(record_fallback_event, "run", record_fallback_event)(
+            _record_fallback_event(
                 agent_type="AnalyserAgent",
                 from_provider=failed_provider,
                 to_provider=str(to_model),
@@ -1093,7 +1098,7 @@ class AnalyserAgent:
 
         if self._fallback_level == 1 and self.fallback_llm_2 is not None:
             to_model = getattr(self.fallback_llm_2, "model", "fallback_2")
-            getattr(record_fallback_event, "run", record_fallback_event)(
+            _record_fallback_event(
                 agent_type="AnalyserAgent",
                 from_provider=failed_provider,
                 to_provider=str(to_model),
@@ -1737,7 +1742,7 @@ JOB LIST (JSON)
                 "AnalyserAgent.run: unhandled exception: %s", exc, exc_info=True
             )
             try:
-                getattr(record_agent_error, "run", record_agent_error)(
+                _record_agent_error(
                     agent_type="AnalyserAgent",
                     error_message=str(exc),
                     pipeline_run_id=self.pipeline_run_id,

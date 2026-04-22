@@ -48,10 +48,13 @@ from tools.apply_tools import (
 )
 from tools.postgres_tools import (
     create_application,
+    _create_application,
     update_application_status,
+    _update_application_status,
     log_event,
     _log_event,
     get_platform_config,
+    _get_platform_config,
     _priority_text,
 )
 from tools.budget_tools import (
@@ -624,7 +627,7 @@ class ApplyAgent:
         # Check 2 — Platform limit
         platform: str = job.get("source_platform", "unknown")
         try:
-            config_raw: str = get_platform_config(platform=platform)
+            config_raw: str = _get_platform_config(platform=platform)
             config: Dict[str, Any] = {}
             try:
                 config = json.loads(config_raw)
@@ -780,7 +783,7 @@ class ApplyAgent:
 
             # ── STEP 4 — Rate limit wait ─────────────────────────────
             try:
-                config_raw: str = get_platform_config(platform=platform)
+                config_raw: str = _get_platform_config(platform=platform)
                 pconfig: Dict[str, Any] = json.loads(config_raw)
                 rate_limit: float = float(
                     pconfig.get("rate_limit_per_request_seconds", 3.0)
@@ -938,7 +941,7 @@ class ApplyAgent:
 
             # Persist manual_queued application to Postgres
             try:
-                create_application(
+                _create_application(
                     job_post_id=job_post_id,
                     resume_id="",
                     user_id=self.user_id,
@@ -955,7 +958,7 @@ class ApplyAgent:
 
             # Fallback Postgres update
             try:
-                update_application_status(
+                _update_application_status(
                     job_post_id=job_post_id,
                     status="manual_queued",
                     error_code=reason,
@@ -1502,7 +1505,7 @@ ROUTING MANIFEST (JSON)
                         job["job_post_id"], job["company"], attempt
                     )
                     # Log to audit_logs
-                    log_event(
+                    _log_event(
                         pipeline_run_id=self.pipeline_run_id,
                         event_type="apply_protocol_violation",
                         level="ERROR",
@@ -1661,7 +1664,7 @@ ROUTING MANIFEST (JSON)
                     job_post_id,
                 )
                 try:
-                    create_application(
+                    _create_application(
                         job_post_id=job_post_id,
                         resume_id="",
                         user_id=self.user_id,
@@ -1986,7 +1989,7 @@ ROUTING MANIFEST (JSON)
             for job in self.routing_manifest:
                 jid = str(job.get("job_post_id", job.get("id", "")))
                 try:
-                    create_application(
+                    _create_application(
                         job_post_id=jid,
                         resume_id="",
                         user_id=self.user_id,

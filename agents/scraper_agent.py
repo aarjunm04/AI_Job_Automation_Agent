@@ -29,6 +29,7 @@ from tools.scraper_tools import (
 )
 from tools.postgres_tools import (
     log_event,
+    _log_event,
     create_run_batch,
     update_run_batch_stats,
     get_platform_config,
@@ -390,7 +391,7 @@ IMPORTANT:
         """
         try:
             # Log run start
-            log_event(
+            _log_event(
                 pipeline_run_id=self.pipeline_run_id,
                 level="INFO",
                 event_type="scraper_run_start",
@@ -421,7 +422,7 @@ IMPORTANT:
                     f"Budget cap hit ({abort_reason}). "
                     "Bypassing LLM orchestration and using fallback scrape sequence."
                 )
-                log_event(
+                _log_event(
                     pipeline_run_id=self.pipeline_run_id,
                     level="WARNING",
                     event_type="scraper_budget_cap",
@@ -450,7 +451,7 @@ IMPORTANT:
                         f"LLM execution failed: {llm_e}. "
                         "Bypassing LLM orchestration and using fallback scrape sequence."
                     )
-                    log_event(
+                    _log_event(
                         pipeline_run_id=self.pipeline_run_id,
                         level="WARNING",
                         event_type="scraper_llm_failure",
@@ -489,7 +490,7 @@ IMPORTANT:
             )
 
             # Log completion
-            log_event(
+            _log_event(
                 pipeline_run_id=self.pipeline_run_id,
                 level="INFO",
                 event_type="scraper_run_complete",
@@ -510,7 +511,7 @@ IMPORTANT:
             self.logger.error(f"Scraper run failed with exception: {e}", exc_info=True)
 
             # Log critical error
-            log_event(
+            _log_event(
                 pipeline_run_id=self.pipeline_run_id,
                 level="ERROR",
                 event_type="scraper_phase_exception",
