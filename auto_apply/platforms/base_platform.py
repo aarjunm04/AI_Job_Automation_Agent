@@ -17,9 +17,76 @@ from typing import Optional, Dict, Any, List
 import agentops
 from playwright.async_api import Page, TimeoutError as PlaywrightTimeoutError
 
+try:
+    from playwright_stealth import stealth_sync
+    STEALTH_AVAILABLE: bool = True
+except ImportError:
+    STEALTH_AVAILABLE = False
+
 logger = logging.getLogger(__name__)
 
-__all__ = ["BasePlatformApply", "ApplyResult", "ApplyError"]
+__all__ = ["BasePlatformApply", "ApplyResult", "ApplyError", "_apply_page_stealth"]
+
+
+# ---------------------------------------------------------------------------
+# Stealth Configuration & Helpers
+# ---------------------------------------------------------------------------
+STEALTH_ENABLED: bool = os.getenv("PLAYWRIGHT_STEALTH_ENABLED", "true").lower() == "true"
+PLAYWRIGHT_USER_AGENT: str = os.getenv(
+    "PLAYWRIGHT_USER_AGENT",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+)
+
+
+async def _apply_page_stealth(page: Page) -> bool:
+    """Apply playwright-stealth configuration to a page with fail-soft behavior.
+    
+    Applies stealth_sync (if available), sets viewport size, and user agent.
+    All exceptions are caught and logged as warnings — stealth application 
+    never crashes the apply pipeline.
+    
+    Args:
+        page: Playwright async Page object to apply stealth to.
+        
+    Returns:
+        True if stealth applied successfully, False on failure (non-fatal).
+    """
+    if not STEALTH_ENABLED or not STEALTH_AVAILABLE:
+        logger.debug(
+            "_apply_page_stealth: stealth disabled or unavailable "
+            "(STEALTH_ENABLED=%s, STEALTH_AVAILABLE=%s)",
+            STEALTH_ENABLED,
+            STEALTH_AVAILABLE,
+        )
+        return False
+
+    try:
+        # Apply stealth_sync (strips Playwright fingerprints)
+        stealth_sync(page)
+        logger.debug("_apply_page_stealth: stealth_sync applied successfully")
+        
+        # Set realistic viewport size (Chrome desktop window)
+        try:
+            await page.set_viewport_size({"width": 1920, "height": 1080})
+            logger.debug("_apply_page_stealth: viewport set to 1920x1080")
+        except Exception as vp_exc:
+            logger.warning("_apply_page_stealth: viewport set failed: %s", vp_exc)
+        
+        # Set realistic user agent via extra HTTP headers
+        try:
+            await page.set_extra_http_headers({"User-Agent": PLAYWRIGHT_USER_AGENT})
+            logger.debug("_apply_page_stealth: user agent header set")
+        except Exception as ua_exc:
+            logger.warning("_apply_page_stealth: user agent header failed: %s", ua_exc)
+        
+        return True
+        
+    except Exception as exc:
+        logger.warning(
+            "_apply_page_stealth: stealth application failed (continuing): %s",
+            exc,
+        )
+        return False
 
 
 # ---------------------------------------------------------------------------

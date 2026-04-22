@@ -34,8 +34,36 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional
 
-import agentops
-from agentops.sdk.decorators import agent, operation
+try:
+    from agentops.sdk.decorators import agent as _agentops_agent
+    from agentops.sdk.decorators import operation as _agentops_operation
+except Exception:  # noqa: BLE001
+    _agentops_agent = None
+    _agentops_operation = None
+
+try:
+    from utils.agentops_safe import safe_track_tool as _safe_track_tool
+except Exception:  # noqa: BLE001
+    def _safe_track_tool(fn):  # type: ignore[misc]
+        return fn
+
+def _agent(cls):  # type: ignore[misc]
+    """Fail-soft AgentOps class decorator wrapper."""
+    if _agentops_agent is None:
+        return cls
+    try:
+        return _agentops_agent(cls)
+    except Exception:  # noqa: BLE001
+        return cls
+
+def _operation(fn):  # type: ignore[misc]
+    """Fail-soft AgentOps operation decorator wrapper."""
+    if _agentops_operation is None:
+        return _safe_track_tool(fn)
+    try:
+        return _agentops_operation(fn)
+    except Exception:  # noqa: BLE001
+        return fn
 from litellm import completion
 from playwright.async_api import Page
 
@@ -627,7 +655,7 @@ DOM_FINGERPRINTS: dict[ATSType, list[str]] = {
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-@agent
+@_agent
 class ATSDetector:
     """Three-layer ATS platform detector.
 
@@ -792,7 +820,7 @@ class ATSDetector:
     # Public interface
     # ------------------------------------------------------------------
 
-    @operation
+    @_operation
     async def detect(self, page: Page, job_url: str) -> ATSProfile:
         """Run the full 3-layer ATS detection pipeline.
 
