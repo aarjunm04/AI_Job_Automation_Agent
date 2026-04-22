@@ -815,7 +815,7 @@ async def _run_apply(
             post_html: str = await page.content()
             post_url: str = page.url
             proof: dict[str, Any] = json.loads(
-                capture_proof(post_html, post_url, job_url)
+                _capture_proof(post_html, post_url, job_url)
             )
 
             screenshot_b64: str = ""
@@ -1066,10 +1066,20 @@ def get_apply_summary(pipeline_run_id: str) -> str:
     """
     # Strip all keys except pipeline_run_id — LLM sometimes passes full prior response
     if isinstance(pipeline_run_id, dict):
+        extra_keys = [k for k in pipeline_run_id if k != "pipeline_run_id"]
+        if extra_keys:
+            logger.warning(
+                "get_apply_summary: LLM passed extra keys %s — stripping. "
+                "Only pipeline_run_id is valid input.", extra_keys
+            )
         pipeline_run_id = pipeline_run_id.get("pipeline_run_id", "")
     if not pipeline_run_id or not isinstance(pipeline_run_id, str):
-        logger.warning("getapplysummary: invalid pipeline_run_id input, returning empty summary")
-        return {"error": "invalid_input", "pipeline_run_id": "", "jobs_applied": 0}
+        logger.warning(
+            "get_apply_summary: invalid pipeline_run_id=%r, "
+            "returning empty summary", pipeline_run_id
+        )
+        return json.dumps({"error": "invalid_input", "pipeline_run_id": "",
+                "jobs_applied": 0})
     conn = None
     try:
         conn = get_db_conn()
