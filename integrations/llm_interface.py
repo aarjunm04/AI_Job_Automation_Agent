@@ -32,7 +32,7 @@ if os.getenv("XAI_BASE_URL") == "xai":
     os.environ["XAI_BASE_URL"] = "https://api.x.ai/v1"
 
 # Force Cerebras to use the correct model ID and base URL
-os.environ["CEREBRAS_MODEL"] = os.getenv("CEREBRAS_MODEL", "llama-3.3-70b")
+os.environ["CEREBRAS_MODEL"] = os.getenv("CEREBRAS_MODEL")
 
 # ----------------------------------------------
 
@@ -605,12 +605,12 @@ class LLMInterface:
             LLMExhaustedError: If all 5 providers fail.
         """
         try:
-            from tools.agentops_tools import record_fallback_event
+            from tools.agentops_tools import _record_fallback_event as record_fallback_event
         except Exception:  # pragma: no cover
             record_fallback_event = None  # type: ignore[assignment]
 
         try:
-            from tools.postgres_tools import log_event
+            from tools.postgres_tools import _log_event as log_event
         except Exception:  # pragma: no cover
             log_event = None  # type: ignore[assignment]
 
