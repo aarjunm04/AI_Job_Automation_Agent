@@ -45,7 +45,7 @@ from agentops import agent, operation, tool
 from integrations.llm_interface import LLMInterface
 from tools.rag_tools import query_resume_match, _query_resume_match, get_resume_context, embed_job_description
 from tools.postgres_tools import _log_event_fn, save_job_score, get_run_stats, get_platform_config
-from tools.budget_tools import check_xai_run_cap, record_llm_cost, get_cost_summary
+from tools.budget_tools import check_xai_run_cap, record_llm_cost, get_cost_summary, register_litellm_callback, init_budget_run
 from tools.agentops_tools import record_agent_error, record_fallback_event
 from utils.db_utils import get_db_conn
 
@@ -142,6 +142,10 @@ class AnalyserAgent:
             pipeline_run_id,
             user_id,
         )
+
+        # Initialize budget tracking and register LiteLLM cost callback
+        init_budget_run(pipeline_run_id)
+        register_litellm_callback()
 
     # ------------------------------------------------------------------
     # Internal: job retrieval

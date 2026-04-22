@@ -58,6 +58,8 @@ from tools.budget_tools import (
     check_xai_run_cap,
     record_llm_cost,
     get_cost_summary,
+    register_litellm_callback,
+    init_budget_run,
 )
 from tools.agentops_tools import (
     record_agent_error,
@@ -206,6 +208,10 @@ class ApplyAgent:
             user_id,
             len(self.routing_manifest),
         )
+
+        # Initialize budget tracking and register LiteLLM cost callback
+        init_budget_run(pipeline_run_id)
+        register_litellm_callback()
 
     # ------------------------------------------------------------------
     # Internal: load routing manifest from Postgres
@@ -649,7 +655,10 @@ class ApplyAgent:
         resume_suggested: str = job.get(
             "resume_suggested", run_config.default_resume
         )
-        resume_path: Path = Path(run_config.resume_dir) / resume_suggested
+        resume_dir = os.getenv("RESUME_DIR", "app/resumes")
+        # Strip any leading directory prefix from filename before joining
+        resume_basename = os.path.basename(resume_suggested)
+        resume_path: Path = Path(resume_dir) / resume_basename
         if not resume_path.exists():
             self.logger.warning(
                 "_pre_apply_safety_check: resume '%s' not found — "
@@ -783,7 +792,7 @@ class ApplyAgent:
                 time.sleep(rate_limit)
 
             # ── STEP 5 — Execute apply via fill_standard_form ────────
-            result_raw: str = fill_standard_form(
+            result_raw: str = fill_standard_form.run(
                 job_url=job_url,
                 job_post_id=job_post_id,
                 resume_filename=resume_to_use,
