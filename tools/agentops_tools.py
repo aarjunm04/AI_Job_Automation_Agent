@@ -257,5 +257,15 @@ def record_fallback_event(
 # ---------------------------------------------------------------------------
 # Private aliases for direct programmatic calls (bypass CrewAI Tool wrapper)
 # ---------------------------------------------------------------------------
-_record_agent_error = record_agent_error.func
-_record_fallback_event = record_fallback_event.func
+_record_agent_error    = record_agent_error.func    if hasattr(record_agent_error,    "func") else record_agent_error
+_record_fallback_event = record_fallback_event.func if hasattr(record_fallback_event, "func") else record_fallback_event
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# RUNTIME GUARDS — Ensure aliases are callable at module load
+# ═══════════════════════════════════════════════════════════════════════════════
+for _name, _alias in [
+    ("record_agent_error", _record_agent_error),
+    ("record_fallback_event", _record_fallback_event),
+]:
+    assert callable(_alias), f"CRITICAL: Tool alias {_name} is not callable. Check @tool decoration."
+

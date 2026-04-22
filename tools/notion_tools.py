@@ -516,3 +516,16 @@ _queue_job_to_applications_db    = queue_job_to_applications_db.func    if hasat
 _update_notion_page_status       = update_notion_page_status.func       if hasattr(update_notion_page_status,       "func") else update_notion_page_status
 _get_pending_manual_queue        = get_pending_manual_queue.func        if hasattr(get_pending_manual_queue,        "func") else get_pending_manual_queue
 _check_notion_connection         = check_notion_connection.func         if hasattr(check_notion_connection,         "func") else check_notion_connection
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# RUNTIME GUARDS — Ensure aliases are callable at module load
+# ═══════════════════════════════════════════════════════════════════════════════
+for _name, _alias in [
+    ("sync_application_to_job_tracker", _sync_application_to_job_tracker),
+    ("queue_job_to_applications_db", _queue_job_to_applications_db),
+    ("update_notion_page_status", _update_notion_page_status),
+    ("get_pending_manual_queue", _get_pending_manual_queue),
+    ("check_notion_connection", _check_notion_connection),
+]:
+    assert callable(_alias), f"CRITICAL: Tool alias {_name} is not callable. Check @tool decoration."
+

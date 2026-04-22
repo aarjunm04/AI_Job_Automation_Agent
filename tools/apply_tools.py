@@ -1612,3 +1612,21 @@ _save_application_result = save_application_result.func if hasattr(save_applicat
 _save_to_queue           = save_to_queue.func           if hasattr(save_to_queue,           "func") else save_to_queue
 _get_best_resume         = get_best_resume.func         if hasattr(get_best_resume,         "func") else get_best_resume
 _verify_apply_budget     = verify_apply_budget.func     if hasattr(verify_apply_budget,     "func") else verify_apply_budget
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# RUNTIME GUARDS — Ensure aliases are callable at module load
+# ═══════════════════════════════════════════════════════════════════════════════
+for _name, _alias in [
+    ("detect_ats_platform", _detect_ats_platform),
+    ("capture_proof", _capture_proof),
+    ("check_captcha_present", _check_captcha_present),
+    ("fill_standard_form", _fill_standard_form),
+    ("get_apply_summary", _get_apply_summary),
+    ("route_and_apply", _route_and_apply),
+    ("save_application_result", _save_application_result),
+    ("save_to_queue", _save_to_queue),
+    ("get_best_resume", _get_best_resume),
+    ("verify_apply_budget", _verify_apply_budget),
+]:
+    assert callable(_alias), f"CRITICAL: Tool alias {_name} is not callable. Check @tool decoration."
+

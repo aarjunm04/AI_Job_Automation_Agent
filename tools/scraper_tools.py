@@ -796,3 +796,18 @@ _run_serpapi_scrape    = run_serpapi_scrape.func    if hasattr(run_serpapi_scrap
 _run_safety_net_scrape = run_safety_net_scrape.func if hasattr(run_safety_net_scrape, "func") else run_safety_net_scrape
 _normalise_and_dedup   = normalise_and_dedup.func   if hasattr(normalise_and_dedup,   "func") else normalise_and_dedup
 _get_scrape_summary    = get_scrape_summary.func    if hasattr(get_scrape_summary,    "func") else get_scrape_summary
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# RUNTIME GUARDS — Ensure aliases are callable at module load
+# ═══════════════════════════════════════════════════════════════════════════════
+for _name, _alias in [
+    ("run_jobspy_scrape", _run_jobspy_scrape),
+    ("run_rest_api_scrape", _run_rest_api_scrape),
+    ("run_playwright_scrape", _run_playwright_scrape),
+    ("run_serpapi_scrape", _run_serpapi_scrape),
+    ("run_safety_net_scrape", _run_safety_net_scrape),
+    ("normalise_and_dedup", _normalise_and_dedup),
+    ("get_scrape_summary", _get_scrape_summary),
+]:
+    assert callable(_alias), f"CRITICAL: Tool alias {_name} is not callable. Check @tool decoration."
+

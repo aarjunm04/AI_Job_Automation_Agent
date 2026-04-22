@@ -1017,18 +1017,38 @@ def get_pending_manual_queue_db(pipeline_run_id: str) -> str:
 # ---------------------------------------------------------------------------
 # Private aliases for direct programmatic calls (bypass CrewAI Tool wrapper)
 # ---------------------------------------------------------------------------
-_create_run_batch = create_run_batch.func
-_update_run_batch_stats = update_run_batch_stats.func
-_log_event = log_event.func
+# ═══════════════════════════════════════════════════════════════════════════════
+# .func ALIASES — raw function access (bypasses CrewAI Tool Pydantic wrapper)
+# ═══════════════════════════════════════════════════════════════════════════════
+_upsert_job_post            = upsert_job_post.func            if hasattr(upsert_job_post,            'func') else upsert_job_post
+_save_job_score             = save_job_score.func             if hasattr(save_job_score,             'func') else save_job_score
+_create_application         = create_application.func         if hasattr(create_application,         'func') else create_application
+_update_application_status  = update_application_status.func  if hasattr(update_application_status,  'func') else update_application_status
+_create_run_batch           = create_run_batch.func           if hasattr(create_run_batch,           'func') else create_run_batch
+_update_run_batch_stats     = update_run_batch_stats.func     if hasattr(update_run_batch_stats,     'func') else update_run_batch_stats
+_log_event                  = log_event.func                  if hasattr(log_event,                  'func') else log_event
+_get_queued_jobs            = get_queued_jobs.func            if hasattr(get_queued_jobs,            'func') else get_queued_jobs
+_get_platform_config        = get_platform_config.func        if hasattr(get_platform_config,        'func') else get_platform_config
+_get_run_stats              = get_run_stats.func              if hasattr(get_run_stats,              'func') else get_run_stats
+_get_recent_applications    = get_recent_applications.func    if hasattr(get_recent_applications,    'func') else get_recent_applications
+_get_pending_manual_queue   = get_pending_manual_queue_db.func if hasattr(get_pending_manual_queue_db, 'func') else get_pending_manual_queue_db
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# RUNTIME GUARDS — Ensure aliases are callable at module load
+# ═══════════════════════════════════════════════════════════════════════════════
+for _name, _alias in [
+    ("upsert_job_post", _upsert_job_post),
+    ("save_job_score", _save_job_score),
+    ("create_application", _create_application),
+    ("update_application_status", _update_application_status),
+    ("create_run_batch", _create_run_batch),
+    ("update_run_batch_stats", _update_run_batch_stats),
+    ("log_event", _log_event),
+    ("get_queued_jobs", _get_queued_jobs),
+    ("get_platform_config", _get_platform_config),
+    ("get_run_stats", _get_run_stats),
+    ("get_recent_applications", _get_recent_applications),
+    ("get_pending_manual_queue_db", _get_pending_manual_queue),
+]:
+    assert callable(_alias), f"CRITICAL: Tool alias {_name} is not callable. Check @tool decoration."
 
-# ── .func aliases (complete set) ──────────────────────────────────────────────
-_upsert_job_post = upsert_job_post.func if hasattr(upsert_job_post, 'func') else upsert_job_post
-_save_job_score = save_job_score.func if hasattr(save_job_score, 'func') else save_job_score
-_create_application = create_application.func if hasattr(create_application, 'func') else create_application
-_update_application_status = update_application_status.func if hasattr(update_application_status, 'func') else update_application_status
-_get_queued_jobs = get_queued_jobs.func if hasattr(get_queued_jobs, 'func') else get_queued_jobs
-_get_platform_config = get_platform_config.func if hasattr(get_platform_config, 'func') else get_platform_config
-_get_run_stats = get_run_stats.func if hasattr(get_run_stats, 'func') else get_run_stats
-_get_recent_applications = get_recent_applications.func if hasattr(get_recent_applications, 'func') else get_recent_applications
-_get_pending_manual_queue = get_pending_manual_queue_db.func if hasattr(get_pending_manual_queue_db, 'func') else get_pending_manual_queue_db

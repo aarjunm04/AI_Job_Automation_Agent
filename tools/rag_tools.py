@@ -269,7 +269,19 @@ def get_resume_pdf_path(resume_filename: str) -> str:
 # ═══════════════════════════════════════════════════════════════════════════════
 # .func ALIASES — raw function access (bypasses CrewAI Tool Pydantic wrapper)
 # ═══════════════════════════════════════════════════════════════════════════════
-_query_resume_match  = query_resume_match.func
-_get_resume_context  = get_resume_context.func
-_embed_job_description = embed_job_description.func
-_get_resume_pdf_path = get_resume_pdf_path.func
+_query_resume_match    = query_resume_match.func    if hasattr(query_resume_match,    "func") else query_resume_match
+_get_resume_context    = get_resume_context.func    if hasattr(get_resume_context,    "func") else get_resume_context
+_embed_job_description = embed_job_description.func if hasattr(embed_job_description, "func") else embed_job_description
+_get_resume_pdf_path   = get_resume_pdf_path.func   if hasattr(get_resume_pdf_path,   "func") else get_resume_pdf_path
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# RUNTIME GUARDS — Ensure aliases are callable at module load
+# ═══════════════════════════════════════════════════════════════════════════════
+for _name, _alias in [
+    ("query_resume_match", _query_resume_match),
+    ("get_resume_context", _get_resume_context),
+    ("embed_job_description", _embed_job_description),
+    ("get_resume_pdf_path", _get_resume_pdf_path),
+]:
+    assert callable(_alias), f"CRITICAL: Tool alias {_name} is not callable. Check @tool decoration."
+
