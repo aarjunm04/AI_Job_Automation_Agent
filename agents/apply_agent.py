@@ -716,7 +716,7 @@ class ApplyAgent:
         try:
             # ── STEP 1 — DRY_RUN guard (ALWAYS FIRST) ────────────────
             dry_run: bool = (
-                os.getenv("DRY_RUN", "").lower() in ("true", "1", "yes")
+                os.getenv("DRY_RUN").lower() in ("true", "1", "yes")
                 or self._apply_cfg.get("dry_run", False)
             )
             if dry_run:
@@ -1272,7 +1272,7 @@ class ApplyAgent:
 
         # BUG-FIX 3A: use dynamic eval for dry_run
         dry_run_eval: bool = (
-            os.getenv("DRY_RUN", "").lower() in ("true", "1", "yes")
+            os.getenv("DRY_RUN").lower() in ("true", "1", "yes")
             or self._apply_cfg.get("dry_run", False)
         )
         self.dry_run: bool = dry_run_eval
@@ -1308,7 +1308,7 @@ APPLICATION INSTRUCTIONS
 4. Check for CAPTCHA indicators before submitting. If detected, skip to
    manual queue IMMEDIATELY — do not waste credits.
 
-5. Call fill_standard_form for each auto-route job ONE AT A TIME — NEVER
+5. invoke the fill_standard_form tool using fill_standard_form.run(...) for each auto-route job ONE AT A TIME — NEVER
    run parallel applications. Always pass user_id={self.user_id} and
    the job's resume_suggested value as resume_filename.
 
@@ -1325,6 +1325,9 @@ APPLICATION INSTRUCTIONS
 
 9. After processing ALL jobs, call get_apply_summary with
    pipeline_run_id={self.pipeline_run_id} for final counts.
+   get_apply_summary accepts ONLY one key: pipeline_run_id (string).
+   Do NOT pass the fill_standard_form response or any other dict.
+   Call it as: get_apply_summary.run(pipeline_run_id='{self.pipeline_run_id}')
 
 10. Return a complete application manifest.
 
@@ -1364,7 +1367,7 @@ ROUTING MANIFEST (JSON)
             Task description string ready for CrewAI Task(description=...).
         """
         dry_run_eval: bool = (
-            os.getenv("DRY_RUN", "").lower() in ("true", "1", "yes")
+            os.getenv("DRY_RUN").lower() in ("true", "1", "yes")
             or self._apply_cfg.get("dry_run", False)
         )
         dry_run_str: str = str(dry_run_eval).lower()
@@ -1391,7 +1394,7 @@ ROUTING MANIFEST (JSON)
             f"     pipeline_run_id=\"{self.pipeline_run_id}\"\n"
             f"   Save the returned ats_type value for use in step 2.\n"
             f"\n"
-            f"2. Call fill_standard_form with EXACTLY these arguments — no others:\n"
+            f"2. Call fill_standard_form using fill_standard_form.run(...) with EXACTLY these arguments — no others:\n"
             f"     job_url=\"{job['url']}\"\n"
             f"     job_post_id=\"{job['job_post_id']}\"\n"
             f"     resume_filename=\"{job['resume_suggested']}\"\n"
@@ -1400,7 +1403,7 @@ ROUTING MANIFEST (JSON)
             f"     ats_platform=<ats_type returned in step 1>\n"
             f"     dry_run={dry_run_str}\n"
             f"   THIS CALL IS MANDATORY. Writing Final Answer without calling\n"
-            f"   fill_standard_form first is a protocol violation. Your output\n"
+            f"   fill_standard_form.run(...) first is a protocol violation. Your output\n"
             f"   will be discarded and the job will be marked failed.\n"
             f"\n"
             f"3. Call get_apply_summary with:\n"
@@ -1492,7 +1495,7 @@ ROUTING MANIFEST (JSON)
 
                 raw_output: str = crew_output.raw if hasattr(crew_output, "raw") else str(crew_output)
                 # Validate tool call sequence was followed
-                if "fill_standard_form" not in raw_output and "dry_run_skip" not in raw_output:
+                if "fill_standard_form" not in raw_output and "fill_standard_form.run" not in raw_output and "dry_run_skip" not in raw_output:
                     self.logger.error(
                         "_apply_one_job_via_crew: PROTOCOL VIOLATION — LLM skipped fill_standard_form "
                         "job_post_id=%s company=%s attempt=%d — marking failed",
@@ -1706,7 +1709,7 @@ ROUTING MANIFEST (JSON)
             # Step 1: log run start
             # ----------------------------------------------------------
             dry_run_eval: bool = (
-                os.getenv("DRY_RUN", "").lower() in ("true", "1", "yes")
+                os.getenv("DRY_RUN").lower() in ("true", "1", "yes")
                 or self._apply_cfg.get("dry_run", False)
             )
             _log_event(
