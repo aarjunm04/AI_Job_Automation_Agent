@@ -10,6 +10,7 @@ from this module. No WEBSHARE_PROXY_LIST anywhere in the codebase.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import time
@@ -30,6 +31,7 @@ __all__ = [
     "reset_cycle",
     "get_proxy_stats",
     "is_proxy_pool_healthy",
+    "health_check_proxies",
 ]
 
 logger = logging.getLogger(__name__)
@@ -559,3 +561,50 @@ def is_proxy_pool_healthy() -> bool:
         Boolean pool health status.
     """
     return ProxyPool.get_instance().is_healthy()
+
+
+# ---------------------------------------------------------------------------
+# PROXY HEALTH CHECK — filter dead proxies at boot
+# ---------------------------------------------------------------------------
+
+async def health_check_proxies(
+    proxies: list[str],
+    test_url: str = "https://httpbin.org/ip",
+    timeout_ms: int = 8000,
+) -> list[str]:
+    """Check each proxy with a lightweight HEAD request.
+    Returns only the proxies that respond within timeout_ms.
+
+    Args:
+        proxies: List of proxy strings in host:port:user:pass format.
+        test_url: URL to test connectivity against.
+        timeout_ms: Timeout in milliseconds per proxy.
+
+    Returns:
+        Filtered list of live proxies only.
+    """
+    from playwright.async_api import async_playwright
+    live: list[str] = []
+    async with async_playwright() as pw:
+        for proxy_str in proxies:
+            try:
+                parts = proxy_str.split(":")
+                proxy_cfg = {
+                    "server": f"http://{parts[0]}:{parts[1]}",
+                    "username": parts[2] if len(parts) > 2 else "",
+                    "password": parts[3] if len(parts) > 3 else "",
+                }
+                browser = await pw.chromium.launch(proxy=proxy_cfg)
+                page = await browser.new_page()
+                await page.goto(test_url, timeout=timeout_ms)
+                await browser.close()
+                live.append(proxy_str)
+                logger.debug("Proxy live: %s", parts[0])
+            except Exception as e:
+                logger.warning(
+                    "Proxy dead (culled): %s — %s", proxy_str[:20], e
+                )
+    logger.info(
+        "Proxy health check: %d/%d live", len(live), len(proxies)
+    )
+    return live
