@@ -53,7 +53,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Module-level constants derived from config singletons
 # ---------------------------------------------------------------------------
-DRY_RUN: bool = os.getenv("DRY_RUN", "false").lower() == "true"
+DRY_RUN: bool = os.getenv("DRY_RUN").lower()
 RESUME_DIR: Path = Path(run_config.resume_dir)
 
 __all__ = [
@@ -235,7 +235,7 @@ class FormFiller:
         self.resume_path: Path = RESUME_DIR / resume_filename
         self.ats_type: str = ats_type
         self.dry_run: bool = (
-            dry_run or os.getenv("DRY_RUN", "false").lower() == "true"
+            dry_run or os.getenv("DRY_RUN").lower()
         )
 
         self.profile: UserProfile = UserProfile.from_env()
@@ -1821,7 +1821,7 @@ class FormFiller:
                 return self.result
 
             # Step 2 — DRY_RUN guard on submit
-            dry_run = os.getenv("DRY_RUN", "false").lower() == "true"
+            dry_run = os.getenv("DRY_RUN").lower()
             if dry_run or self.dry_run:
                 self.logger.info(
                     "[DRY_RUN] fill_and_submit: skipping submit click "

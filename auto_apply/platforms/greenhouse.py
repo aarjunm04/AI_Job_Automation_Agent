@@ -368,7 +368,7 @@ class GreenhouseApply(BasePlatformApply):
 
             # Click submit
             fields_filled = 0
-            dry_run = os.getenv("DRY_RUN", "false").lower() == "true"
+            dry_run = os.getenv("DRY_RUN").lower()
             if dry_run:
                 logger.info("GreenhousePlatform DRY_RUN=True — submit BLOCKED")
                 screenshot_path = f"/tmp/greenhouse_dryrun_{int(time.time())}.png"

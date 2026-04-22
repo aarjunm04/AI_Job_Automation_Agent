@@ -59,7 +59,7 @@ __all__ = ["app", "ApplyRequest", "ApplyResponse", "PLATFORM_REGISTRY"]
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-DRY_RUN: bool = os.getenv("DRY_RUN", "false").lower() == "true"
+DRY_RUN: bool = os.getenv("DRY_RUN").lower()
 RESUME_DIR: Path = Path(os.getenv("RESUME_DIR", "app/resumes"))
 SCREENSHOT_DIR: Path = Path(os.getenv("SCREENSHOT_DIR", "/tmp/apply_screenshots"))
 SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)

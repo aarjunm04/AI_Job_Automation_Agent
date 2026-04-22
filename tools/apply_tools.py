@@ -112,7 +112,7 @@ __all__ = [
 # ---------------------------------------------------------------------------
 # Constants from config singletons — no raw os.getenv() in tool logic
 # ---------------------------------------------------------------------------
-DRY_RUN: bool = os.getenv("DRY_RUN", "false").lower() == "true"
+DRY_RUN: bool = os.getenv("DRY_RUN").lower()
 RESUME_DIR: Path = Path(run_config.resume_dir)
 MAX_SESSIONS: int = run_config.max_playwright_sessions
 STEALTH_ENABLED: bool = os.getenv("PLAYWRIGHT_STEALTH_ENABLED", "true").lower() == "true"
@@ -210,7 +210,7 @@ def detect_ats_platform(job_url: str, pipeline_run_id: str, dry_run: bool = Fals
         ``{"job_url": job_url}``.  On any failure returns
         ``{"ats_type": "unknown", "confidence": 0.0, "job_url": ..., "error": ...}``.
     """
-    if dry_run or os.getenv("DRY_RUN", "false").lower() == "true":
+    if dry_run or os.getenv("DRY_RUN").lower():
         logger.info(
             "detect_ats_platform: dry_run=True — skipping browser, "
             "returning mock profile for job_url=%s",
@@ -558,7 +558,7 @@ async def _run_apply(
             auto_apply_enabled,
         )
     except Exception as _cfg_exc:  # noqa: BLE001
-        dry_run_effective = os.getenv("DRY_RUN", "false").lower() == "true"
+        dry_run_effective = os.getenv("DRY_RUN").lower()
         default_resume_effective: str = os.getenv(
             "DEFAULT_RESUME_PATH", "resumes/AarjunAIAutomation.pdf"
         )

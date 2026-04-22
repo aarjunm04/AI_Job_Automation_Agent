@@ -182,7 +182,7 @@ class BasePlatformApply(ABC):
         self.page = page
         self.job_meta = job_meta or {}
         self.user_profile = user_profile or {}
-        self.dry_run = dry_run or os.getenv("DRY_RUN", "false").lower() == "true"
+        self.dry_run = dry_run or os.getenv("DRY_RUN").lower()
         self.steps_completed: int = 0
         self.resume_path: str = self._resolve_resume_path() if page else ""
 

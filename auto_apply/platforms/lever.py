@@ -356,7 +356,7 @@ class LeverPlatform(BasePlatformApply):
         """
         job_url = job_url or self.job_meta.get("url", self.job_meta.get("job_url", ""))
         profile = profile or self.user_profile
-        dry_run = os.getenv("DRY_RUN", "true").lower() == "true"
+        dry_run = os.getenv("DRY_RUN").lower()
         fields_filled = 0
         proof_path = ""
 

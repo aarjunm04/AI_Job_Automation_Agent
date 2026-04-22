@@ -719,7 +719,7 @@ class ApplyAgent:
         try:
             # ── STEP 1 — DRY_RUN guard (ALWAYS FIRST) ────────────────
             dry_run: bool = (
-                os.getenv("DRY_RUN").lower() in ("true", "1", "yes")
+                os.getenv("DRY_RUN").lower()
                 or self._apply_cfg.get("dry_run", False)
             )
             if dry_run:
@@ -1275,7 +1275,7 @@ class ApplyAgent:
 
         # BUG-FIX 3A: use dynamic eval for dry_run
         dry_run_eval: bool = (
-            os.getenv("DRY_RUN").lower() in ("true", "1", "yes")
+            os.getenv("DRY_RUN").lower()
             or self._apply_cfg.get("dry_run", False)
         )
         self.dry_run: bool = dry_run_eval
@@ -1370,7 +1370,7 @@ ROUTING MANIFEST (JSON)
             Task description string ready for CrewAI Task(description=...).
         """
         dry_run_eval: bool = (
-            os.getenv("DRY_RUN").lower() in ("true", "1", "yes")
+            os.getenv("DRY_RUN").lower()
             or self._apply_cfg.get("dry_run", False)
         )
         dry_run_str: str = str(dry_run_eval).lower()
@@ -1712,7 +1712,7 @@ ROUTING MANIFEST (JSON)
             # Step 1: log run start
             # ----------------------------------------------------------
             dry_run_eval: bool = (
-                os.getenv("DRY_RUN").lower() in ("true", "1", "yes")
+                os.getenv("DRY_RUN").lower()
                 or self._apply_cfg.get("dry_run", False)
             )
             _log_event(

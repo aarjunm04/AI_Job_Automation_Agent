@@ -21,7 +21,8 @@ import logging
 import os
 import time
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, Union, Dict
+
 
 from playwright.async_api import (
     Page,
@@ -295,7 +296,7 @@ class WellfoundPlatform(BasePlatformApply):
                 "proof_screenshot_path": "",
                 "error": "",
             }
-        dry_run = os.getenv("DRY_RUN", "true").lower() == "true"
+        dry_run = os.getenv("DRY_RUN").lower()
         fields_filled = 0
         proof_path = ""
 
@@ -436,7 +437,7 @@ class WellfoundPlatform(BasePlatformApply):
         Returns:
             Summary dict: applied_count, skipped_count, errors.
         """
-        dry_run = os.getenv("DRY_RUN", "true").lower() == "true"
+        dry_run = os.getenv("DRY_RUN").lower()
         applied = 0
         skipped = 0
         errors: list[str] = []
