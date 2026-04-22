@@ -32,6 +32,7 @@ from config.settings import db_config, run_config, api_config
 from utils.db_utils import get_db_conn
 from tools.postgres_tools import (
     get_run_stats,
+    _get_run_stats,
     get_recent_applications,
     get_pending_manual_queue,
     update_application_status,
@@ -153,7 +154,7 @@ async def lifespan(app: FastAPI):  # type: ignore[type-arg]
     logger.info("FastAPI server starting | port=%s", fastapi_port)
 
     try:
-        get_run_stats("health_check")
+        _get_run_stats("health_check")
         logger.info("Startup DB connection probe: OK")
     except Exception as exc:  # noqa: BLE001
         logger.warning("Startup DB connection probe failed: %s", exc)
