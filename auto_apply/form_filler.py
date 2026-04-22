@@ -117,6 +117,7 @@ class FillResult:
         success: ``True`` when the form is considered adequately filled.
         screenshot_path: Path to error screenshot if any error occurred.
         cost_usd: Total LLM cost incurred during form filling.
+        status: Overall status of form fill operation (ok|tool_call_failed|fatal_error).
     """
 
     total_fields: int = 0
@@ -129,6 +130,7 @@ class FillResult:
     custom_questions: list[dict] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
     success: bool = False
+    status: str = "ok"
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1258,146 +1260,202 @@ class FormFiller:
         Returns:
             Populated ``FillResult`` with counts and any errors.
         """
-        fields: list[FormField] = await self.scan_form_fields()
-        self.result.total_fields = len(fields)
+        try:
+            fields: list[FormField] = await self.scan_form_fields()
+            self.result.total_fields = len(fields)
 
-        if not fields:
-            self.logger.info("fill_all_fields: no fields detected — nothing to fill")
-            self.result.success = True
-            return self.result
+            if not fields:
+                self.logger.info("fill_all_fields: no fields detected — nothing to fill")
+                self.result.success = True
+                self.result.status = "ok"
+                return self.result
 
-        # -- Step 1: Process file upload fields first --------------------------
-        for f in fields:
-            if f.field_type == FieldType.FILE_UPLOAD:
+            # -- Step 1: Process file upload fields first --------------------------
+            for f in fields:
+                if f.field_type == FieldType.FILE_UPLOAD:
+                    try:
+                        success: bool = await self._upload_resume(f.selector)
+                        if success:
+                            self.result.filled += 1
+                        else:
+                            self.result.failed += 1
+                            self.result.errors.append(f"upload failed: {f.selector}")
+                    except TypeError as type_exc:
+                        # Catch Tool object callable errors
+                        self.logger.error(
+                            "fill_all_fields: Tool call error during upload (field=%s): %s",
+                            f.selector,
+                            type_exc,
+                        )
+                        self.result.status = "tool_call_failed"
+                        self.result.failed += 1
+                        self.result.errors.append(f"tool_error_upload: {type_exc}")
+                    except Exception as exc:  # noqa: BLE001
+                        self.result.failed += 1
+                        self.result.errors.append(f"upload error: {exc}")
+
+            # -- Step 2: Process all non-file fields -------------------------------
+            for f in fields:
+                if f.field_type == FieldType.FILE_UPLOAD:
+                    continue  # already handled
+
                 try:
-                    success: bool = await self._upload_resume(f.selector)
-                    if success:
-                        self.result.filled += 1
-                    else:
-                        self.result.failed += 1
-                        self.result.errors.append(f"upload failed: {f.selector}")
-                except Exception as exc:  # noqa: BLE001
-                    self.result.failed += 1
-                    self.result.errors.append(f"upload error: {exc}")
-
-        # -- Step 2: Process all non-file fields -------------------------------
-        for f in fields:
-            if f.field_type == FieldType.FILE_UPLOAD:
-                continue  # already handled
-
-            try:
-                # a. Deterministic profile mapping
-                mapped_value: Optional[str] = self._map_label_to_profile_value(
-                    f.label
-                )
-
-                if mapped_value is not None and mapped_value:
-                    # Fill based on field type
-                    if f.field_type == FieldType.SELECT:
-                        ok = await self._safe_select(
-                            f.selector, f.options, mapped_value
-                        )
-                    elif f.field_type == FieldType.RADIO:
-                        ok = await self._handle_radio_group(
-                            f.selector, f.label, mapped_value
-                        )
-                    elif f.field_type == FieldType.CHECKBOX:
-                        ok = await self._handle_checkbox(
-                            f.selector, f.label, should_check=True
-                        )
-                    else:
-                        ok = await self._safe_fill(f.selector, mapped_value)
-
-                    if ok:
-                        self.result.filled += 1
-                    else:
-                        self.result.failed += 1
-                        self.result.errors.append(
-                            f"fill failed (mapped): {f.selector} label='{f.label}'"
-                        )
-
-                elif f.field_type == FieldType.CHECKBOX:
-                    # c. Checkboxes — default to checked unless label is negative
-                    label_lower = f.label.lower()
-                    should_check = not any(
-                        neg in label_lower
-                        for neg in ("opt out", "do not", "don't", "unsubscribe")
+                    # a. Deterministic profile mapping
+                    mapped_value: Optional[str] = self._map_label_to_profile_value(
+                        f.label
                     )
-                    ok = await self._handle_checkbox(
-                        f.selector, f.label, should_check=should_check
-                    )
-                    if ok:
-                        self.result.filled += 1
-                    else:
-                        self.result.failed += 1
 
-                elif f.field_type in (
-                    FieldType.TEXT,
-                    FieldType.TEXTAREA,
-                    FieldType.SELECT,
-                    FieldType.RADIO,
-                    FieldType.NUMBER,
-                    FieldType.EMAIL,
-                    FieldType.PHONE,
-                    FieldType.DATE,
-                ):
-                    # b. No mapped value — ask LLM for a custom answer
-                    answer: str = await self._answer_custom_question(
-                        f.label, f.field_type, f.options
-                    )
-                    if answer:
+                    if mapped_value is not None and mapped_value:
+                        # Fill based on field type
                         if f.field_type == FieldType.SELECT:
                             ok = await self._safe_select(
-                                f.selector, f.options, answer
+                                f.selector, f.options, mapped_value
                             )
                         elif f.field_type == FieldType.RADIO:
                             ok = await self._handle_radio_group(
-                                f.selector, f.label, answer
+                                f.selector, f.label, mapped_value
+                            )
+                        elif f.field_type == FieldType.CHECKBOX:
+                            ok = await self._handle_checkbox(
+                                f.selector, f.label, should_check=True
                             )
                         else:
-                            ok = await self._safe_fill(f.selector, answer)
+                            ok = await self._safe_fill(f.selector, mapped_value)
 
                         if ok:
                             self.result.filled += 1
                         else:
                             self.result.failed += 1
                             self.result.errors.append(
-                                f"fill failed (llm): {f.selector} label='{f.label}'"
+                                f"fill failed (mapped): {f.selector} label='{f.label}'"
                             )
+
+                    elif f.field_type == FieldType.CHECKBOX:
+                        # c. Checkboxes — default to checked unless label is negative
+                        label_lower = f.label.lower()
+                        should_check = not any(
+                            neg in label_lower
+                            for neg in ("opt out", "do not", "don't", "unsubscribe")
+                        )
+                        ok = await self._handle_checkbox(
+                            f.selector, f.label, should_check=should_check
+                        )
+                        if ok:
+                            self.result.filled += 1
+                        else:
+                            self.result.failed += 1
+
+                    elif f.field_type in (
+                        FieldType.TEXT,
+                        FieldType.TEXTAREA,
+                        FieldType.SELECT,
+                        FieldType.RADIO,
+                        FieldType.NUMBER,
+                        FieldType.EMAIL,
+                        FieldType.PHONE,
+                        FieldType.DATE,
+                    ):
+                        # b. No mapped value — ask LLM for a custom answer
+                        try:
+                            answer: str = await self._answer_custom_question(
+                                f.label, f.field_type, f.options
+                            )
+                            if answer:
+                                if f.field_type == FieldType.SELECT:
+                                    ok = await self._safe_select(
+                                        f.selector, f.options, answer
+                                    )
+                                elif f.field_type == FieldType.RADIO:
+                                    ok = await self._handle_radio_group(
+                                        f.selector, f.label, answer
+                                    )
+                                else:
+                                    ok = await self._safe_fill(f.selector, answer)
+
+                                if ok:
+                                    self.result.filled += 1
+                                else:
+                                    self.result.failed += 1
+                                    self.result.errors.append(
+                                        f"fill failed (llm): {f.selector} label='{f.label}'"
+                                    )
+                            else:
+                                self.result.skipped += 1
+                        except TypeError as type_exc:
+                            # Catch Tool object callable errors
+                            self.logger.error(
+                                "fill_all_fields: Tool call error during LLM answer (field=%s): %s",
+                                f.label,
+                                type_exc,
+                            )
+                            self.result.status = "tool_call_failed"
+                            self.result.failed += 1
+                            self.result.errors.append(f"tool_error_llm: {type_exc}")
                     else:
                         self.result.skipped += 1
-                else:
-                    self.result.skipped += 1
 
-                # d. Human delay between every field
-                await self._human_delay()
+                    # d. Human delay between every field
+                    await self._human_delay()
 
-            except Exception as exc:  # noqa: BLE001
-                self.result.failed += 1
-                self.result.errors.append(f"field error: {f.selector}: {exc}")
-                self.logger.warning(
-                    "fill_all_fields: field failed %s: %s", f.selector, exc
-                )
-                continue
+                except TypeError as type_exc:
+                    # Catch Tool object callable errors
+                    self.logger.error(
+                        "fill_all_fields: Tool call error (field=%s): %s",
+                        f.selector,
+                        type_exc,
+                    )
+                    self.result.status = "tool_call_failed"
+                    self.result.failed += 1
+                    self.result.errors.append(f"tool_error_field: {type_exc}")
+                except Exception as exc:  # noqa: BLE001
+                    self.result.failed += 1
+                    self.result.errors.append(f"field error: {f.selector}: {exc}")
+                    self.logger.warning(
+                        "fill_all_fields: field failed %s: %s", f.selector, exc
+                    )
+                    continue
 
-        # -- Step 3: Determine overall success ---------------------------------
-        total: int = max(self.result.total_fields, 1)
-        self.result.success = (
-            self.result.failed == 0
-            or (self.result.filled / total) >= 0.7
-        )
+            # -- Step 3: Determine overall success ---------------------------------
+            total: int = max(self.result.total_fields, 1)
+            self.result.success = (
+                self.result.failed == 0
+                or (self.result.filled / total) >= 0.7
+            )
 
-        self.logger.info(
-            "FormFiller complete | filled=%d | skipped=%d | failed=%d | "
-            "llm_calls=%d | total=%d | success=%s",
-            self.result.filled,
-            self.result.skipped,
-            self.result.failed,
-            self.result.llm_calls,
-            self.result.total_fields,
-            self.result.success,
-        )
-        return self.result
+            self.logger.info(
+                "FormFiller complete | filled=%d | skipped=%d | failed=%d | "
+                "llm_calls=%d | total=%d | success=%s | status=%s",
+                self.result.filled,
+                self.result.skipped,
+                self.result.failed,
+                self.result.llm_calls,
+                self.result.total_fields,
+                self.result.success,
+                self.result.status,
+            )
+            return self.result
+
+        except TypeError as type_exc:
+            # Catch any Tool object callable errors at method level
+            self.logger.error(
+                "fill_all_fields: fatal Tool call error: %s", type_exc, exc_info=True
+            )
+            self.result.status = "tool_call_failed"
+            self.result.filled = 0
+            self.result.llm_calls = 0
+            self.result.success = False
+            self.result.errors.append(f"fatal_tool_error: {type_exc}")
+            return self.result
+        except Exception as exc:  # noqa: BLE001
+            self.logger.error(
+                "fill_all_fields: fatal error: %s", exc, exc_info=True
+            )
+            self.result.status = "fatal_error"
+            self.result.filled = 0
+            self.result.llm_calls = 0
+            self.result.success = False
+            self.result.errors.append(f"fatal_error: {exc}")
+            return self.result
 
     async def handle_multi_step_form(
         self, max_steps: int = 8
@@ -1414,83 +1472,141 @@ class FormFiller:
         Returns:
             Accumulated ``FillResult`` across all pages.
         """
-        next_button_selectors: list[str] = [
-            "button:has-text('Next')",
-            "button:has-text('Continue')",
-            "button:has-text('Save and Continue')",
-            "button:has-text('Save & Continue')",
-            "[data-automation-id='bottom-navigation-next-button']",  # Workday
-        ]
+        try:
+            next_button_selectors: list[str] = [
+                "button:has-text('Next')",
+                "button:has-text('Continue')",
+                "button:has-text('Save and Continue')",
+                "button:has-text('Save & Continue')",
+                "[data-automation-id='bottom-navigation-next-button']",  # Workday
+            ]
 
-        confirmation_keywords: list[str] = [
-            "review your application",
-            "confirm",
-            "summary",
-            "review and submit",
-            "please review",
-        ]
+            confirmation_keywords: list[str] = [
+                "review your application",
+                "confirm",
+                "summary",
+                "review and submit",
+                "please review",
+            ]
 
-        for step in range(max_steps):
-            self.logger.info(
-                "handle_multi_step_form: step %d/%d", step + 1, max_steps
-            )
-
-            # Step 1 — fill the current page
-            await self.fill_all_fields()
-
-            # Step 2 — look for a "Next" / "Continue" button
-            next_button: Optional[Locator] = None
-            for sel in next_button_selectors:
-                try:
-                    locator: Locator = self.page.locator(sel).first
-                    if await locator.count() > 0:
-                        next_button = locator
-                        break
-                except Exception:  # noqa: BLE001
-                    continue
-
-            if next_button is None:
+            for step in range(max_steps):
                 self.logger.info(
-                    "handle_multi_step_form: no next button found — "
-                    "assuming final page at step %d",
-                    step + 1,
+                    "handle_multi_step_form: step %d/%d", step + 1, max_steps
                 )
-                break
 
-            # Step 3 — click next (guarded by DRY_RUN)
-            if not DRY_RUN:
+                # Step 1 — fill the current page
                 try:
-                    await next_button.click()
-                    await self.page.wait_for_load_state(
-                        "networkidle", timeout=10000
+                    await self.fill_all_fields()
+                except TypeError as type_exc:
+                    self.logger.error(
+                        "handle_multi_step_form: Tool error in fill_all_fields at step %d: %s",
+                        step + 1,
+                        type_exc,
                     )
+                    self.result.status = "tool_call_failed"
+                    break
                 except Exception as exc:  # noqa: BLE001
-                    self.logger.warning(
-                        "handle_multi_step_form: next-click failed at step %d: %s",
+                    self.logger.error(
+                        "handle_multi_step_form: fill_all_fields failed at step %d: %s",
                         step + 1,
                         exc,
                     )
                     break
-            else:
-                self.logger.debug(
-                    "dry_run: would click next button at step %d", step + 1
-                )
 
-            # Step 4 — check for confirmation / review page
-            try:
-                page_html: str = await self.page.content()
-                html_lower: str = page_html.lower()
-                if any(kw in html_lower for kw in confirmation_keywords):
+                # Step 2 — look for a "Next" / "Continue" button
+                next_button: Optional[Locator] = None
+                for sel in next_button_selectors:
+                    try:
+                        locator: Locator = self.page.locator(sel).first
+                        if await locator.count() > 0:
+                            next_button = locator
+                            break
+                    except Exception:  # noqa: BLE001
+                        continue
+
+                if next_button is None:
                     self.logger.info(
-                        "handle_multi_step_form: review/confirmation page "
-                        "detected at step %d — stopping",
+                        "handle_multi_step_form: no next button found — "
+                        "assuming final page at step %d",
                         step + 1,
                     )
                     break
-            except Exception:  # noqa: BLE001
-                pass
 
-        return self.result
+                # Step 3 — click next (guarded by DRY_RUN)
+                if not DRY_RUN:
+                    try:
+                        await next_button.click()
+                        await self.page.wait_for_load_state(
+                            "networkidle", timeout=10000
+                        )
+                    except TypeError as type_exc:
+                        self.logger.error(
+                            "handle_multi_step_form: Tool error during next-click at step %d: %s",
+                            step + 1,
+                            type_exc,
+                        )
+                        self.result.status = "tool_call_failed"
+                        break
+                    except Exception as exc:  # noqa: BLE001
+                        self.logger.warning(
+                            "handle_multi_step_form: next-click failed at step %d: %s",
+                            step + 1,
+                            exc,
+                        )
+                        break
+                else:
+                    self.logger.debug(
+                        "dry_run: would click next button at step %d", step + 1
+                    )
+
+                # Step 4 — check for confirmation / review page
+                try:
+                    page_html: str = await self.page.content()
+                    html_lower: str = page_html.lower()
+                    if any(kw in html_lower for kw in confirmation_keywords):
+                        self.logger.info(
+                            "handle_multi_step_form: review/confirmation page "
+                            "detected at step %d — stopping",
+                            step + 1,
+                        )
+                        break
+                except Exception:  # noqa: BLE001
+                    pass
+
+            self.logger.info(
+                "handle_multi_step_form complete | total_fields=%d | filled=%d | "
+                "failed=%d | success=%s | status=%s",
+                self.result.total_fields,
+                self.result.filled,
+                self.result.failed,
+                self.result.success,
+                self.result.status,
+            )
+            return self.result
+
+        except TypeError as type_exc:
+            # Catch any Tool object callable errors at method level
+            self.logger.error(
+                "handle_multi_step_form: fatal Tool call error: %s",
+                type_exc,
+                exc_info=True,
+            )
+            self.result.status = "tool_call_failed"
+            self.result.filled = 0
+            self.result.llm_calls = 0
+            self.result.success = False
+            self.result.errors.append(f"fatal_tool_error: {type_exc}")
+            return self.result
+        except Exception as exc:  # noqa: BLE001
+            self.logger.error(
+                "handle_multi_step_form: fatal error: %s", exc, exc_info=True
+            )
+            self.result.status = "fatal_error"
+            self.result.filled = 0
+            self.result.llm_calls = 0
+            self.result.success = False
+            self.result.errors.append(f"fatal_error: {exc}")
+            return self.result
 
     async def screenshot_on_error(self, job_id: str = "") -> str:
         """Capture a full-page screenshot when an error occurs.
@@ -1674,77 +1790,128 @@ class FormFiller:
         Returns:
             Populated ``FillResult``.
         """
-        # Step 1 — Route to per-platform fill
-        ats_lower: str = self.ats_type.lower()
-        if ats_lower == "greenhouse":
-            await self.fill_greenhouse()
-        elif ats_lower == "lever":
-            await self.fill_lever()
-        elif ats_lower == "workable":
-            await self.fill_workable()
-        else:
-            await self.fill_all_fields()
-
-        # Step 2 — DRY_RUN guard on submit
-        dry_run = os.getenv("DRY_RUN", "false").lower() == "true"
-        if dry_run or self.dry_run:
-            self.logger.info(
-                "[DRY_RUN] fill_and_submit: skipping submit click "
-                "(ats=%s, fields_filled=%d)",
-                self.ats_type,
-                self.result.filled,
-            )
-            self.result.success = True
-            return self.result
-
-        # Step 3 — Click submit
-        submitted: bool = False
-        primary_sel: str = self._SUBMIT_SELECTORS.get(ats_lower, "")
-        selectors_to_try: list[str] = (
-            [primary_sel] + self._SUBMIT_FALLBACKS if primary_sel
-            else self._SUBMIT_FALLBACKS
-        )
-
-        for sel in selectors_to_try:
+        try:
+            # Step 1 — Route to per-platform fill
+            ats_lower: str = self.ats_type.lower()
             try:
-                btn = await self.page.query_selector(sel)
-                if btn:
-                    await self._human_delay(500, 1200)
-                    await btn.click()
-                    submitted = True
-                    self.logger.info(
-                        "fill_and_submit: clicked submit via '%s'", sel
+                if ats_lower == "greenhouse":
+                    await self.fill_greenhouse()
+                elif ats_lower == "lever":
+                    await self.fill_lever()
+                elif ats_lower == "workable":
+                    await self.fill_workable()
+                else:
+                    await self.fill_all_fields()
+            except TypeError as type_exc:
+                self.logger.error(
+                    "fill_and_submit: Tool error during platform fill: %s",
+                    type_exc,
+                )
+                self.result.status = "tool_call_failed"
+                self.result.filled = 0
+                self.result.success = False
+                self.result.errors.append(f"tool_error_platform_fill: {type_exc}")
+                return self.result
+            except Exception as exc:  # noqa: BLE001
+                self.logger.error(
+                    "fill_and_submit: platform fill failed: %s", exc
+                )
+                self.result.success = False
+                self.result.errors.append(f"platform_fill_error: {exc}")
+                return self.result
+
+            # Step 2 — DRY_RUN guard on submit
+            dry_run = os.getenv("DRY_RUN", "false").lower() == "true"
+            if dry_run or self.dry_run:
+                self.logger.info(
+                    "[DRY_RUN] fill_and_submit: skipping submit click "
+                    "(ats=%s, fields_filled=%d)",
+                    self.ats_type,
+                    self.result.filled,
+                )
+                self.result.success = True
+                self.result.status = "ok"
+                return self.result
+
+            # Step 3 — Click submit
+            submitted: bool = False
+            primary_sel: str = self._SUBMIT_SELECTORS.get(ats_lower, "")
+            selectors_to_try: list[str] = (
+                [primary_sel] + self._SUBMIT_FALLBACKS if primary_sel
+                else self._SUBMIT_FALLBACKS
+            )
+
+            for sel in selectors_to_try:
+                try:
+                    btn = await self.page.query_selector(sel)
+                    if btn:
+                        await self._human_delay(500, 1200)
+                        await btn.click()
+                        submitted = True
+                        self.logger.info(
+                            "fill_and_submit: clicked submit via '%s'", sel
+                        )
+                        break
+                except TypeError as type_exc:
+                    self.logger.error(
+                        "fill_and_submit: Tool error during submit click for '%s': %s",
+                        sel,
+                        type_exc,
                     )
-                    break
+                    self.result.status = "tool_call_failed"
+                    continue
+                except Exception as exc:  # noqa: BLE001
+                    self.logger.warning(
+                        "fill_and_submit: submit selector '%s' failed: %s",
+                        sel,
+                        exc,
+                    )
+                    continue
+
+            if not submitted:
+                self.logger.error(
+                    "fill_and_submit: no submit button found for ats=%s",
+                    self.ats_type,
+                )
+                self.result.errors.append("submit_button_not_found")
+                self.result.success = False
+                return self.result
+
+            # Step 4 — Wait for navigation
+            try:
+                await self.page.wait_for_load_state(
+                    "networkidle", timeout=15000
+                )
             except Exception as exc:  # noqa: BLE001
                 self.logger.warning(
-                    "fill_and_submit: submit selector '%s' failed: %s",
-                    sel,
-                    exc,
+                    "fill_and_submit: post-submit wait failed: %s", exc
                 )
-                continue
 
-        if not submitted:
-            self.logger.error(
-                "fill_and_submit: no submit button found for ats=%s",
-                self.ats_type,
-            )
-            self.result.errors.append("submit_button_not_found")
-            self.result.success = False
+            self.result.success = True
+            self.result.status = "ok"
             return self.result
 
-        # Step 4 — Wait for navigation
-        try:
-            await self.page.wait_for_load_state(
-                "networkidle", timeout=15000
+        except TypeError as type_exc:
+            # Catch any Tool object callable errors at method level
+            self.logger.error(
+                "fill_and_submit: fatal Tool call error: %s",
+                type_exc,
+                exc_info=True,
             )
+            self.result.status = "tool_call_failed"
+            self.result.filled = 0
+            self.result.success = False
+            self.result.errors.append(f"fatal_tool_error: {type_exc}")
+            return self.result
         except Exception as exc:  # noqa: BLE001
-            self.logger.warning(
-                "fill_and_submit: post-submit wait failed: %s", exc
+            self.logger.error(
+                "fill_and_submit: fatal error: %s", exc, exc_info=True
             )
-
-        self.result.success = True
-        return self.result
+            self.result.status = "fatal_error"
+            self.result.filled = 0
+            self.result.success = False
+            self.result.errors.append(f"fatal_error: {exc}")
+            return self.result
 
     @operation
     async def fill_field(
@@ -1754,33 +1921,33 @@ class FormFiller:
         field_type: str = "text",
     ) -> bool:
         """Fill a single form field with human-like simulation.
-        
+
         This is the public interface for filling individual fields,
         used by platform-specific modules.
-        
+
         Args:
             selector: CSS selector for the target field.
             value: Value to fill.
-            field_type: One of: text, email, phone, dropdown, radio, 
+            field_type: One of: text, email, phone, dropdown, radio,
                         checkbox, file_upload, textarea
-                        
+
         Returns:
             True if field was successfully filled, False otherwise.
         """
         if not value:
             self.logger.debug("fill_field: empty value for %s — skipping", selector)
             return True
-            
+
         try:
             # Scroll element into view first
             await self._scroll_to_element(selector)
             await self._human_delay(300, 800)  # Micro-pause between sections
-            
+
             field_type_lower = field_type.lower()
-            
+
             if field_type_lower == "file_upload":
                 return await self._upload_resume(selector)
-                
+
             elif field_type_lower == "dropdown":
                 element = await self.page.query_selector(selector)
                 if element:
@@ -1793,18 +1960,24 @@ class FormFiller:
                     )
                     return await self._safe_select(selector, options, value)
                 return False
-                
+
             elif field_type_lower == "radio":
                 return await self._handle_radio_group(selector, "", value)
-                
+
             elif field_type_lower == "checkbox":
                 should_check = value.lower() in ("true", "yes", "1", "checked")
                 return await self._handle_checkbox(selector, "", should_check)
-                
+
             else:
                 # text, email, phone, textarea
                 return await self._human_fill_field(selector, value)
-                
+
+        except TypeError as type_exc:
+            self.logger.error(
+                "fill_field: Tool call error for %s: %s", selector, type_exc
+            )
+            await self.screenshot_on_error()
+            return False
         except Exception as exc:  # noqa: BLE001
             self.logger.error("fill_field failed for %s: %s", selector, exc)
             await self.screenshot_on_error()
