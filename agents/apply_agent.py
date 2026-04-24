@@ -795,7 +795,7 @@ class ApplyAgent:
                 time.sleep(rate_limit)
 
             # ── STEP 5 — Execute apply via fill_standard_form ────────
-            result_raw: str = fill_standard_form.run(
+            result_raw: str = fill_standard_form(
                 job_url=job_url,
                 job_post_id=job_post_id,
                 resume_filename=resume_to_use,
