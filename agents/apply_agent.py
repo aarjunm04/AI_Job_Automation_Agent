@@ -795,7 +795,7 @@ class ApplyAgent:
                 time.sleep(rate_limit)
 
             # ── STEP 5 — Execute apply via fill_standard_form ────────
-            result_raw: str = fill_standard_form.run(
+            result_raw: str = fill_standard_form(
                 job_url=job_url,
                 job_post_id=job_post_id,
                 resume_filename=resume_to_use,
@@ -1311,7 +1311,7 @@ APPLICATION INSTRUCTIONS
 4. Check for CAPTCHA indicators before submitting. If detected, skip to
    manual queue IMMEDIATELY — do not waste credits.
 
-5. invoke the fill_standard_form tool using fill_standard_form.run(...) for each auto-route job ONE AT A TIME — NEVER
+5. invoke the fill_standard_form tool using fill_standard_form for each auto-route job ONE AT A TIME — NEVER
    run parallel applications. Always pass user_id={self.user_id} and
    the job's resume_suggested value as resume_filename.
 
@@ -1397,7 +1397,7 @@ ROUTING MANIFEST (JSON)
             f"     pipeline_run_id=\"{self.pipeline_run_id}\"\n"
             f"   Save the returned ats_type value for use in step 2.\n"
             f"\n"
-            f"2. Call fill_standard_form using fill_standard_form.run(...) with EXACTLY these arguments — no others:\n"
+            f"2. Call fill_standard_form using fill_standard_form with EXACTLY these arguments — no others:\n"
             f"     job_url=\"{job['url']}\"\n"
             f"     job_post_id=\"{job['job_post_id']}\"\n"
             f"     resume_filename=\"{job['resume_suggested']}\"\n"
@@ -1406,7 +1406,7 @@ ROUTING MANIFEST (JSON)
             f"     ats_platform=<ats_type returned in step 1>\n"
             f"     dry_run={dry_run_str}\n"
             f"   THIS CALL IS MANDATORY. Writing Final Answer without calling\n"
-            f"   fill_standard_form.run(...) first is a protocol violation. Your output\n"
+            f"   fill_standard_form first is a protocol violation. Your output\n"
             f"   will be discarded and the job will be marked failed.\n"
             f"\n"
             f"3. Call get_apply_summary with:\n"
@@ -1428,6 +1428,7 @@ ROUTING MANIFEST (JSON)
             f"HARD CONSTRAINTS:\n"
             f"  - You have exactly ONE job. There is no loop.\n"
             f"  - Call each tool exactly ONCE in the order listed above.\n"
+            f"  - fill_standard_form is a tool name, NOT a Python method. Call it like any other tool.\n"
             f"  - Budget hard cap for this run: ${per_run_cap:.2f}\n"
             f"  - If fill_standard_form returns captcha_blocked set status=captcha_blocked.\n"
             f"  - If fill_standard_form returns re_route=manual set status=manual_queued.\n"
