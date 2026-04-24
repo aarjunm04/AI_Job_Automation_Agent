@@ -980,8 +980,8 @@ def fill_standard_form(
         fields_total, llm_calls_used, custom_questions_answered,
         screenshot_captured, dry_run, job_url.
     """
-    dry_run: Optional[bool] = None
-    effective_dry_run: bool = dry_run if dry_run is not None else DRY_RUN
+    dry_run_override: Optional[bool] = _TOOL_DRY_RUN_OVERRIDE.get()
+    effective_dry_run: bool = dry_run_override if dry_run_override is not None else DRY_RUN
     dry_run_token = _TOOL_DRY_RUN_OVERRIDE.set(effective_dry_run)
     max_retries: int = 2
 
@@ -1659,7 +1659,7 @@ _save_application_result = save_application_result.func if hasattr(save_applicat
 _save_to_queue           = save_to_queue.func           if hasattr(save_to_queue,           "func") else save_to_queue
 _get_best_resume         = get_best_resume.func         if hasattr(get_best_resume,         "func") else get_best_resume
 _verify_apply_budget     = verify_apply_budget.func     if hasattr(verify_apply_budget,     "func") else verify_apply_budget
-_record_agent_error      = record_agent_error.func      if hasattr(record_agent_error,      "func") else record_agent_error
+_record_agent_error = record_agent_error.func if hasattr(record_agent_error, "func") else record_agent_error
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # RUNTIME GUARDS — Ensure aliases are callable at module load

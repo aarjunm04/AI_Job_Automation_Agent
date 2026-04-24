@@ -32,7 +32,7 @@ if os.getenv("XAI_BASE_URL") == "xai":
     os.environ["XAI_BASE_URL"] = "https://api.x.ai/v1"
 
 # Force Cerebras to use the correct model ID and base URL
-# Cerebras model IDs use no hyphen: llama3.3-70b not llama-3.3-70b
+# Cerebras model IDs use a dot format: llama3.3-70b (not llama-3.3-70b)
 os.environ["CEREBRAS_MODEL"] = os.getenv("CEREBRAS_MODEL")
 
 # ----------------------------------------------
