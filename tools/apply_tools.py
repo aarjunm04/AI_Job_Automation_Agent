@@ -25,6 +25,7 @@ by ``agents/apply_agent.py``.  All Playwright actions are fail-soft.
 import asyncio
 import base64
 import json
+from contextvars import ContextVar
 from datetime import datetime
 import logging
 import os
@@ -112,10 +113,26 @@ __all__ = [
 # ---------------------------------------------------------------------------
 # Constants from config singletons — no raw os.getenv() in tool logic
 # ---------------------------------------------------------------------------
-DRY_RUN: bool = os.getenv("DRY_RUN").lower()
+def _to_bool(value: Any, default: bool = False) -> bool:
+    """Coerce env/config values to boolean safely."""
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+    return default
+
+DRY_RUN: bool = _to_bool(os.getenv("DRY_RUN"), default=False)
 RESUME_DIR: Path = Path(run_config.resume_dir)
 MAX_SESSIONS: int = run_config.max_playwright_sessions
 STEALTH_ENABLED: bool = os.getenv("PLAYWRIGHT_STEALTH_ENABLED", "true").lower() == "true"
+_TOOL_DRY_RUN_OVERRIDE: ContextVar[Optional[bool]] = ContextVar(
+    "_TOOL_DRY_RUN_OVERRIDE", default=None
+)
+
 PLAYWRIGHT_USER_AGENT: str = os.getenv(
     "PLAYWRIGHT_USER_AGENT",
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
@@ -210,7 +227,9 @@ def detect_ats_platform(job_url: str, pipeline_run_id: str, dry_run: bool = Fals
         ``{"job_url": job_url}``.  On any failure returns
         ``{"ats_type": "unknown", "confidence": 0.0, "job_url": ..., "error": ...}``.
     """
-    if dry_run or os.getenv("DRY_RUN").lower():
+    effective_dry_run: bool = dry_run if dry_run is not None else DRY_RUN
+
+    if effective_dry_run:
         logger.info(
             "detect_ats_platform: dry_run=True — skipping browser, "
             "returning mock profile for job_url=%s",
@@ -331,8 +350,7 @@ def detect_ats_platform(job_url: str, pipeline_run_id: str, dry_run: bool = Fals
 # ---------------------------------------------------------------------------
 # TOOL 2 — Proof of submission capture (UNCHANGED)
 # ---------------------------------------------------------------------------
-@tool
-def capture_proof(page_html: str, page_url: str, job_url: str) -> str:
+def _capture_proof_impl(page_html: str, page_url: str, job_url: str) -> str:
     """Extract proof-of-submission signals from a post-apply page snapshot.
 
     Checks four independent signals and assigns confidence based on how many
@@ -351,7 +369,6 @@ def capture_proof(page_html: str, page_url: str, job_url: str) -> str:
         html_lower: str = page_html.lower()
         url_lower: str = page_url.lower()
 
-        # Signal 1 — confirmation number in page text
         confirmation_match = re.search(
             r"(?:confirmation|reference|application.?id)[^\w]*([A-Za-z0-9\-]{4,32})",
             page_html,
@@ -361,7 +378,6 @@ def capture_proof(page_html: str, page_url: str, job_url: str) -> str:
             confirmation_match.group(1) if confirmation_match else None
         )
 
-        # Signal 2 — success keywords in URL
         success_url_keywords = [
             "confirmation",
             "success",
@@ -371,7 +387,6 @@ def capture_proof(page_html: str, page_url: str, job_url: str) -> str:
         ]
         success_url: bool = any(kw in url_lower for kw in success_url_keywords)
 
-        # Signal 3 — success message in HTML
         success_phrases = [
             "application submitted",
             "successfully applied",
@@ -380,10 +395,7 @@ def capture_proof(page_html: str, page_url: str, job_url: str) -> str:
         ]
         success_message: bool = any(ph in html_lower for ph in success_phrases)
 
-        # Signal 4 — form element has disappeared
         form_disappeared: bool = "<form" not in html_lower
-
-        # Tally signals
         signals: int = sum(
             [
                 confirmation_number is not None,
@@ -435,11 +447,16 @@ def capture_proof(page_html: str, page_url: str, job_url: str) -> str:
         )
 
 
+@tool
+def capture_proof(page_html: str, page_url: str, job_url: str) -> str:
+    """CrewAI tool wrapper for proof-of-submission capture."""
+    return _capture_proof_impl(page_html=page_html, page_url=page_url, job_url=job_url)
+
+
 # ---------------------------------------------------------------------------
 # TOOL 3 — CAPTCHA detection (UNCHANGED)
 # ---------------------------------------------------------------------------
-@tool
-def check_captcha_present(page_html: str, job_url: str) -> str:
+def _check_captcha_present_impl(page_html: str, job_url: str) -> str:
     """Detect CAPTCHA or bot-challenge presence in page HTML.
 
     Scans for known CAPTCHA fingerprints (reCAPTCHA, hCaptcha, Cloudflare
@@ -468,9 +485,9 @@ def check_captcha_present(page_html: str, job_url: str) -> str:
         }
 
         detected_type: Optional[str] = None
-        for label, signature in captcha_signatures.items():
+        for captcha_type, signature in captcha_signatures.items():
             if signature in html_lower:
-                detected_type = label
+                detected_type = captcha_type
                 break
 
         captcha_detected: bool = detected_type is not None
@@ -497,6 +514,12 @@ def check_captcha_present(page_html: str, job_url: str) -> str:
         return json.dumps(
             {"captcha_detected": False, "captcha_type": None, "action": "proceed"}
         )
+
+
+@tool
+def check_captcha_present(page_html: str, job_url: str) -> str:
+    """CrewAI tool wrapper for CAPTCHA detection."""
+    return _check_captcha_present_impl(page_html=page_html, job_url=job_url)
 
 
 # ---------------------------------------------------------------------------
@@ -531,7 +554,8 @@ async def _run_apply(
     # -----------------------------------------------------------------------
     # DB CONFIG FETCH — Authoritative dry_run + default_resume from Postgres
     # -----------------------------------------------------------------------
-    dry_run_effective: bool
+    dry_run_override: Optional[bool] = _TOOL_DRY_RUN_OVERRIDE.get()
+    effective_dry_run: bool = dry_run_override if dry_run_override is not None else DRY_RUN
     default_resume_effective: str = os.getenv(
         "DEFAULT_RESUME_PATH", "resumes/AarjunAIAutomation.pdf"
     )
@@ -544,7 +568,8 @@ async def _run_apply(
         platform_config = config_loader.platforms
         job_filters: dict[str, Any] = platform_config.get("job_filters", {})
 
-        dry_run_effective = bool(_user_settings.get("dry_run", False))
+        config_dry_run: bool = _to_bool(_user_settings.get("dry_run"), default=DRY_RUN)
+        effective_dry_run = dry_run_override if dry_run_override is not None else config_dry_run
         default_resume_effective = str(
             _user_settings.get("default_resume", default_resume_effective)
         )
@@ -553,12 +578,12 @@ async def _run_apply(
         )
         logger.info(
             "_run_apply: DB config — dry_run=%s default_resume=%s auto_apply_enabled=%s",
-            dry_run_effective,
+            effective_dry_run,
             default_resume_effective,
             auto_apply_enabled,
         )
     except Exception as _cfg_exc:  # noqa: BLE001
-        dry_run_effective = os.getenv("DRY_RUN").lower()
+        effective_dry_run = dry_run_override if dry_run_override is not None else DRY_RUN
         default_resume_effective: str = os.getenv(
             "DEFAULT_RESUME_PATH", "resumes/AarjunAIAutomation.pdf"
         )
@@ -566,7 +591,7 @@ async def _run_apply(
             "_run_apply: DB config fetch failed (%s) — "
             "falling back to env/hardcoded: dry_run=%s",
             _cfg_exc,
-            dry_run_effective,
+            effective_dry_run,
         )
 
     # Resolve resume filename — use DB default_resume if given file is missing on disk
@@ -583,7 +608,7 @@ async def _run_apply(
     # -----------------------------------------------------------------------
     # STEP 1 — Guards: DRY_RUN + budget cap
     # -----------------------------------------------------------------------
-    if dry_run_effective:
+    if effective_dry_run:
         logger.info("_run_apply: DRY_RUN=true — skipping browser for %s", job_url)
         try:
             _log_event_fn(
@@ -677,7 +702,7 @@ async def _run_apply(
             # STEP 4 — CAPTCHA check
             # -------------------------------------------------------------------
             html: str = await page.content()
-            captcha: dict[str, Any] = json.loads(check_captcha_present(html, job_url))
+            captcha: dict[str, Any] = json.loads(_check_captcha_present_impl(page_html=html, job_url=job_url))
             if captcha.get("captcha_detected"):
                 logger.warning(
                     "_run_apply: CAPTCHA detected: %s at %s",
@@ -782,7 +807,7 @@ async def _run_apply(
             # -------------------------------------------------------------------
             # STEP 9 — Submit (guarded by DRY_RUN)
             # -------------------------------------------------------------------
-            if not dry_run_effective:
+            if not effective_dry_run:
                 for raw_selector in ats_profile.submit_selector.split(","):
                     submit_selector: str = raw_selector.strip()
                     if not submit_selector:
@@ -815,7 +840,7 @@ async def _run_apply(
             post_html: str = await page.content()
             post_url: str = page.url
             proof: dict[str, Any] = json.loads(
-                _capture_proof(post_html, post_url, job_url)
+                _capture_proof_impl(post_html, post_url, job_url)
             )
 
             screenshot_b64: str = ""
@@ -891,7 +916,7 @@ async def _run_apply(
                 "llm_calls_used": fill_result.llm_calls,
                 "custom_questions_answered": len(fill_result.custom_questions),
                 "screenshot_captured": bool(screenshot_b64),
-                "dry_run": dry_run_effective,
+                "dry_run": effective_dry_run,
                 "job_url": job_url,
             }
 
@@ -955,48 +980,76 @@ def fill_standard_form(
         fields_total, llm_calls_used, custom_questions_answered,
         screenshot_captured, dry_run, job_url.
     """
+    dry_run: Optional[bool] = None
+    effective_dry_run: bool = dry_run if dry_run is not None else DRY_RUN
+    dry_run_token = _TOOL_DRY_RUN_OVERRIDE.set(effective_dry_run)
     max_retries: int = 2
 
-    for attempt in range(max_retries + 1):
-        try:
-            result: dict[str, Any] = asyncio.run(
-                _run_apply(
-                    job_url=job_url,
-                    job_post_id=job_post_id,
-                    resume_filename=resume_filename,
-                    pipeline_run_id=pipeline_run_id,
-                    user_id=user_id,
-                    ats_platform=ats_platform,
+    try:
+        for attempt in range(max_retries + 1):
+            try:
+                result: dict[str, Any] = asyncio.run(
+                    _run_apply(
+                        job_url=job_url,
+                        job_post_id=job_post_id,
+                        resume_filename=resume_filename,
+                        pipeline_run_id=pipeline_run_id,
+                        user_id=user_id,
+                        ats_platform=ats_platform,
+                    )
                 )
-            )
-            return json.dumps(result)
+                return json.dumps(result)
 
-        except (PlaywrightTimeoutError, asyncio.TimeoutError) as te:
-            if attempt < max_retries:
-                backoff: int = 2 ** attempt
-                logger.warning(
-                    "fill_standard_form: TimeoutError attempt %d/%d for %s — "
-                    "retrying in %ds: %s",
-                    attempt + 1,
-                    max_retries,
-                    job_url,
-                    backoff,
-                    te,
-                )
-                time.sleep(backoff)
-            else:
+            except (PlaywrightTimeoutError, asyncio.TimeoutError) as te:
+                if attempt < max_retries:
+                    backoff: int = 2 ** attempt
+                    logger.warning(
+                        "fill_standard_form: TimeoutError attempt %d/%d for %s — "
+                        "retrying in %ds: %s",
+                        attempt + 1,
+                        max_retries,
+                        job_url,
+                        backoff,
+                        te,
+                    )
+                    time.sleep(backoff)
+                else:
+                    logger.error(
+                        "fill_standard_form: TimeoutError after %d retries for %s: %s",
+                        max_retries,
+                        job_url,
+                        te,
+                    )
+                    try:
+                        _record_agent_error(
+                            agent_type="ApplyAgent",
+                            error_message=str(te),
+                            pipeline_run_id=pipeline_run_id,
+                            error_code="TIMEOUT",
+                            job_post_id=job_post_id,
+                        )
+                    except Exception:  # noqa: BLE001
+                        pass
+                    return json.dumps(
+                        {
+                            "applied": False,
+                            "status": "failed",
+                            "reason": str(te),
+                            "re_route": "manual",
+                            "job_url": job_url,
+                        }
+                    )
+
+            except Exception as exc:  # noqa: BLE001
                 logger.error(
-                    "fill_standard_form: TimeoutError after %d retries for %s: %s",
-                    max_retries,
-                    job_url,
-                    te,
+                    "fill_standard_form: non-retriable error for %s: %s", job_url, exc
                 )
                 try:
-                    record_agent_error(
+                    _record_agent_error(
                         agent_type="ApplyAgent",
-                        error_message=str(te),
+                        error_message=str(exc),
                         pipeline_run_id=pipeline_run_id,
-                        error_code="TIMEOUT",
+                        error_code="APPLY_ERROR",
                         job_post_id=job_post_id,
                     )
                 except Exception:  # noqa: BLE001
@@ -1005,46 +1058,23 @@ def fill_standard_form(
                     {
                         "applied": False,
                         "status": "failed",
-                        "reason": str(te),
+                        "reason": str(exc),
                         "re_route": "manual",
                         "job_url": job_url,
                     }
                 )
 
-        except Exception as exc:  # noqa: BLE001
-            logger.error(
-                "fill_standard_form: non-retriable error for %s: %s", job_url, exc
-            )
-            try:
-                record_agent_error(
-                    agent_type="ApplyAgent",
-                    error_message=str(exc),
-                    pipeline_run_id=pipeline_run_id,
-                    error_code="APPLY_ERROR",
-                    job_post_id=job_post_id,
-                )
-            except Exception:  # noqa: BLE001
-                pass
-            return json.dumps(
-                {
-                    "applied": False,
-                    "status": "failed",
-                    "reason": str(exc),
-                    "re_route": "manual",
-                    "job_url": job_url,
-                }
-            )
-
-    # Unreachable — all retry paths return above
-    return json.dumps(  # pragma: no cover
-        {
-            "applied": False,
-            "status": "failed",
-            "reason": "max_retries_exceeded",
-            "re_route": "manual",
-            "job_url": job_url,
-        }
-    )
+        return json.dumps(  # pragma: no cover
+            {
+                "applied": False,
+                "status": "failed",
+                "reason": "max_retries_exceeded",
+                "re_route": "manual",
+                "job_url": job_url,
+            }
+        )
+    finally:
+        _TOOL_DRY_RUN_OVERRIDE.reset(dry_run_token)
 
 
 # ---------------------------------------------------------------------------
@@ -1543,60 +1573,77 @@ def get_best_resume(
 # ---------------------------------------------------------------------------
 # TOOL 10 — Verify Apply Budget
 # ---------------------------------------------------------------------------
+def _verify_apply_budget_impl(
+    projected_cost: float,
+    pipeline_run_id: str,
+) -> str:
+    """Check if projected cost fits within remaining budget.
+
+    Verifies both the per-run xAI cap and monthly budget before
+    allowing an LLM call to proceed.
+
+    Args:
+        projected_cost: Estimated cost of the upcoming operation in USD.
+        pipeline_run_id: UUID of the current run batch.
+
+    Returns:
+        JSON string with allowed (bool) and remaining_budget.
+    """
+    try:
+        cap_result = json.loads(check_xai_run_cap(pipeline_run_id))
+
+        if cap_result.get("abort", False):
+            return json.dumps(
+                {
+                    "allowed": False,
+                    "reason": "xai_run_cap_exceeded",
+                    "remaining_budget": 0.0,
+                }
+            )
+
+        current_spent = cap_result.get("spent", 0.0)
+        cap = cap_result.get("cap", 0.38)
+        remaining = cap - current_spent
+
+        if projected_cost > remaining:
+            return json.dumps(
+                {
+                    "allowed": False,
+                    "reason": "insufficient_budget",
+                    "remaining_budget": remaining,
+                    "projected_cost": projected_cost,
+                }
+            )
+
+        return json.dumps(
+            {
+                "allowed": True,
+                "remaining_budget": remaining,
+                "projected_cost": projected_cost,
+            }
+        )
+
+    except Exception as exc:
+        logger.error("verify_apply_budget failed: %s", exc)
+        return json.dumps(
+            {
+                "allowed": True,
+                "remaining_budget": -1,
+                "error": str(exc),
+            }
+        )
+
+
 @tool
 def verify_apply_budget(
     projected_cost: float,
     pipeline_run_id: str,
 ) -> str:
-    """Check if projected cost fits within remaining budget.
-    
-    Verifies both the per-run xAI cap and monthly budget before
-    allowing an LLM call to proceed.
-    
-    Args:
-        projected_cost: Estimated cost of the upcoming operation in USD.
-        pipeline_run_id: UUID of the current run batch.
-        
-    Returns:
-        JSON string with allowed (bool) and remaining_budget.
-    """
-    try:
-        # Check xAI run cap
-        cap_result = json.loads(check_xai_run_cap(pipeline_run_id))
-        
-        if cap_result.get("abort", False):
-            return json.dumps({
-                "allowed": False,
-                "reason": "xai_run_cap_exceeded",
-                "remaining_budget": 0.0,
-            })
-        
-        current_spent = cap_result.get("spent", 0.0)
-        cap = cap_result.get("cap", 0.38)
-        remaining = cap - current_spent
-        
-        if projected_cost > remaining:
-            return json.dumps({
-                "allowed": False,
-                "reason": "insufficient_budget",
-                "remaining_budget": remaining,
-                "projected_cost": projected_cost,
-            })
-        
-        return json.dumps({
-            "allowed": True,
-            "remaining_budget": remaining,
-            "projected_cost": projected_cost,
-        })
-        
-    except Exception as exc:
-        logger.error("verify_apply_budget failed: %s", exc)
-        # Fail open - allow operation if budget check fails
-        return json.dumps({
-            "allowed": True,
-            "remaining_budget": -1,  # Unknown
-            "error": str(exc),
-        })
+    """CrewAI tool wrapper for apply budget verification."""
+    return _verify_apply_budget_impl(
+        projected_cost=projected_cost,
+        pipeline_run_id=pipeline_run_id,
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1612,6 +1659,7 @@ _save_application_result = save_application_result.func if hasattr(save_applicat
 _save_to_queue           = save_to_queue.func           if hasattr(save_to_queue,           "func") else save_to_queue
 _get_best_resume         = get_best_resume.func         if hasattr(get_best_resume,         "func") else get_best_resume
 _verify_apply_budget     = verify_apply_budget.func     if hasattr(verify_apply_budget,     "func") else verify_apply_budget
+_record_agent_error      = record_agent_error.func      if hasattr(record_agent_error,      "func") else record_agent_error
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # RUNTIME GUARDS — Ensure aliases are callable at module load
@@ -1627,6 +1675,7 @@ for _name, _alias in [
     ("save_to_queue", _save_to_queue),
     ("get_best_resume", _get_best_resume),
     ("verify_apply_budget", _verify_apply_budget),
+    ("record_agent_error", _record_agent_error),
 ]:
     assert callable(_alias), f"CRITICAL: Tool alias {_name} is not callable. Check @tool decoration."
 
