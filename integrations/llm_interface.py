@@ -32,6 +32,7 @@ if os.getenv("XAI_BASE_URL") == "xai":
     os.environ["XAI_BASE_URL"] = "https://api.x.ai/v1"
 
 # Force Cerebras to use the correct model ID and base URL
+# Cerebras model IDs use a dot format: llama3.3-70b (not llama-3.3-70b)
 os.environ["CEREBRAS_MODEL"] = os.getenv("CEREBRAS_MODEL")
 
 # ----------------------------------------------
@@ -40,7 +41,7 @@ os.environ["CEREBRAS_MODEL"] = os.getenv("CEREBRAS_MODEL")
 def _resolve_fallback_1_model() -> str:
     """Resolve fallback_1 model string based on available API keys."""
     if os.getenv("CEREBRAS_API_KEY"):
-        return "cerebras/llama-3.3-70b"
+        return "cerebras/llama3.3-70b"
     if os.getenv("SAMBANOVA_API_KEY"):
         return "sambanova/Meta-Llama-3.3-70B-Instruct"
     return "groq/llama-3.3-70b-versatile"
